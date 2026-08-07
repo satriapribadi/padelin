@@ -72,6 +72,10 @@ daripada "1 orang mengulang 4×".
   ke susunan yang ada atau menggantinya - memilihnya saja tidak mengubah apa pun.
   Tiap babak bisa digandakan dan diurutkan dengan diseret (atau panah atas/bawah
   pada gagangnya), dengan total ronde dan menit per ronde terhitung di bawahnya
+- **Selang-seling babak**: ronde tiap babak disebar merata, bukan berjalan
+  sebagai blok. Tanpa ini, "Putri 4" lalu "Putra 4" berarti para putri main
+  4 ronde beruntun sementara para putra duduk 4 ronde beruntun. Dengan
+  selang-seling keduanya turun jadi 1
 - Preferensi per peserta: partner tetap, atau minta court khusus 4 perempuan /
   4 laki-laki. Boleh sebagian — peserta lain tetap rotasi bebas
 - 4–26+ pemain, meet satu gender penuh juga didukung

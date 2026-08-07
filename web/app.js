@@ -314,6 +314,8 @@ function segDropTarget(container, y) {
   }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
 }
 
+$('interleave').addEventListener('change', onSegChange);
+
 $('segments').addEventListener('dragover', (e) => {
   e.preventDefault();
   const dragging = document.querySelector('.seg-editor.dragging');
@@ -322,6 +324,26 @@ $('segments').addEventListener('dragover', (e) => {
   if (target) $('segments').insertBefore(dragging, target);
   else $('segments').appendChild(dragging);
 });
+
+/**
+ * Cerminan round_plan() di server, hanya untuk pratinjau urutan.
+ *
+ * Tiap kemunculan ke-k dari babak bercount c ditaruh di posisi (k + 0.5) / c,
+ * lalu semuanya diurutkan - urutan babak jadi pemutus seri.
+ */
+function segmentOrder(segs, interleave) {
+  if (!interleave) {
+    return segs.flatMap((s) => Array.from({ length: s.rounds }, () => s));
+  }
+  const slots = [];
+  segs.forEach((s, order) => {
+    for (let k = 0; k < s.rounds; k++) {
+      slots.push({ pos: (k + 0.5) / s.rounds, order, seg: s });
+    }
+  });
+  slots.sort((a, b) => a.pos - b.pos || a.order - b.order);
+  return slots.map((x) => x.seg);
+}
 
 /** Total ronde ikut diperlihatkan: itu yang menentukan menit per ronde. */
 function onSegChange() {
@@ -333,8 +355,12 @@ function onSegChange() {
   } else {
     const usable = (+$('duration').value || 0) - (+$('warmup').value || 0);
     const per = total ? Math.max(1, Math.floor(usable / total)) : 0;
+    const order = segmentOrder(segs, $('interleave').checked)
+      .map((s) => s.label.slice(0, 6)).join(' → ');
     box.textContent = `${segs.length} babak · ${total} ronde · `
-      + `${per} menit per ronde agar pas ${$('duration').value} menit sewa`;
+      + `${per} menit per ronde agar pas ${$('duration').value} menit sewa`
+      + (segs.length > 1 ? `
+Urutan: ${order}` : '');
   }
   scheduleAnalyze();
 }
@@ -411,6 +437,7 @@ function buildPayload() {
     seed: +$('seed').value,
     effort: +$('effort').value,
     segments: getSegments(),
+    interleave_segments: $('interleave').checked,
     players: players.map((p) => ({
       id: p.id, name: p.name, rating: p.rating, gender: p.gender,
       partner_id: p.partner_id, court_preference: p.court_preference,
@@ -860,6 +887,7 @@ function applyRequest(req) {
   $('seed').value = req.seed || 42;
   $('tier-row').style.display = req.mode === 'tiered' ? '' : 'none';
   $('segments').innerHTML = '';
+  $('interleave').checked = !!req.interleave_segments;
   (req.segments || []).forEach((s) => addSeg(s.label, s.rounds, s.rule));
   players = (req.players || []).map((p) => ({ ...p }));
   nextId = players.reduce((m, p) => Math.max(m, p.id + 1), 0);

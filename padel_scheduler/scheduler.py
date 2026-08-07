@@ -126,6 +126,34 @@ def _resolve_round_minutes(config: Config, total_rounds: int) -> int:
     return max(1, usable // total_rounds)
 
 
+def round_plan(segments: list[Segment],
+               interleave: bool) -> list[tuple[Segment, int]]:
+    """Urutan babak per ronde: (segmen, nomor ronde ke berapa di segmen itu).
+
+    Tanpa selang-seling, tiap babak berjalan sebagai blok berurutan. Itu masalah
+    kalau dua babak memakai orang yang berbeda: "Putri 4" lalu "Putra 4" berarti
+    para putri main 4 ronde beruntun sementara para putra duduk 4 ronde beruntun,
+    lalu bertukar. Melelahkan buat yang main, membosankan buat yang menunggu.
+
+    Dengan selang-seling, ronde tiap babak disebar merata sepanjang acara. Tiap
+    kemunculan ke-k dari babak bercount c ditaruh di posisi (k + 0.5) / c, lalu
+    semuanya diurutkan. Hasilnya untuk 4 putri + 4 putra adalah P L P L P L P L,
+    dan untuk 3 putra + 3 putri + 6 mixed adalah M Pa Pi M M Pa Pi M M Pa Pi M.
+
+    Urutan babak tetap menjadi pemutus seri, jadi babak yang ditaruh lebih dulu
+    tetap main lebih dulu.
+    """
+    if not interleave:
+        return [(seg, i) for seg in segments for i in range(seg.rounds)]
+
+    slots: list[tuple[float, int, Segment, int]] = []
+    for order, seg in enumerate(segments):
+        for k in range(seg.rounds):
+            slots.append(((k + 0.5) / seg.rounds, order, seg, k))
+    slots.sort(key=lambda s: (s[0], s[1]))
+    return [(seg, k) for _pos, _order, seg, k in slots]
+
+
 def _assign_tiers(players: list[Player], tier_count: int) -> dict[int, int]:
     """Bagi pemain jadi pool rating berukuran kelipatan 4 sebisa mungkin."""
     ordered = sorted(players, key=lambda p: (-p.rating, p.id))
@@ -529,10 +557,10 @@ def build_schedule(players: list[Player], config: Config,
                     if p.court_preference},
     )
 
-    # Peta ronde -> segmen.
-    round_segment: list[Segment] = []
-    for seg in segments:
-        round_segment.extend([seg] * seg.rounds)
+    # Peta ronde -> (segmen, ronde ke berapa di segmen itu). Kalau selang-seling
+    # aktif, ronde tiap babak tersebar sepanjang acara alih-alih menjadi blok.
+    plan = round_plan(segments, config.interleave_segments)
+    round_segment: list[Segment] = [seg for seg, _ in plan]
 
     for seg in round_segment:
         rules.round_rule.append(seg.rule)
@@ -543,9 +571,9 @@ def build_schedule(players: list[Player], config: Config,
     notes: list[str] = []
     courts = config.courts
 
-    # --- Konstruksi awal, segmen demi segmen ----------------------------
+    # --- Konstruksi awal, mengikuti urutan ronde ------------------------
     say(0.04, f"Menyusun pasangan untuk {n} peserta")
-    r_global = 0
+    cand_cache: dict[int, list] = {}
     for seg in segments:
         label = seg.label or "babak utama"
         say(0.05, f"Membentuk kombinasi partner - {label}")
@@ -554,27 +582,31 @@ def build_schedule(players: list[Player], config: Config,
             raise ScheduleError(
                 f"Tidak bisa membentuk pasangan untuk segmen '{seg.label or 'Main'}'."
             )
+        cand_cache[id(seg)] = cands
+
+    for r_global, (seg, i) in enumerate(plan):
+        cands = cand_cache[id(seg)]
+        # `i` adalah nomor ronde di dalam segmennya, bukan nomor ronde acara -
+        # jadi rotasi pasangannya tetap benar walau rondenya diselang-seling.
+        row = list(cands[i % len(cands)])
+        if len(row) < 2:
+            raise ScheduleError(
+                f"Segmen '{seg.label or 'Main'}' tidak punya cukup pemain "
+                f"untuk mengisi satu court."
+            )
+        quads = _build_round(row, st, courts, tier_of, rng, weights.rating)
+        if not quads:
+            raise ScheduleError(
+                f"Segmen '{seg.label or 'Main'}' tidak bisa mengisi court "
+                f"mana pun. Cek jumlah pemain per pool rating."
+            )
+
+        playing = {p for q in quads for p in q}
+        byes = sorted(set(range(n)) - playing)
+        st.place_round(r_global, quads, byes)
+
+    for seg in segments:
         eligible = set(_eligible_for(seg.rule, local_players))
-
-        for i in range(seg.rounds):
-            row = list(cands[i % len(cands)])
-            if len(row) < 2:
-                raise ScheduleError(
-                    f"Segmen '{seg.label or 'Main'}' tidak punya cukup pemain "
-                    f"untuk mengisi satu court."
-                )
-            quads = _build_round(row, st, courts, tier_of, rng, weights.rating)
-            if not quads:
-                raise ScheduleError(
-                    f"Segmen '{seg.label or 'Main'}' tidak bisa mengisi court "
-                    f"mana pun. Cek jumlah pemain per pool rating."
-                )
-
-            playing = {p for q in quads for p in q}
-            byes = sorted(set(range(n)) - playing)
-            st.place_round(r_global, quads, byes)
-            r_global += 1
-
         if seg.rule in ("men", "women"):
             sitting = n - len(eligible)
             if sitting:
@@ -708,6 +740,7 @@ def build_schedule(players: list[Player], config: Config,
         referees_per_court=config.referees_per_court,
         ballboys_per_court=config.ballboys_per_court,
         segments=segments,
+        interleave_segments=config.interleave_segments,
         fit_rounds_to_duration=config.fit_rounds_to_duration,
     )
 

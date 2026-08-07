@@ -353,3 +353,11 @@ input[type=file]{padding:6px 8px;font-size:12px}
    "Rp 180.000" patah jadi dua baris. Minimum dinaikkan supaya jadi dua kolom. */
 #setup-econ .stat-grid{grid-template-columns:repeat(auto-fit,minmax(148px,1fr))}
 #setup-econ .stat .v{white-space:nowrap}
+
+.seg-toggle{
+  display:flex;align-items:flex-start;gap:8px;margin-top:12px;
+  font-size:12.5px;color:var(--ink);cursor:pointer;font-weight:400;
+}
+.seg-toggle input{margin-top:2px;flex:none}
+.seg-toggle .hint{display:block;color:var(--dim);font-size:11px;font-style:italic}
+.seg-total{white-space:pre-line}

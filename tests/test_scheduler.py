@@ -140,6 +140,123 @@ class TestByeFairness(unittest.TestCase):
         )
 
 
+class TestInterleaveSegments(unittest.TestCase):
+    """Babak yang memakai orang berbeda tidak boleh berjalan sebagai blok.
+
+    "Putri 4" lalu "Putra 4" berarti para putri main 4 ronde beruntun sementara
+    para putra duduk 4 ronde beruntun, lalu bertukar. Melelahkan buat yang main,
+    membosankan buat yang menunggu.
+    """
+
+    def _streaks(self, sch, player_ids):
+        """(main beruntun terpanjang, duduk beruntun terpanjang)."""
+        longest_play = longest_rest = 0
+        for pid in player_ids:
+            play = rest = 0
+            for rnd in sch.rounds:
+                on = any(pid in m.players() for m in rnd.matches)
+                play = play + 1 if on else 0
+                rest = 0 if on else rest + 1
+                longest_play = max(longest_play, play)
+                longest_rest = max(longest_rest, rest)
+        return longest_play, longest_rest
+
+    def _build(self, interleave):
+        players = make_players(8, genders=["F"] * 4 + ["M"] * 4)
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=15,
+                     warmup_minutes=0, effort=8000,
+                     interleave_segments=interleave,
+                     segments=[Segment("Putri", 4, "women"),
+                               Segment("Putra", 4, "men")])
+        return build_schedule(players, cfg)
+
+    def test_blocks_cause_long_streaks(self):
+        sch = self._build(False)
+        assert_structurally_valid(self, sch)
+        play, rest = self._streaks(sch, [p.id for p in sch.players])
+        self.assertEqual((play, rest), (4, 4),
+                         "tanpa selang-seling seharusnya memang berblok")
+
+    def test_interleave_removes_streaks(self):
+        sch = self._build(True)
+        assert_structurally_valid(self, sch)
+        play, rest = self._streaks(sch, [p.id for p in sch.players])
+        self.assertEqual(play, 1, f"masih main beruntun {play} ronde")
+        self.assertEqual(rest, 1, f"masih duduk beruntun {rest} ronde")
+
+    def test_interleave_keeps_round_counts_per_segment(self):
+        """Menyelang-nyeling hanya mengubah URUTAN, bukan komposisinya."""
+        from collections import Counter
+        for flag in (False, True):
+            sch = self._build(flag)
+            counts = Counter(r.segment for r in sch.rounds)
+            self.assertEqual(counts, {"Putri": 4, "Putra": 4}, f"interleave={flag}")
+
+    def test_interleave_preserves_gender_rules(self):
+        genders = ["F"] * 4 + ["M"] * 4
+        players = make_players(8, genders=genders)
+        gmap = {p.id: p.gender for p in players}
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, effort=8000, interleave_segments=True,
+                     segments=[Segment("Putri", 3, "women"),
+                               Segment("Putra", 3, "men"),
+                               Segment("Mixed", 6, "mixed")])
+        sch = build_schedule(players, cfg)
+        assert_structurally_valid(self, sch)
+        for rnd in sch.rounds:
+            for m in rnd.matches:
+                gs = [gmap[p] for p in m.players()]
+                if rnd.segment == "Putri":
+                    self.assertTrue(all(g == "F" for g in gs), f"ronde {rnd.index}")
+                elif rnd.segment == "Putra":
+                    self.assertTrue(all(g == "M" for g in gs), f"ronde {rnd.index}")
+                elif rnd.segment == "Mixed":
+                    self.assertNotEqual(gmap[m.team_a[0]], gmap[m.team_a[1]])
+                    self.assertNotEqual(gmap[m.team_b[0]], gmap[m.team_b[1]])
+
+    def test_partner_rotation_still_unique_within_segment(self):
+        """Rotasi pasangan memakai nomor ronde DI DALAM segmennya.
+
+        Kalau yang dipakai nomor ronde acara, ronde yang diselang-seling akan
+        melewati kombinasi dan mengulang pasangan lebih cepat.
+
+        Diuji dengan 3 ronde per gender, bukan 4: empat orang hanya punya tiga
+        kombinasi partner, jadi ronde keempat pasti mengulang - batas matematis,
+        bukan cacat rotasinya.
+        """
+        players = make_players(8, genders=["F"] * 4 + ["M"] * 4)
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=15,
+                     warmup_minutes=0, effort=8000, interleave_segments=True,
+                     segments=[Segment("Putri", 3, "women"),
+                               Segment("Putra", 3, "men")])
+        sch = build_schedule(players, cfg)
+
+        for label in ("Putri", "Putra"):
+            seen = set()
+            for rnd in sch.rounds:
+                if rnd.segment != label:
+                    continue
+                for m in rnd.matches:
+                    for team in (m.team_a, m.team_b):
+                        key = tuple(sorted(team))
+                        self.assertNotIn(key, seen,
+                                         f"{label}: pasangan {key} berulang")
+                        seen.add(key)
+            self.assertEqual(len(seen), 6,
+                             f"{label}: 3 ronde x 2 tim = 6 pasangan berbeda")
+
+    def test_order_matches_expected_pattern(self):
+        from padel_scheduler.scheduler import round_plan
+        segs = [Segment("Putra", 3, "men"), Segment("Putri", 3, "women"),
+                Segment("Mixed", 6, "mixed")]
+        order = [s.label for s, _ in round_plan(segs, True)]
+        self.assertEqual(order, ["Mixed", "Putra", "Putri", "Mixed", "Mixed",
+                                 "Putra", "Putri", "Mixed", "Mixed", "Putra",
+                                 "Putri", "Mixed"])
+        blocks = [s.label for s, _ in round_plan(segs, False)]
+        self.assertEqual(blocks[:3], ["Putra"] * 3)
+
+
 class TestPlayFairness(unittest.TestCase):
     """Jumlah main harus serata yang dimungkinkan aritmetika.
 

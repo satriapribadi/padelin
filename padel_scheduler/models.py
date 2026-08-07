@@ -140,6 +140,10 @@ class Config:
     ballboys_per_court: int = 0
     # Meet bersegmen (mis. putra/putri/mixed). Kosong = satu babak biasa.
     segments: list[Segment] = field(default_factory=list)
+    # Sebarkan ronde tiap babak merata sepanjang acara, bukan berurutan sebagai
+    # blok. Tanpa ini "Putri 4" lalu "Putra 4" berarti para putri main 4 ronde
+    # beruntun sementara para putra duduk 4 ronde beruntun.
+    interleave_segments: bool = False
     # Kalau True, durasi per ronde dihitung otomatis dari total ronde segmen
     # agar pas dengan jam sewa.
     fit_rounds_to_duration: bool = True
