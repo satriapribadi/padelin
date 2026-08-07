@@ -131,6 +131,21 @@ Catatan penting: hijau `--good` dan merah `--bad` hanya berjarak dE 6.5 di bawah
 deuteranopia. Karena itu status TIDAK PERNAH disampaikan lewat warna saja -
 kartu `.stat` berstatus selalu membawa glif + kata (lihat `statTile` di app.js).
 
+### Verifikasi visual wajib
+
+Setelah mengubah grafik, **render dan lihat hasilnya** - pemeriksaan statis
+tidak cukup. `web/_selftest.html` merender ketiga grafik dengan data API
+sungguhan dan menampilkan error JS di dalam halaman:
+
+```
+msedge --headless=new --disable-gpu --virtual-time-budget=12000        --screenshot=out.png --window-size=1000,1560        http://127.0.0.1:8770/web/_selftest.html
+```
+
+Pakai data sungguhan, bukan sintetis. Dua bug lolos dari data sintetis dan baru
+ketahuan dari data asli: rentang tick yang tidak mencakup nilai maksimum
+(titik tergambar di luar sumbu), dan daftar skenario biaya yang tidak memuat
+pilihan court host sendiri (titik acuannya hilang).
+
 Sebelum menambah chart baru, **muat skill `dataviz` lebih dulu**. Jangan tulis
 kode chart dari nol. Petakan palet `dataviz` ke token di atas: `accent` untuk seri utama,
 `good`/`warn`/`bad` hanya untuk seri yang memang berstatus.

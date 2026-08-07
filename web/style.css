@@ -57,6 +57,7 @@ main{padding:20px 22px 80px;max-width:1400px;margin:0 auto}
 .row.three{grid-template-columns:1fr 1fr 1fr}
 .row.one{grid-template-columns:1fr}
 label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;font-weight:600}
+label .hint{color:var(--dim);font-weight:400;font-style:italic;margin-left:5px}
 input,select,textarea{
   width:100%;background:var(--bg);color:var(--ink);
   border:1px solid var(--line);border-radius:7px;padding:8px 10px;

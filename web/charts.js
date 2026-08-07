@@ -63,7 +63,13 @@ function compactRp(v) {
 
 const fullRp = (v) => 'Rp ' + Math.round(v).toLocaleString('id-ID');
 
-/** Tick yang membulat ke angka enak dibaca. */
+/**
+ * Tick yang membulat ke angka enak dibaca, DAN dijamin mencakup seluruh data.
+ *
+ * Penjaminan itu bukan hiasan: kalau tick terakhir berhenti di bawah nilai
+ * maksimum, titik data tersebut digambar di luar area plot dan melayang lepas
+ * dari sumbunya.
+ */
 function niceTicks(min, max, count = 5) {
   if (min === max) { min -= 1; max += 1; }
   const raw = (max - min) / count;
@@ -71,8 +77,10 @@ function niceTicks(min, max, count = 5) {
   const norm = raw / mag;
   const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * mag;
   const start = Math.floor(min / step) * step;
+  const end = Math.ceil(max / step) * step;
   const out = [];
-  for (let v = start; v <= max + step * 0.5; v += step) out.push(v);
+  // Toleransi kecil supaya galat pembulatan float tidak memakan tick terakhir.
+  for (let v = start; v <= end + step * 1e-6; v += step) out.push(v);
   return out;
 }
 
@@ -333,12 +341,17 @@ export function tradeoffChart(options, current) {
     ]);
     g.appendChild(hit);
 
-    // Label langsung hanya untuk titik yang jadi pokok cerita.
+    // Label langsung hanya untuk titik yang jadi pokok cerita. Diletakkan ke
+    // kanan-atas karena sebaran skenario selalu menurun ke kanan, jadi sisi itu
+    // yang paling lapang; kalau mepet tepi kanan, label dipantulkan ke kiri.
     if (cur) {
+      const label = `${o.courts} court · ${o.hours} jam`;
+      const near_right = cx > M.l + iw * 0.68;
       g.appendChild(txt('text', {
-        x: cx, y: cy - 16, fill: VIZ.ink, 'font-size': 11.5,
-        'font-weight': 700, 'text-anchor': 'middle',
-      }, `${o.courts} court · ${o.hours} jam`));
+        x: cx + (near_right ? -12 : 12), y: cy - 9, fill: VIZ.ink,
+        'font-size': 11.5, 'font-weight': 700,
+        'text-anchor': near_right ? 'end' : 'start',
+      }, label));
     }
     svg.appendChild(g);
   });

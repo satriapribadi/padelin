@@ -185,13 +185,33 @@ def api_economics(payload: dict) -> dict:
         return {"error": "Butuh minimal 4 pemain untuk hitung biaya."}
 
     hours = cfg.duration_minutes / 60.0
+
+    # Daftar pembanding harus berpusat pada pilihan host, bukan pada jumlah
+    # court "ideal". Host sering sengaja menyewa court lebih sedikit demi
+    # margin; kalau court itu tidak masuk daftar, skenarionya sendiri hilang
+    # dari perbandingan dan grafik kehilangan titik acuannya.
+    courts = cfg.courts
+    court_options = sorted({
+        c for c in range(max(1, courts - 2), courts + 3) if c >= 1
+    } | {courts})
+
     options = compare(
         n_players=n,
         econ=econ,
+        court_options=court_options,
         hour_options=sorted({1.0, 1.5, 2.0, 2.5, 3.0, round(hours, 2)}),
         round_minutes=cfg.round_minutes,
         warmup_minutes=cfg.warmup_minutes,
     )
+    # Skenario yang sedang dipakai tidak boleh terpangkas oleh batas tampilan.
+    def _is_current(o):
+        return o.courts == courts and abs(o.hours - hours) < 0.01
+
+    shown = options[:24]
+    if not any(_is_current(o) for o in shown):
+        current = next((o for o in options if _is_current(o)), None)
+        if current is not None:
+            shown = [current] + shown[:23]
     up = upgrade_analysis(n, cfg.courts, hours, econ,
                           cfg.round_minutes, cfg.warmup_minutes)
 
@@ -202,7 +222,7 @@ def api_economics(payload: dict) -> dict:
             k: v for k, v in up.items()
             if k not in ("base", "plus_one_court")
         },
-        "options": [vars(o) for o in options[:24]],
+        "options": [vars(o) for o in shown],
         "fee_suggestions": {
             str(int(m)): fee_for_target_margin(n, cfg.courts, hours, econ, m)
             for m in (20, 30, 40, 50)

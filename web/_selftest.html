@@ -1,0 +1,109 @@
+<!doctype html>
+<!-- Alat verifikasi visual grafik. Bukan bagian dari aplikasi (awalan "_").
+
+     Merender ketiga grafik memakai DATA API SUNGGUHAN, lalu menangkap error JS
+     ke dalam DOM supaya terbaca lewat render headless:
+
+       msedge --headless=new --virtual-time-budget=12000               --screenshot=out.png --window-size=1000,1560               http://127.0.0.1:8770/web/_selftest.html
+
+     Dipakai memakai data sungguhan, bukan sintetis, karena dua bug nyata lolos
+     dari data sintetis: rentang tick yang tidak mencakup nilai maksimum, dan
+     daftar skenario biaya yang tidak memuat pilihan court host sendiri. -->
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<title>Padelin — uji grafik</title>
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+<main>
+  <div id="errors" class="card" style="border-color:#f2685f">
+    <h2>Status</h2>
+    <div id="errlist">menunggu...</div>
+  </div>
+  <div class="card"><h2>1. Trade-off waktu main vs untung</h2><div id="c1"></div></div>
+  <div class="card"><h2>2. Komposisi ronde per peserta</h2><div id="c2"></div></div>
+  <div class="card"><h2>3. Porsi istirahat lintas acara</h2><div id="c3"></div></div>
+  <div class="card"><h2>4. Combobox + quick add</h2>
+    <div class="row">
+      <div><label>Venue</label><input id="vtest" placeholder="ketik nama venue">
+        <input type="hidden" id="vtest_id"></div>
+      <div></div>
+    </div>
+  </div>
+</main>
+
+<script>
+  const problems = [];
+  window.addEventListener('error', (e) => {
+    problems.push(`ERROR: ${e.message} @ ${e.filename}:${e.lineno}`);
+    paint();
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    problems.push(`PROMISE: ${e.reason}`);
+    paint();
+  });
+  function paint() {
+    const box = document.getElementById('errlist');
+    box.textContent = '';
+    if (!problems.length) { box.textContent = 'OK — tidak ada error'; return; }
+    problems.forEach((p) => {
+      const d = document.createElement('div');
+      d.className = 'msg err';
+      d.textContent = p;
+      box.appendChild(d);
+    });
+  }
+</script>
+
+<script type="module">
+import { tradeoffChart, engagementChart, restShareChart } from './charts.js';
+import { createCombo } from './combo.js';
+
+const N = 26;
+const roster = Array.from({ length: N }, (_, i) => ({
+  id: i, name: `Pemain ${i + 1}`, rating: 2 + (i % 6) * 0.5,
+  gender: i < 13 ? 'M' : 'F', partner_id: null, court_preference: null,
+}));
+const payload = {
+  club_id: 1, title: 'Uji', courts: 4, duration_minutes: 120, round_minutes: 12,
+  warmup_minutes: 10, mode: 'americano', referees_per_court: 1,
+  ballboys_per_court: 1, seed: 7, effort: 12000, segments: [], players: roster,
+  economics: { court_price_per_hour: 250000, fee_per_player: 85000, other_costs: 100000 },
+};
+const post = async (url) => {
+  const r = await fetch(url, { method: 'POST',
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  if (!r.ok) throw new Error(`${url} -> ${r.status}`);
+  return r.json();
+};
+
+const econ = await post('/api/economics');
+document.getElementById('c1').appendChild(tradeoffChart(econ.options, econ.current));
+
+const sch = await post('/api/schedule');
+document.getElementById('c2').appendChild(
+  engagementChart(sch.players, sch.stats, sch.rounds.length));
+
+const stats = await (await fetch('/api/stats/players?club_id=1')).json();
+document.getElementById('c3').appendChild(restShareChart(stats.stats));
+
+const venues = [
+  { id: 1, name: 'Arena Utama', court_count: 4, price_per_hour: 250000 },
+  { id: 2, name: 'Arena Selatan', court_count: 2, price_per_hour: 180000 },
+];
+createCombo({
+  input: document.getElementById('vtest'),
+  hidden: document.getElementById('vtest_id'),
+  getItems: () => venues,
+  meta: (v) => `${v.court_count} court`,
+  quickAdd: { title: 'Venue baru',
+    fields: [{ key: 'court_count', label: 'Jumlah court', type: 'number', value: 4 }],
+    save: async (name) => ({ id: 99, name }) },
+});
+
+window.__ready = true;
+paint();
+</script>
+</body>
+</html>
