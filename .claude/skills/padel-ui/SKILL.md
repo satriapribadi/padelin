@@ -1,16 +1,16 @@
 ---
 name: padel-ui
-description: Design system untuk web app generator jadwal padel. Pakai skill ini SEBELUM menulis atau mengubah HTML/CSS/JS apa pun di folder web/, padel_scheduler/html_report.py, atau padel_scheduler/pdf_report.py — termasuk menambah panel, kartu statistik, tabel, tombol, badge, atau halaman laporan cetak. Memuat token warna, komponen baku, aturan layar-vs-cetak, dan bahasa antarmuka.
+description: Design system untuk Padelin, web app penyusun jadwal meet padel. Pakai skill ini SEBELUM menulis atau mengubah HTML/CSS/JS apa pun di folder web/ atau padel_scheduler/html_report.py — termasuk menambah panel, kartu statistik, tabel, tombol, badge, atau halaman laporan cetak. Memuat token warna, komponen baku, aturan layar-vs-cetak, dan bahasa antarmuka.
 ---
 
-# Design system app jadwal padel
+# Design system Padelin
 
 App ini punya dua permukaan yang **beda aturan** dan tidak boleh dicampur:
 
 | Permukaan | Berkas | Tema | Tujuan |
 |---|---|---|---|
-| Aplikasi | `web/style.css`, `web/index.html`, `web/app.js` | gelap | dipakai host sambil menyusun acara |
-| Laporan | `padel_scheduler/html_report.py` | terang | dibaca peserta & dicetak jadi PDF |
+| Aplikasi | `web/style.css`, `web/index.html`, `web/app.js`, `web/charts.js`, `web/combo.js` | gelap | dipakai host sambil menyusun acara |
+| Laporan | `padel_scheduler/html_report.py` | terang | dibaca peserta & dicetak jadi PDF lewat browser |
 
 Jangan pakai palet gelap di laporan (boros tinta, jelek dicetak), dan jangan
 pakai palet terang di aplikasi.
@@ -121,9 +121,18 @@ Uji dengan buka laporan → Ctrl+P → periksa preview, bukan cuma tampilan laya
 
 ## Grafik & visualisasi
 
-Sebelum menambah chart apa pun (sebaran istirahat, perbandingan margin,
-statistik pemain), **muat skill `dataviz` lebih dulu**. Jangan tulis kode chart
-dari nol. Petakan palet `dataviz` ke token di atas: `accent` untuk seri utama,
+Grafik ada di `web/charts.js`. Palet seri sudah divalidasi terhadap surface
+panel `#161c24` (biru `#3987e5`, aqua `#199e70`, netral `#5b6878`) dan lolos
+seluruh gate: lightness band, chroma floor, pemisahan CVD, ambang penglihatan
+normal, kontras. **Jangan mengubah warna seri tanpa menjalankan ulang
+validator** `dataviz/scripts/validate_palette.py` terhadap surface itu.
+
+Catatan penting: hijau `--good` dan merah `--bad` hanya berjarak dE 6.5 di bawah
+deuteranopia. Karena itu status TIDAK PERNAH disampaikan lewat warna saja -
+kartu `.stat` berstatus selalu membawa glif + kata (lihat `statTile` di app.js).
+
+Sebelum menambah chart baru, **muat skill `dataviz` lebih dulu**. Jangan tulis
+kode chart dari nol. Petakan palet `dataviz` ke token di atas: `accent` untuk seri utama,
 `good`/`warn`/`bad` hanya untuk seri yang memang berstatus.
 
 Chart hanya ditambahkan kalau menjawab pertanyaan yang tidak terjawab oleh

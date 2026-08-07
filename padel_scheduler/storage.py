@@ -33,6 +33,9 @@ CREATE TABLE IF NOT EXISTS clubs (
     contact     TEXT DEFAULT '',
     wa_group    TEXT DEFAULT '',
     notes       TEXT DEFAULT '',
+    -- Logo disimpan sebagai data URI (image/png atau image/jpeg) supaya ikut
+    -- berpindah bersama file database dan bisa langsung ditanam di laporan.
+    logo        TEXT DEFAULT '',
     active      INTEGER NOT NULL DEFAULT 1,
     created_at  TEXT NOT NULL,
     updated_at  TEXT NOT NULL
@@ -140,7 +143,18 @@ def session(db_path: Path | str = DEFAULT_DB):
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    """Pindahkan data dari skema lama (tabel `roster`) kalau masih ada."""
+    """Sesuaikan database lama dengan skema terbaru."""
+    # Kolom yang ditambahkan setelah rilis awal. CREATE TABLE IF NOT EXISTS
+    # tidak menyentuh tabel yang sudah ada, jadi kolom baru ditambah di sini.
+    added = False
+    for table, column, decl in (("clubs", "logo", "TEXT DEFAULT ''"),):
+        cols = {r["name"] for r in conn.execute(f"PRAGMA table_info({table})")}
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
+            added = True
+    if added:
+        conn.commit()
+
     exists = conn.execute(
         "SELECT name FROM sqlite_master WHERE type='table' AND name='roster'"
     ).fetchone()
@@ -179,17 +193,62 @@ def ensure_default_club(conn: sqlite3.Connection) -> int:
 # Helper generik untuk master data
 # ---------------------------------------------------------------------------
 
-def _list(conn, table: str, club_id: int | None, include_inactive: bool,
-          order: str) -> list[dict]:
-    sql = f"SELECT * FROM {table} WHERE 1=1"
+# Kolom yang boleh dicari per tabel. Dipakai untuk menyusun SQL, jadi daftarnya
+# ditulis eksplisit di sini dan tidak pernah diambil dari input pengguna.
+SEARCH_COLUMNS = {
+    "clubs": ("name", "city", "contact"),
+    "venues": ("name", "address"),
+    "players": ("name", "nickname", "level_label"),
+}
+
+DEFAULT_PAGE_SIZE = 25
+MAX_PAGE_SIZE = 200
+
+
+def _where(table: str, club_id: int | None, include_inactive: bool,
+           search: str) -> tuple[str, list]:
+    sql = " WHERE 1=1"
     params: list = []
     if not include_inactive:
         sql += " AND active = 1"
     if club_id is not None and table != "clubs":
         sql += " AND club_id = ?"
         params.append(club_id)
-    sql += f" ORDER BY {order}"
-    return [dict(r) for r in conn.execute(sql, params)]
+    if search:
+        cols = SEARCH_COLUMNS.get(table, ("name",))
+        sql += " AND (" + " OR ".join(f"{c} LIKE ?" for c in cols) + ")"
+        params += [f"%{search}%"] * len(cols)
+    return sql, params
+
+
+def _list(conn, table: str, club_id: int | None, include_inactive: bool,
+          order: str, search: str = "") -> list[dict]:
+    where, params = _where(table, club_id, include_inactive, search)
+    return [dict(r) for r in
+            conn.execute(f"SELECT * FROM {table}{where} ORDER BY {order}", params)]
+
+
+def _list_paged(conn, table: str, club_id: int | None, include_inactive: bool,
+                order: str, search: str = "", page: int = 1,
+                per_page: int = DEFAULT_PAGE_SIZE) -> dict:
+    """Halaman data + total, supaya tabel master tetap ringan saat data banyak."""
+    per_page = max(1, min(MAX_PAGE_SIZE, per_page))
+    where, params = _where(table, club_id, include_inactive, search)
+
+    total = int(conn.execute(
+        f"SELECT COUNT(*) AS n FROM {table}{where}", params
+    ).fetchone()["n"])
+
+    pages = max(1, -(-total // per_page))       # pembulatan ke atas
+    page = max(1, min(page, pages))
+    offset = (page - 1) * per_page
+
+    items = [dict(r) for r in conn.execute(
+        f"SELECT * FROM {table}{where} ORDER BY {order} LIMIT ? OFFSET ?",
+        [*params, per_page, offset],
+    )]
+    return {"items": items, "total": total, "page": page,
+            "pages": pages, "per_page": per_page}
 
 
 def _soft_delete(conn, table: str, row_id: int) -> None:
@@ -206,27 +265,49 @@ def list_clubs(conn, include_inactive: bool = False) -> list[dict]:
     return _list(conn, "clubs", None, include_inactive, "name COLLATE NOCASE")
 
 
+def page_clubs(conn, search: str = "", page: int = 1,
+               per_page: int = DEFAULT_PAGE_SIZE) -> dict:
+    return _list_paged(conn, "clubs", None, False, "name COLLATE NOCASE",
+                       search, page, per_page)
+
+
 def save_club(conn, data: dict) -> int:
     fields = ("name", "city", "contact", "wa_group", "notes")
     vals = [(data.get(f) or "").strip() for f in fields]
     if not vals[0]:
         raise ValueError("Nama klub wajib diisi.")
     cid = data.get("id")
+
+    # logo tidak disertakan -> pertahankan yang lama; string kosong -> hapus.
+    logo = data.get("logo")
     if cid:
-        conn.execute(
-            "UPDATE clubs SET name=?, city=?, contact=?, wa_group=?, notes=?, "
-            "active=1, updated_at=? WHERE id=?",
-            (*vals, _now(), int(cid)),
-        )
+        if logo is None:
+            conn.execute(
+                "UPDATE clubs SET name=?, city=?, contact=?, wa_group=?, notes=?, "
+                "active=1, updated_at=? WHERE id=?",
+                (*vals, _now(), int(cid)),
+            )
+        else:
+            conn.execute(
+                "UPDATE clubs SET name=?, city=?, contact=?, wa_group=?, notes=?, "
+                "logo=?, active=1, updated_at=? WHERE id=?",
+                (*vals, logo, _now(), int(cid)),
+            )
         conn.commit()
         return int(cid)
+
     cur = conn.execute(
-        "INSERT INTO clubs (name, city, contact, wa_group, notes, created_at, "
-        "updated_at) VALUES (?,?,?,?,?,?,?)",
-        (*vals, _now(), _now()),
+        "INSERT INTO clubs (name, city, contact, wa_group, notes, logo, "
+        "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+        (*vals, logo or "", _now(), _now()),
     )
     conn.commit()
     return int(cur.lastrowid)
+
+
+def get_club(conn, club_id: int) -> dict | None:
+    row = conn.execute("SELECT * FROM clubs WHERE id = ?", (club_id,)).fetchone()
+    return dict(row) if row else None
 
 
 def delete_club(conn, club_id: int) -> None:
@@ -240,6 +321,12 @@ def delete_club(conn, club_id: int) -> None:
 def list_venues(conn, club_id: int | None = None,
                 include_inactive: bool = False) -> list[dict]:
     return _list(conn, "venues", club_id, include_inactive, "name COLLATE NOCASE")
+
+
+def page_venues(conn, club_id: int | None = None, search: str = "",
+                page: int = 1, per_page: int = DEFAULT_PAGE_SIZE) -> dict:
+    return _list_paged(conn, "venues", club_id, False, "name COLLATE NOCASE",
+                       search, page, per_page)
 
 
 def save_venue(conn, data: dict) -> int:
@@ -283,6 +370,12 @@ def delete_venue(conn, venue_id: int) -> None:
 def list_players(conn, club_id: int | None = None,
                  include_inactive: bool = False) -> list[dict]:
     return _list(conn, "players", club_id, include_inactive, "name COLLATE NOCASE")
+
+
+def page_players(conn, club_id: int | None = None, search: str = "",
+                 page: int = 1, per_page: int = DEFAULT_PAGE_SIZE) -> dict:
+    return _list_paged(conn, "players", club_id, False, "name COLLATE NOCASE",
+                       search, page, per_page)
 
 
 def save_player(conn, data: dict) -> int:
@@ -477,6 +570,39 @@ def list_events(conn, club_id: int | None = None, limit: int = 200,
             "e.id DESC LIMIT ?")
     params.append(limit)
     return [dict(r) for r in conn.execute(sql, params)]
+
+
+def page_events(conn, club_id: int | None = None, search: str = "",
+                page: int = 1, per_page: int = DEFAULT_PAGE_SIZE) -> dict:
+    """Halaman riwayat acara + total, untuk tabel Riwayat."""
+    per_page = max(1, min(MAX_PAGE_SIZE, per_page))
+    where = " WHERE 1=1"
+    params: list = []
+    if club_id:
+        where += " AND e.club_id = ?"
+        params.append(club_id)
+    if search:
+        where += " AND (e.title LIKE ? OR e.venue_name LIKE ? OR e.event_date LIKE ?)"
+        params += [f"%{search}%"] * 3
+
+    total = int(conn.execute(
+        f"SELECT COUNT(*) AS n FROM events e{where}", params
+    ).fetchone()["n"])
+    pages = max(1, -(-total // per_page))
+    page = max(1, min(page, pages))
+
+    rows = conn.execute(
+        "SELECT e.id, e.title, e.event_date, e.venue_name, e.created_at, "
+        "e.n_players, e.courts, e.duration_min, e.rounds, e.mode, "
+        "e.quality_score, e.total_cost, e.revenue, e.profit, c.name AS club_name "
+        "FROM events e LEFT JOIN clubs c ON c.id = e.club_id"
+        + where
+        + " ORDER BY COALESCE(NULLIF(e.event_date,''), e.created_at) DESC, "
+          "e.id DESC LIMIT ? OFFSET ?",
+        [*params, per_page, (page - 1) * per_page],
+    )
+    return {"items": [dict(r) for r in rows], "total": total, "page": page,
+            "pages": pages, "per_page": per_page}
 
 
 def get_event(conn, event_id: int) -> dict | None:

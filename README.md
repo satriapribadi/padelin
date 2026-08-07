@@ -1,8 +1,10 @@
-# Generator Jadwal Meet Padel
+# Padelin
+
+> Jadwal meet, beres.
 
 Web app lokal untuk menyusun jadwal meet padel: Americano, pool rating, Mexicano,
 pasangan tetap, dan format bersegmen (putra / putri / mixed) — lengkap dengan
-pembagian tugas wasit & ballboy, analisa biaya, laporan PDF, dan database.
+pembagian tugas wasit & ballboy, analisa biaya, laporan siap cetak, dan database.
 
 **Nol dependency.** Cukup Python 3.10+, tanpa `pip install` apa pun.
 
@@ -73,15 +75,26 @@ court × durasi, plus berapa fee harus naik kalau menambah satu court — supaya
 keputusannya sadar, bukan menebak.
 
 **Laporan**
-- HTML + CSS siap cetak (Ctrl+P → Save as PDF) — paling rapi
-- PDF sekali klik, ditulis murni Python tanpa library eksternal
+- HTML + CSS siap cetak: buka laporan, Ctrl+P, Save as PDF
+- Logo klub tertanam di kepala laporan
 - Teks siap tempel ke grup WhatsApp, plus jadwal per pemain
 - CSV untuk Excel / Google Sheets
 
 **Master data (SQLite)**
-Klub, venue (harga sewa mengisi panel Biaya otomatis), pemain, riwayat acara,
-dan statistik lintas acara — siapa yang rajin datang, siapa yang paling sering
-kebagian duduk.
+Klub (dengan logo), venue (harga sewa mengisi panel Biaya otomatis), pemain,
+riwayat acara, dan statistik lintas acara — siapa yang rajin datang, siapa yang
+paling sering kebagian duduk. Tabelnya berhalaman dan bisa dicari.
+
+Venue dan klub bisa ditambahkan langsung dari tab Setup: ketik namanya, kalau
+belum ada di master muncul tawaran menyimpannya di tempat, tanpa pindah menu.
+
+**Grafik**
+Tiga grafik yang menjawab pertanyaan yang tidak terjawab oleh satu angka:
+trade-off waktu main vs untung antar skenario, komposisi ronde tiap peserta
+(main / bertugas / istirahat), dan porsi istirahat lintas acara dengan garis
+acuan rata-rata. Paletnya divalidasi terhadap ambang colorblind-safety, dan tiap
+grafik punya kembaran tabel sehingga tidak ada angka yang hanya bisa diraih
+lewat hover.
 
 ## Struktur
 
@@ -98,11 +111,12 @@ padel_scheduler/
   storage.py                SQLite: klub, venue, pemain, acara
   report.py                 ekspor teks / CSV / JSON
   html_report.py            laporan HTML siap cetak
-  pdf.py                    penulis PDF minimal
-  pdf_report.py             susunan laporan PDF
   presets.py                format meet siap pilih
-web/                        antarmuka (HTML/CSS/JS, tanpa framework)
-tests/                      49 tes
+web/
+  app.js                    antarmuka (module, tanpa framework)
+  charts.js                 grafik SVG buatan sendiri
+  combo.js                  combobox autocomplete + quick-add
+tests/                      45 tes
 ```
 
 ## Tes
@@ -113,8 +127,8 @@ python -m unittest discover -s tests
 
 Yang diuji adalah properti keras: tidak ada pemain di dua court sekaligus,
 aturan gender ditegakkan 100%, partner terkunci tetap terkunci, pemula tidak
-pernah melawan pemain kuat di mode pool, istirahat terbagi merata, dan PDF
-menghasilkan struktur yang valid.
+pernah melawan pemain kuat di mode pool, istirahat terbagi merata, tugas hanya
+jatuh ke yang sedang duduk, dan nama pemain selalu di-escape di laporan.
 
 ## Catatan
 

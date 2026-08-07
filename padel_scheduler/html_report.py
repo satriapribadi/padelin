@@ -23,6 +23,10 @@ PREF_LABELS = {
     "mixed_team": "partner lawan jenis",
 }
 
+APP_MARK = (
+    '<svg viewBox="0 0 40 40" role="img" aria-label="Padelin"><rect x="6.5" y="3" width="27" height="25" rx="11.5" fill="none" stroke="currentColor" stroke-width="2.4"/><path d="M13.5 27.2 L17.5 32.4 M26.5 27.2 L22.5 32.4" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/><rect x="17.8" y="31.4" width="4.4" height="6.4" rx="2.2" fill="currentColor"/><g fill="#3d9be9"><circle cx="14" cy="11.5" r="1.9"/><circle cx="20" cy="11.5" r="1.9"/><circle cx="26" cy="11.5" r="1.9"/><circle cx="14" cy="19.5" r="1.9"/><circle cx="20" cy="19.5" r="1.9"/><circle cx="26" cy="19.5" r="1.9"/></g></svg>'
+)
+
 MODE_LABELS = {
     "americano": "Americano",
     "tiered": "Pool berdasarkan rating",
@@ -50,6 +54,8 @@ body{
   display:flex; justify-content:space-between; align-items:flex-end; gap:24px;
 }
 .masthead h1{margin:0 0 6px; font-size:26px; letter-spacing:-.02em}
+.brand{display:flex; align-items:center; gap:14px}
+.logo{width:52px; height:52px; object-fit:contain; flex:none}
 .masthead .meta{color:var(--muted); font-size:12.5px}
 .badge{
   background:var(--accent); color:#fff; border-radius:999px;
@@ -108,6 +114,8 @@ table{width:100%; border-collapse:collapse}
 .note{background:var(--band); border-left:3px solid var(--muted);
   padding:9px 13px; border-radius:0 6px 6px 0; margin-bottom:8px; font-size:12px}
 .note.warn{background:var(--warn-soft); border-left-color:var(--warn)}
+.madeby{display:inline-flex; align-items:center; gap:6px}
+.madeby svg{width:14px; height:14px; color:var(--muted)}
 .foot{margin-top:34px; padding-top:12px; border-top:1px solid var(--line);
   color:var(--muted); font-size:10.5px; display:flex; justify-content:space-between}
 
@@ -159,6 +167,7 @@ def build_html(
     venue: str = "",
     start_clock: str | None = None,
     include_toolbar: bool = True,
+    logo: str = "",
 ) -> str:
     """Rakit laporan HTML lengkap sebagai satu dokumen mandiri."""
     names = {p.id: p.name for p in schedule.players}
@@ -192,10 +201,16 @@ def build_html(
     parts.append("<div class='sheet'>")
 
     # Kepala
+    # Hanya data URI gambar yang diterima; nilai lain diabaikan diam-diam
+    # supaya laporan tetap terbit.
+    logo_html = ""
+    if logo.startswith(("data:image/png;base64,", "data:image/jpeg;base64,")):
+        logo_html = f"<img class='logo' src='{_e(logo)}' alt=''>"
+
     parts.append(
-        f"<div class='masthead'><div>"
+        f"<div class='masthead'><div class='brand'>{logo_html}<div>"
         f"<h1>{_e(title)}</h1>"
-        f"<div class='meta'>{_e('  ·  '.join(meta_bits))}</div></div>"
+        f"<div class='meta'>{_e('  ·  '.join(meta_bits))}</div></div></div>"
         f"<div class='badge'>{_e(fmt)}</div></div>"
     )
 

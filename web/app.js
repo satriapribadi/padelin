@@ -1,5 +1,8 @@
 'use strict';
 
+import { tradeoffChart, engagementChart, restShareChart, hideTip } from './charts.js';
+import { createCombo } from './combo.js';
+
 // ---------------------------------------------------------------------------
 // Util
 // ---------------------------------------------------------------------------
@@ -43,6 +46,27 @@ let presets = {};
 let analyzeTimer = null;
 
 // ---------------------------------------------------------------------------
+// Kartu statistik
+// ---------------------------------------------------------------------------
+// Hijau dan merah hanya berjarak dE 6.5 di bawah deuteranopia, jadi status
+// tidak pernah disampaikan lewat warna saja: selalu ada glif + kata.
+const STATE_MARK = {
+  good: { icon: '✓', word: 'aman' },
+  warn: { icon: '!', word: 'perhatikan' },
+  bad: { icon: '✕', word: 'bermasalah' },
+};
+
+function statTile(k, v, sub, state) {
+  const n = el('div', 'stat' + (state ? ' ' + state : ''));
+  const mark = STATE_MARK[state];
+  n.innerHTML =
+    `<div class="k">${esc(k)}</div>` +
+    `<div class="v">${mark ? `<span class="ico" aria-hidden="true">${mark.icon}</span>` : ''}${esc(v)}</div>` +
+    `<div class="s">${esc(sub)}${mark ? ` <span class="state-word">· ${mark.word}</span>` : ''}</div>`;
+  return n;
+}
+
+// ---------------------------------------------------------------------------
 // Tab
 // ---------------------------------------------------------------------------
 document.querySelectorAll('.tabs button').forEach((b) => {
@@ -52,7 +76,7 @@ document.querySelectorAll('.tabs button').forEach((b) => {
     b.classList.add('on');
     $('view-' + b.dataset.view).classList.add('on');
     if (b.dataset.view === 'riwayat') loadEvents();
-    if (b.dataset.view === 'master') { loadMaster(); loadClubSummary(); }
+    if (b.dataset.view === 'master') { loadMaster(); loadMasterTables(); loadClubSummary(); }
   };
 });
 
@@ -285,11 +309,7 @@ async function runAnalyze() {
     const box = el('div');
     const grid = el('div', 'stat-grid');
 
-    const tile = (k, v, s, cls) => {
-      const n = el('div', 'stat' + (cls ? ' ' + cls : ''));
-      n.innerHTML = `<div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div>`;
-      return n;
-    };
+    const tile = statTile;
     const restCls = r.rest_ratio > 1 / 3 ? 'warn' : (r.rest_ratio > 0 ? '' : 'good');
     grid.appendChild(tile('Ronde', r.rounds, `${d.effective_round_minutes} mnt/ronde`));
     grid.appendChild(tile('Main / orang', r.avg_plays_per_player, `${r.playing_minutes_per_player} menit`));
@@ -351,11 +371,7 @@ function renderSchedule() {
   const plays = Object.values(st.plays_per_player);
 
   const grid = el('div', 'stat-grid');
-  const tile = (k, v, s, cls) => {
-    const n = el('div', 'stat' + (cls ? ' ' + cls : ''));
-    n.innerHTML = `<div class="k">${esc(k)}</div><div class="v">${esc(v)}</div><div class="s">${esc(s)}</div>`;
-    return n;
-  };
+  const tile = statTile;
   const q = st.quality_score;
   grid.appendChild(tile('Kualitas', q, 'dari 100', q >= 85 ? 'good' : q >= 65 ? 'warn' : 'bad'));
   grid.appendChild(tile('Ronde', schedule.rounds.length, `${schedule.config.round_minutes} mnt`));
@@ -421,6 +437,13 @@ function renderSchedule() {
   });
   $('recap').innerHTML = html + '</tbody></table>';
 
+  // Grafik komposisi ronde: mencari ketimpangan di antara 26 orang jauh
+  // lebih cepat lewat batang daripada lewat tabel 26 baris.
+  hideTip();
+  $('engagement').textContent = '';
+  $('engagement').appendChild(
+    engagementChart(schedule.players, st, schedule.rounds.length));
+
   // Catatan
   let notes = '';
   (schedule.notes || []).forEach((n) => { notes += `<div class="issue info"><div class="d">${esc(n)}</div></div>`; });
@@ -460,16 +483,6 @@ $('dl-csv').onclick = () => {
   download('jadwal-padel.csv', '﻿' + schedule.csv, 'text/csv;charset=utf-8');
 };
 
-$('dl-pdf').onclick = async () => {
-  if (!schedule) return toast('Belum ada jadwal');
-  const res = await fetch('/api/pdf', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(buildPayload()),
-  });
-  if (!res.ok) return toast('Gagal membuat PDF');
-  download('jadwal-padel.pdf', await res.blob());
-};
-
 $('open-html').onclick = () => {
   if (!schedule) return toast('Belum ada jadwal');
   const form = el('form');
@@ -500,14 +513,15 @@ $('save-event').onclick = async () => {
 
 async function loadEvents() {
   try {
-    const d = await api('/api/events/list?search=' + encodeURIComponent($('search-event').value));
-    if (!d.events.length) {
-      $('events').innerHTML = '<div class="empty">Belum ada jadwal tersimpan.</div>';
+    const d = await loadPaged('events');
+    if (!d.items.length) {
+      $('events').innerHTML = `<div class="empty">${pager.events.search ? 'Tidak ada yang cocok.' : 'Belum ada jadwal tersimpan.'}</div>`;
+      renderPager($('events-pager'), d, () => {});
       return;
     }
     let html = '<table class="data"><thead><tr><th>Judul</th><th>Tanggal</th><th>Venue</th>' +
       '<th>Peserta</th><th>Court</th><th>Ronde</th><th>Kualitas</th><th></th></tr></thead><tbody>';
-    d.events.forEach((e) => {
+    d.items.forEach((e) => {
       html += `<tr><td>${esc(e.title)}</td><td>${esc(e.event_date || '-')}</td>` +
         `<td>${esc(e.venue || '-')}</td><td class="num">${e.n_players}</td>` +
         `<td class="num">${e.courts}</td><td class="num">${e.rounds}</td>` +
@@ -516,12 +530,21 @@ async function loadEvents() {
         `<button class="btn ghost sm" data-del-ev="${e.id}">Hapus</button></td></tr>`;
     });
     $('events').innerHTML = html + '</tbody></table>';
+    renderPager($('events-pager'), d, (p) => { pager.events.page = p; loadEvents(); });
   } catch (e) {
     $('events').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
   }
 }
 
-$('search-event').addEventListener('input', () => { clearTimeout(analyzeTimer); analyzeTimer = setTimeout(loadEvents, 300); });
+let eventSearchTimer = null;
+$('search-event').addEventListener('input', () => {
+  clearTimeout(eventSearchTimer);
+  eventSearchTimer = setTimeout(() => {
+    pager.events.search = $('search-event').value;
+    pager.events.page = 1;
+    loadEvents();
+  }, 300);
+});
 
 $('events').addEventListener('click', async (e) => {
   const open = e.target.dataset.open, del = e.target.dataset.delEv;
@@ -543,6 +566,13 @@ $('events').addEventListener('click', async (e) => {
 function applyRequest(req) {
   $('title').value = req.title || ''; $('event_date').value = req.event_date || '';
   $('venue').value = req.venue || ''; $('start_clock').value = req.start_clock || '';
+  $('venue_name').value = req.venue || '';
+  $('venue_id').value = req.venue_id || '';
+  if (req.club_id) {
+    $('club_id').value = req.club_id;
+    const c = master.clubs.find((x) => x.id === req.club_id);
+    if (c) $('club_name').value = c.name;
+  }
   $('courts').value = req.courts; $('duration').value = req.duration_minutes;
   $('round_min').value = req.round_minutes; $('warmup').value = req.warmup_minutes;
   $('mode').value = req.mode; $('tier_count').value = req.tier_count || 2;
@@ -566,6 +596,14 @@ function applyRequest(req) {
 // Master data: klub, venue, pemain
 // ---------------------------------------------------------------------------
 let master = { clubs: [], venues: [], players: [], default_club_id: null };
+const combos = {};
+// Status paging tiap tabel master.
+const pager = {
+  players: { page: 1, search: '' },
+  clubs: { page: 1, search: '' },
+  venues: { page: 1, search: '' },
+  events: { page: 1, search: '' },
+};
 
 function currentClubId() {
   const v = $('club_id').value;
@@ -582,30 +620,127 @@ function clubPlayers() {
   return master.players.filter((p) => !p.club_id || p.club_id === cid);
 }
 
+/** Muat data master untuk mengisi combobox. Tabel dimuat terpisah per halaman. */
 async function loadMaster() {
   master = await api('/api/master');
-  const cid = currentClubId();
-
-  $('club_id').innerHTML = master.clubs
-    .map((c) => `<option value="${c.id}" ${c.id === cid ? 'selected' : ''}>${esc(c.name)}</option>`)
-    .join('') || '<option value="">(belum ada klub)</option>';
-
-  $('venue_id').innerHTML = '<option value="">- pilih venue -</option>' +
-    clubVenues().map((v) => `<option value="${v.id}">${esc(v.name)}</option>`).join('');
-
+  if (!$('club_id').value && master.default_club_id) {
+    const c = master.clubs.find((x) => x.id === master.default_club_id);
+    if (c) { $('club_id').value = c.id; $('club_name').value = c.name; }
+  }
   $('vn_club').innerHTML = master.clubs
     .map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
-
-  renderMasterTables();
+  Object.values(combos).forEach((c) => c.refresh());
 }
 
-function renderMasterTables() {
-  // Pemain
-  const pl = clubPlayers();
-  $('players-table').innerHTML = pl.length
+// -- combobox Setup ---------------------------------------------------------
+function setupCombos() {
+  combos.club = createCombo({
+    input: $('club_name'), hidden: $('club_id'),
+    getItems: () => master.clubs,
+    meta: (c) => c.city || '',
+    emptyText: 'Belum ada klub tersimpan.',
+    onSelect: () => { loadMasterTables(); loadClubSummary(); },
+    quickAdd: {
+      title: 'Klub baru',
+      fields: [{ key: 'city', label: 'Kota', placeholder: 'opsional' }],
+      save: async (name, v) => {
+        const r = await api('/api/clubs/save', { name, city: v.city });
+        await loadMaster();
+        return master.clubs.find((c) => c.id === r.id) || { id: r.id, name };
+      },
+    },
+  });
+
+  combos.venue = createCombo({
+    input: $('venue_name'), hidden: $('venue_id'),
+    getItems: () => clubVenues(),
+    meta: (v) => `${v.court_count} court · ${rp(v.price_per_hour)}/jam`,
+    emptyText: 'Belum ada venue untuk klub ini.',
+    onSelect: (v) => {
+      // Venue membawa jumlah court & harga sewanya sendiri.
+      $('venue').value = v.name;
+      if (v.court_count) $('courts').value = v.court_count;
+      if (v.price_per_hour) $('court_price').value = v.price_per_hour;
+      scheduleAnalyze();
+    },
+    onClear: () => { $('venue').value = $('venue_name').value; },
+    quickAdd: {
+      title: 'Venue baru',
+      fields: [
+        { key: 'court_count', label: 'Jumlah court', type: 'number', min: 1, value: 4 },
+        { key: 'price_per_hour', label: 'Harga sewa / jam (Rp)', type: 'number', min: 0, step: 10000, value: 200000 },
+      ],
+      validate: (name, v) => {
+        const c = Number(v.court_count), p = Number(v.price_per_hour);
+        if (!Number.isFinite(c) || c < 1) return 'Jumlah court minimal 1.';
+        if (!Number.isInteger(c)) return 'Jumlah court harus bilangan bulat.';
+        if (!Number.isFinite(p) || p < 0) return 'Harga sewa tidak boleh negatif.';
+        return null;
+      },
+      save: async (name, v) => {
+        const r = await api('/api/venues/save', {
+          name, club_id: currentClubId(),
+          court_count: +v.court_count, price_per_hour: +v.price_per_hour,
+        });
+        await loadMaster();
+        return master.venues.find((x) => x.id === r.id) || { id: r.id, name };
+      },
+    },
+  });
+}
+
+// -- pager ------------------------------------------------------------------
+function renderPager(host, data, onGo) {
+  host.textContent = '';
+  if (!data || data.pages <= 1) {
+    if (data && data.total) {
+      const info = el('div', 'pager-info', `${data.total} baris`);
+      host.appendChild(info);
+    }
+    return;
+  }
+  const bar = el('div', 'pager');
+  const mk = (label, page, disabled, on) => {
+    const b = el('button', 'pager-btn' + (on ? ' on' : ''), esc(label));
+    b.type = 'button';
+    b.disabled = !!disabled;
+    if (!disabled) b.onclick = () => onGo(page);
+    return b;
+  };
+  bar.appendChild(mk('‹', data.page - 1, data.page <= 1));
+
+  // Jendela halaman di sekitar halaman aktif, supaya tidak meluber.
+  const span = 2;
+  let from = Math.max(1, data.page - span);
+  let to = Math.min(data.pages, data.page + span);
+  if (from > 1) { bar.appendChild(mk('1', 1, false, data.page === 1)); if (from > 2) bar.appendChild(el('span', 'pager-gap', '…')); }
+  for (let i = from; i <= to; i++) bar.appendChild(mk(String(i), i, false, i === data.page));
+  if (to < data.pages) { if (to < data.pages - 1) bar.appendChild(el('span', 'pager-gap', '…')); bar.appendChild(mk(String(data.pages), data.pages, false, false)); }
+
+  bar.appendChild(mk('›', data.page + 1, data.page >= data.pages));
+  bar.appendChild(el('span', 'pager-info',
+    `Halaman ${data.page} dari ${data.pages} · ${data.total} baris`));
+  host.appendChild(bar);
+}
+
+async function loadPaged(entity, extra = '') {
+  const st = pager[entity];
+  const cid = currentClubId();
+  const q = new URLSearchParams({ page: st.page, search: st.search });
+  if (entity !== 'clubs' && cid) q.set('club_id', cid);
+  return api(`/api/${entity}/list?${q}${extra}`);
+}
+
+async function loadMasterTables() {
+  await Promise.all([renderPlayers_(), renderClubs_(), renderVenues_()]);
+}
+
+async function renderPlayers_() {
+  const d = await loadPaged('players');
+  $('players-table').innerHTML = d.items.length
     ? '<table class="data"><thead><tr><th>Nama</th><th>Panggilan</th><th>Rating</th>' +
       '<th>L/P</th><th>Level</th><th></th></tr></thead><tbody>' +
-      pl.map((p) =>
+      d.items.map((p) =>
         `<tr><td>${esc(p.name)}</td><td>${esc(p.nickname || '-')}</td>` +
         `<td class="num">${p.rating}</td>` +
         `<td class="num">${p.gender === 'M' ? 'L' : p.gender === 'F' ? 'P' : '-'}</td>` +
@@ -613,30 +748,49 @@ function renderMasterTables() {
         `<td><button class="btn ghost sm" data-ed-pl="${p.id}">Ubah</button> ` +
         `<button class="btn ghost sm" data-del-pl="${p.id}">Hapus</button></td></tr>`
       ).join('') + '</tbody></table>'
-    : '<div class="empty">Belum ada pemain. Tambahkan lewat form di atas, atau dari tab Setup klik "Simpan ke master pemain".</div>';
+    : `<div class="empty">${pager.players.search ? 'Tidak ada yang cocok.' : 'Belum ada pemain. Tambahkan lewat form di atas, atau dari tab Setup klik "Simpan ke master pemain".'}</div>`;
+  renderPager($('players-pager'), d, (p) => { pager.players.page = p; renderPlayers_(); });
+}
 
-  // Klub
-  $('clubs-table').innerHTML = master.clubs.length
-    ? '<table class="data"><thead><tr><th>Nama</th><th>Kota</th><th>Kontak</th><th></th></tr></thead><tbody>' +
-      master.clubs.map((c) =>
-        `<tr><td>${esc(c.name)}</td><td>${esc(c.city || '-')}</td>` +
+async function renderClubs_() {
+  const d = await loadPaged('clubs');
+  $('clubs-table').innerHTML = d.items.length
+    ? '<table class="data"><thead><tr><th>Klub</th><th>Kota</th><th>Kontak</th><th></th></tr></thead><tbody>' +
+      d.items.map((c) =>
+        `<tr><td>${c.logo ? `<img class="logo-mini" src="${esc(c.logo)}" alt="">` : ''}${esc(c.name)}</td>` +
+        `<td>${esc(c.city || '-')}</td>` +
         `<td>${esc(c.contact || '-')}</td>` +
         `<td><button class="btn ghost sm" data-ed-cl="${c.id}">Ubah</button> ` +
         `<button class="btn ghost sm" data-del-cl="${c.id}">Hapus</button></td></tr>`
       ).join('') + '</tbody></table>'
     : '<div class="empty">Belum ada klub.</div>';
+  renderPager($('clubs-pager'), d, (p) => { pager.clubs.page = p; renderClubs_(); });
+}
 
-  // Venue
-  $('venues-table').innerHTML = master.venues.length
+async function renderVenues_() {
+  const d = await loadPaged('venues');
+  $('venues-table').innerHTML = d.items.length
     ? '<table class="data"><thead><tr><th>Nama</th><th>Court</th><th>Harga/jam</th><th>Alamat</th><th></th></tr></thead><tbody>' +
-      master.venues.map((v) =>
+      d.items.map((v) =>
         `<tr><td>${esc(v.name)}</td><td class="num">${v.court_count}</td>` +
         `<td class="num">${rp(v.price_per_hour)}</td><td>${esc(v.address || '-')}</td>` +
         `<td><button class="btn ghost sm" data-ed-vn="${v.id}">Ubah</button> ` +
         `<button class="btn ghost sm" data-del-vn="${v.id}">Hapus</button></td></tr>`
       ).join('') + '</tbody></table>'
     : '<div class="empty">Belum ada venue. Isi harga sewa di sini supaya panel Biaya terisi otomatis.</div>';
+  renderPager($('venues-pager'), d, (p) => { pager.venues.page = p; renderVenues_(); });
 }
+
+// Pencarian tiap tabel: kembali ke halaman 1 dan tunggu ketikan berhenti.
+[['search-players', 'players', renderPlayers_],
+ ['search-clubs', 'clubs', renderClubs_],
+ ['search-venues', 'venues', renderVenues_]].forEach(([id, key, fn]) => {
+  let t;
+  $(id).addEventListener('input', () => {
+    clearTimeout(t);
+    t = setTimeout(() => { pager[key].search = $(id).value; pager[key].page = 1; fn(); }, 250);
+  });
+});
 
 // Sub-tab master
 document.querySelectorAll('#master-tabs button').forEach((b) => {
@@ -666,7 +820,7 @@ $('pl-save').onclick = async () => {
       gender: $('pl_gender').value || null, rating: +$('pl_rating').value || 3,
       level_label: $('pl_level').value, notes: $('pl_notes').value,
     });
-    resetPlayerForm(); await loadMaster(); toast('Pemain tersimpan');
+    resetPlayerForm(); await loadMaster(); await renderPlayers_(); toast('Pemain tersimpan');
   } catch (e) { toast(e.message); }
 };
 
@@ -683,13 +837,55 @@ $('players-table').addEventListener('click', async (e) => {
   } else if (del) {
     if (!confirm('Hapus pemain ini dari master?')) return;
     await api('/api/players/delete', { id: +del });
-    await loadMaster(); toast('Terhapus');
+    await loadMaster(); await renderPlayers_(); toast('Terhapus');
   }
 });
 
 // -- form klub --------------------------------------------------------------
-$('cl-reset').onclick = () => ['id', 'name', 'city', 'contact', 'wa', 'notes']
-  .forEach((f) => { $('cl_' + f).value = ''; });
+function setLogoPreview(uri) {
+  $('cl_logo').value = uri || '';
+  const box = $('cl_logo_prev');
+  box.textContent = '';
+  if (uri) {
+    const img = document.createElement('img');
+    img.src = uri;
+    box.appendChild(img);
+  } else {
+    const sp = document.createElement('span');
+    sp.textContent = 'belum ada logo';
+    box.appendChild(sp);
+  }
+}
+
+// Berkas dibaca jadi data URI di browser, lalu divalidasi lagi di server.
+$('cl_logo_file').addEventListener('change', () => {
+  const f = $('cl_logo_file').files[0];
+  if (!f) return;
+  if (!['image/png', 'image/jpeg'].includes(f.type)) {
+    toast('Logo harus PNG atau JPEG'); $('cl_logo_file').value = ''; return;
+  }
+  if (f.size > 400 * 1024) {
+    toast(`Ukuran ${Math.round(f.size / 1024)} KB melebihi batas 400 KB`);
+    $('cl_logo_file').value = ''; return;
+  }
+  const reader = new FileReader();
+  reader.onload = () => setLogoPreview(reader.result);
+  reader.onerror = () => toast('Gagal membaca berkas');
+  reader.readAsDataURL(f);
+});
+
+$('cl-logo-clear').onclick = () => {
+  setLogoPreview('');
+  $('cl_logo_file').value = '';
+  toast('Logo dikosongkan, klik Simpan untuk menerapkan');
+};
+
+$('cl-reset').onclick = () => {
+  ['id', 'name', 'city', 'contact', 'wa', 'notes']
+    .forEach((f) => { $('cl_' + f).value = ''; });
+  $('cl_logo_file').value = '';
+  setLogoPreview('');
+};
 $('cl-save').onclick = async () => {
   if (!$('cl_name').value.trim()) return toast('Nama klub wajib diisi');
   try {
@@ -697,9 +893,9 @@ $('cl-save').onclick = async () => {
       id: $('cl_id').value ? +$('cl_id').value : null,
       name: $('cl_name').value, city: $('cl_city').value,
       contact: $('cl_contact').value, wa_group: $('cl_wa').value,
-      notes: $('cl_notes').value,
+      notes: $('cl_notes').value, logo: $('cl_logo').value,
     });
-    $('cl-reset').onclick(); await loadMaster(); toast('Klub tersimpan');
+    $('cl-reset').onclick(); await loadMaster(); await renderClubs_(); toast('Klub tersimpan');
   } catch (e) { toast(e.message); }
 };
 $('clubs-table').addEventListener('click', async (e) => {
@@ -710,10 +906,12 @@ $('clubs-table').addEventListener('click', async (e) => {
     $('cl_id').value = c.id; $('cl_name').value = c.name; $('cl_city').value = c.city || '';
     $('cl_contact').value = c.contact || ''; $('cl_wa').value = c.wa_group || '';
     $('cl_notes').value = c.notes || '';
+    $('cl_logo_file').value = '';
+    setLogoPreview(c.logo || '');
   } else if (del) {
     if (!confirm('Hapus klub ini?')) return;
     await api('/api/clubs/delete', { id: +del });
-    await loadMaster(); toast('Terhapus');
+    await loadMaster(); await renderClubs_(); toast('Terhapus');
   }
 });
 
@@ -731,7 +929,7 @@ $('vn-save').onclick = async () => {
       address: $('vn_address').value, court_count: +$('vn_courts').value,
       price_per_hour: +$('vn_price').value,
     });
-    $('vn-reset').onclick(); await loadMaster(); toast('Venue tersimpan');
+    $('vn-reset').onclick(); await loadMaster(); await renderVenues_(); toast('Venue tersimpan');
   } catch (e) { toast(e.message); }
 };
 $('venues-table').addEventListener('click', async (e) => {
@@ -745,7 +943,7 @@ $('venues-table').addEventListener('click', async (e) => {
   } else if (del) {
     if (!confirm('Hapus venue ini?')) return;
     await api('/api/venues/delete', { id: +del });
-    await loadMaster(); toast('Terhapus');
+    await loadMaster(); await renderVenues_(); toast('Terhapus');
   }
 });
 
@@ -755,9 +953,13 @@ async function loadPlayerStats() {
     const cid = currentClubId();
     const d = await api('/api/stats/players' + (cid ? '?club_id=' + cid : ''));
     if (!d.stats.length) {
+      $('stats-chart').textContent = '';
       $('stats-table').innerHTML = '<div class="empty">Belum ada acara tersimpan. Simpan jadwal dulu di tab Jadwal.</div>';
       return;
     }
+    hideTip();
+    $('stats-chart').textContent = '';
+    $('stats-chart').appendChild(restShareChart(d.stats));
     $('stats-table').innerHTML =
       '<table class="data"><thead><tr><th>Nama</th><th>Ikut acara</th><th>Ronde main</th>' +
       '<th>Ronde duduk</th><th>% duduk</th><th>Tugas</th><th>Terakhir</th></tr></thead><tbody>' +
@@ -774,24 +976,12 @@ async function loadPlayerStats() {
 }
 
 // -- integrasi dengan tab Setup --------------------------------------------
-$('club_id').onchange = async () => { await loadMaster(); };
-
-$('venue_id').onchange = () => {
-  const v = master.venues.find((x) => x.id === +$('venue_id').value);
-  if (!v) return;
-  // Venue membawa jumlah court & harga sewanya sendiri.
-  $('venue').value = v.name;
-  if (v.court_count) $('courts').value = v.court_count;
-  if (v.price_per_hour) $('court_price').value = v.price_per_hour;
-  scheduleAnalyze();
-  toast(`Setup mengikuti ${v.name}`);
-};
-
 $('save-roster').onclick = async () => {
   if (!players.length) return toast('Belum ada peserta');
   try {
     const d = await api('/api/players/bulk', { club_id: currentClubId(), players });
     await loadMaster();
+    await renderPlayers_();
     toast(`${d.saved} pemain disimpan ke master`);
   } catch (e) { toast(e.message); }
 };
@@ -855,6 +1045,10 @@ $('calc-econ').onclick = async () => {
     });
     $('fee-suggest').innerHTML = fs + '</div>';
 
+    hideTip();
+    $('econ-chart').textContent = '';
+    $('econ-chart').appendChild(tradeoffChart(d.options, c));
+
     let html = '<table class="data"><thead><tr><th>Court</th><th>Jam</th><th>Ronde</th>' +
       '<th>Duduk</th><th>Main/org</th><th>Biaya</th><th>Untung</th><th>Margin</th><th></th></tr></thead><tbody>';
     d.options.forEach((o) => {
@@ -909,6 +1103,7 @@ async function loadClubSummary() {
     $('preset-desc').textContent = presets.single ? presets.single.description : '';
   } catch (e) { /* biarkan default */ }
 
+  setupCombos();
   try { await loadMaster(); } catch (e) { /* database belum siap, abaikan */ }
   renderPlayers();
 })();

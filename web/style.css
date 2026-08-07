@@ -20,7 +20,9 @@ header{
   padding:14px 22px; display:flex; align-items:center; gap:16px;
   position:sticky; top:0; z-index:20;
 }
-header h1{margin:0;font-size:16px;font-weight:700;letter-spacing:-.01em}
+header h1{margin:0;font-size:17px;font-weight:800;letter-spacing:-.02em}
+.brandmark{display:flex;align-items:center;gap:11px}
+.applogo{width:30px;height:30px;color:var(--ink);flex:none}
 header .sub{color:var(--muted);font-size:12px}
 header .spacer{flex:1}
 
@@ -161,3 +163,122 @@ table.data .pick{color:var(--good);font-weight:700}
   background:var(--good);color:#06231a;padding:11px 22px;border-radius:9px;
   font-weight:700;z-index:100;box-shadow:0 6px 24px rgba(0,0,0,.45);
 }
+
+/* =========================================================================
+   Grafik
+   Palet sudah divalidasi terhadap surface panel (#161c24) dengan validator
+   data-viz: 2 seri kategorikal lolos lightness band, chroma floor, pemisahan
+   CVD (worst deutan dE 19.6), ambang penglihatan normal (dE 20.9), kontras.
+   ========================================================================= */
+:root{
+  --viz-s1:#3987e5;      /* seri 1: ronde main */
+  --viz-s2:#199e70;      /* seri 2: bertugas */
+  --viz-neutral:#5b6878; /* istirahat: hadir tapi recessive (3.02:1) */
+  --viz-grid:#232d3a;
+  --viz-axis:#33404f;
+}
+
+.viz{margin:0}
+.viz-head{
+  display:flex;justify-content:space-between;align-items:center;
+  gap:12px;margin-bottom:10px;font-size:12px;color:var(--muted);
+}
+.viz-toggle{
+  background:transparent;border:1px solid var(--line);color:var(--muted);
+  border-radius:6px;padding:4px 11px;font-size:11.5px;cursor:pointer;
+}
+.viz-toggle:hover{color:var(--ink);border-color:var(--accent-dim)}
+
+.viz-plot{width:100%}
+.viz-plot.scroll{max-height:420px;overflow-y:auto;overflow-x:hidden}
+.viz-svg{width:100%;height:auto;display:block;overflow:visible}
+.viz-tick{font-variant-numeric:tabular-nums}
+.viz-val{font-variant-numeric:tabular-nums}
+.viz-hit{cursor:pointer}
+.viz-hit:focus{outline:2px solid var(--accent);outline-offset:1px}
+.viz-pt circle:first-child{transition:r .12s ease}
+.viz-pt:hover circle:first-child{r:9}
+
+.viz-legend{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:12px;font-size:11.5px;color:var(--muted)}
+.viz-legend-item{display:inline-flex;align-items:center;gap:6px}
+.viz-swatch{width:11px;height:11px;border-radius:3px;display:inline-block;flex:none}
+.viz-swatch.line{height:2px;width:16px;border-radius:2px}
+
+.viz-table{max-height:420px;overflow-y:auto}
+
+.viz-tip{
+  position:fixed;display:none;z-index:200;pointer-events:none;
+  background:#0b1017;border:1px solid var(--line);border-radius:8px;
+  padding:9px 12px;font-size:12px;box-shadow:0 8px 28px rgba(0,0,0,.5);
+  max-width:280px;
+}
+.viz-tip-title{font-weight:700;color:var(--ink);margin-bottom:5px;font-size:12.5px}
+.viz-tip-row{display:flex;align-items:baseline;gap:7px;color:var(--muted);line-height:1.7}
+.viz-tip-row b{color:var(--ink);font-variant-numeric:tabular-nums}
+.viz-tip-key{width:14px;height:2px;border-radius:2px;flex:none;align-self:center}
+
+/* Status di kartu angka tidak pernah hanya lewat warna */
+.stat .ico{
+  display:inline-block;margin-right:6px;font-size:13px;font-weight:700;
+  vertical-align:middle;
+}
+.stat .state-word{opacity:.85}
+
+/* =========================================================================
+   Combobox: autocomplete + quick-add ke master
+   ========================================================================= */
+.combo{position:relative}
+.combo-list{
+  display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:60;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:8px;
+  max-height:260px;overflow-y:auto;box-shadow:0 10px 30px rgba(0,0,0,.5);
+}
+.combo-row{
+  display:flex;justify-content:space-between;align-items:center;gap:10px;
+  padding:8px 11px;cursor:pointer;font-size:13px;
+}
+.combo-row.on,.combo-row:hover{background:var(--accent-dim)}
+.combo-meta{color:var(--dim);font-size:11px;white-space:nowrap}
+.combo-empty{padding:10px 11px;color:var(--dim);font-size:12.5px}
+.combo-add{color:var(--accent);font-weight:600;border-top:1px solid var(--line)}
+.combo-add.on,.combo-add:hover{background:var(--accent-dim);color:#cfe6fa}
+.combo-plus{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:17px;height:17px;border-radius:4px;background:var(--accent);
+  color:#fff;font-size:13px;line-height:1;flex:none;
+}
+
+.combo-form{padding:12px}
+.combo-form-title{font-size:12.5px;font-weight:700;margin-bottom:10px;color:var(--ink)}
+.combo-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin-bottom:9px}
+.combo-form-grid label{font-size:10.5px}
+.combo-form-bar{display:flex;gap:7px}
+.combo-err{color:var(--bad);font-size:11.5px;min-height:15px;margin-bottom:5px}
+
+/* =========================================================================
+   Pager
+   ========================================================================= */
+.pager{display:flex;align-items:center;gap:4px;flex-wrap:wrap;margin-top:12px}
+.pager-btn{
+  background:transparent;border:1px solid var(--line);color:var(--muted);
+  border-radius:6px;min-width:30px;padding:5px 9px;font-size:12px;cursor:pointer;
+  font-variant-numeric:tabular-nums;
+}
+.pager-btn:hover:not(:disabled){color:var(--ink);border-color:var(--accent-dim)}
+.pager-btn.on{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700}
+.pager-btn:disabled{opacity:.35;cursor:not-allowed}
+.pager-gap{color:var(--dim);padding:0 3px}
+.pager-info{color:var(--dim);font-size:11.5px;margin-left:8px;margin-top:10px;display:block}
+
+/* Logo klub */
+.logo-prev{
+  height:74px;border:1px dashed var(--line);border-radius:8px;
+  display:flex;align-items:center;justify-content:center;
+  background:var(--bg);color:var(--dim);font-size:11.5px;overflow:hidden;
+}
+.logo-prev img{max-height:64px;max-width:100%;object-fit:contain}
+.logo-mini{
+  height:20px;width:20px;object-fit:contain;vertical-align:middle;
+  margin-right:8px;border-radius:4px;
+}
+input[type=file]{padding:6px 8px;font-size:12px}

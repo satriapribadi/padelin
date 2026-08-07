@@ -13,6 +13,8 @@ Tanpa dependency eksternal — cukup Python 3.10+.
 from __future__ import annotations
 
 import argparse
+import base64
+import binascii
 import json
 import mimetypes
 import threading
@@ -33,13 +35,44 @@ from padel_scheduler import storage
 from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_analysis
 from padel_scheduler.html_report import build_html
 from padel_scheduler.models import COURT_PREFERENCES
-from padel_scheduler.pdf_report import build_pdf
 from padel_scheduler.presets import PRESETS
 from padel_scheduler.report import to_csv, to_dict, to_personal_text, to_text
 from padel_scheduler.scheduler import ScheduleError
 
 WEB_DIR = Path(__file__).parent / "web"
-MAX_BODY = 2 * 1024 * 1024
+MAX_BODY = 8 * 1024 * 1024
+
+# Logo klub disimpan sebagai data URI. Hanya PNG/JPEG, dengan batas ukuran
+# supaya database tetap ringan dan laporan tidak membengkak.
+LOGO_MAX_BYTES = 400 * 1024
+LOGO_PREFIXES = ("data:image/png;base64,", "data:image/jpeg;base64,")
+
+
+def _clean_logo(value):
+    """Validasi data URI logo. None = jangan diubah, '' = hapus."""
+    if value is None:
+        return None
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if not value.startswith(LOGO_PREFIXES):
+        raise ValueError("Logo harus berupa gambar PNG atau JPEG.")
+    head, _, b64 = value.partition(",")
+    try:
+        raw = base64.b64decode(b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise ValueError("Data logo rusak atau tidak lengkap.") from exc
+    if len(raw) > LOGO_MAX_BYTES:
+        raise ValueError(
+            f"Ukuran logo {len(raw) // 1024} KB melebihi batas "
+            f"{LOGO_MAX_BYTES // 1024} KB. Perkecil gambarnya dulu."
+        )
+    # Cek angka ajaib supaya ekstensi yang diganti nama tidak lolos.
+    if head.startswith("data:image/png") and not raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        raise ValueError("Berkas ini bukan PNG yang sah.")
+    if head.startswith("data:image/jpeg") and not raw.startswith(b"\xff\xd8\xff"):
+        raise ValueError("Berkas ini bukan JPEG yang sah.")
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -223,10 +256,28 @@ def api_players_bulk(payload: dict) -> dict:
     return {"saved": n, "club_id": club_id}
 
 
+def api_club_save(payload: dict) -> dict:
+    data = dict(payload)
+    data["logo"] = _clean_logo(payload.get("logo"))
+    with storage.session() as conn:
+        return {"id": storage.save_club(conn, data), "ok": True}
+
+
+def _club_logo(club_id) -> str:
+    """Logo klub untuk ditanam di laporan. Kosong kalau tidak ada."""
+    if not club_id:
+        return ""
+    try:
+        with storage.session() as conn:
+            club = storage.get_club(conn, int(club_id))
+        return (club or {}).get("logo") or ""
+    except (ValueError, TypeError):
+        return ""
+
+
 def _master_routes():
-    """Endpoint CRUD seragam untuk klub, venue, dan pemain."""
+    """Endpoint CRUD seragam untuk venue dan pemain."""
     specs = {
-        "clubs": (storage.save_club, storage.delete_club),
         "venues": (storage.save_venue, storage.delete_venue),
         "players": (storage.save_player, storage.delete_player),
     }
@@ -250,6 +301,16 @@ def _master_routes():
     return routes
 
 
+# Endpoint daftar berhalaman. Semua mengembalikan bentuk yang sama:
+# {items, total, page, pages, per_page}
+PAGED_ROUTES = {
+    "/api/clubs/list": storage.page_clubs,
+    "/api/venues/list": storage.page_venues,
+    "/api/players/list": storage.page_players,
+    "/api/events/list": storage.page_events,
+}
+
+
 ROUTES = {
     "/api/analyze": api_analyze,
     "/api/economics": api_economics,
@@ -257,8 +318,16 @@ ROUTES = {
     "/api/events/save": api_event_save,
     "/api/events/delete": api_event_delete,
     "/api/players/bulk": api_players_bulk,
+    "/api/clubs/save": api_club_save,
+    "/api/clubs/delete": lambda pl: _delete_club(pl),
     **_master_routes(),
 }
+
+
+def _delete_club(payload: dict) -> dict:
+    with storage.session() as conn:
+        storage.delete_club(conn, int(payload["id"]))
+    return {"ok": True}
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -340,15 +409,22 @@ class Handler(BaseHTTPRequestHandler):
                 return
             with storage.session() as conn:
                 self._send_json({"summary": storage.club_summary(conn, int(cid))})
-        elif path == "/api/events/list":
+        elif path in PAGED_ROUTES:
+            fn = PAGED_ROUTES[path]
             cid = (query.get("club_id") or [""])[0]
+            page = (query.get("page") or ["1"])[0]
+            per = (query.get("per_page") or [""])[0]
+            kwargs = {
+                "search": (query.get("search") or [""])[0],
+                "page": int(page) if page.lstrip("-").isdigit() else 1,
+                "per_page": (int(per) if per.isdigit()
+                             else storage.DEFAULT_PAGE_SIZE),
+            }
+            # Klub tidak disaring per klub - itu daftar induknya.
+            if path != "/api/clubs/list":
+                kwargs["club_id"] = int(cid) if cid.isdigit() else None
             with storage.session() as conn:
-                events = storage.list_events(
-                    conn,
-                    club_id=int(cid) if cid.isdigit() else None,
-                    search=(query.get("search") or [""])[0],
-                )
-            self._send_json({"events": events})
+                self._send_json(fn(conn, **kwargs))
         elif path == "/api/events/get":
             try:
                 eid = int((query.get("id") or ["0"])[0])
@@ -392,6 +468,7 @@ class Handler(BaseHTTPRequestHandler):
                     event_date=payload.get("event_date", ""),
                     venue=payload.get("venue", ""),
                     start_clock=payload.get("start_clock") or None,
+                    logo=_club_logo(payload.get("club_id")),
                 )
                 self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
             except ScheduleError as exc:
@@ -411,22 +488,6 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({"error": "JSON tidak valid."}, 400)
             return
 
-        if path == "/api/pdf":
-            try:
-                sch = _generate(payload)
-                data = build_pdf(
-                    sch,
-                    title=payload.get("title") or "Jadwal Meet Padel",
-                    event_date=payload.get("event_date", ""),
-                    venue=payload.get("venue", ""),
-                    start_clock=payload.get("start_clock") or None,
-                )
-                self._send_bytes(data, "application/pdf", "jadwal-padel.pdf")
-            except ScheduleError as exc:
-                self._send_json({"error": str(exc)}, 400)
-            except Exception as exc:  # noqa: BLE001
-                self._send_json({"error": f"Gagal membuat PDF: {exc}"}, 500)
-            return
 
         handler = ROUTES.get(path)
         if handler is None:

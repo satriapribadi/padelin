@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" role="img" aria-label="Padelin">
+  <!-- Raket padel: lubang-lubangnya jadi titik pemain. -->
+  <rect x="6.5" y="3" width="27" height="25" rx="11.5"
+        fill="none" stroke="currentColor" stroke-width="2.4"/>
+  <path d="M13.5 27.2 L17.5 32.4 M26.5 27.2 L22.5 32.4"
+        stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+  <rect x="17.8" y="31.4" width="4.4" height="6.4" rx="2.2" fill="currentColor"/>
+  <g fill="#3d9be9">
+    <circle cx="14" cy="11.5" r="1.9"/>
+    <circle cx="20" cy="11.5" r="1.9"/>
+    <circle cx="26" cy="11.5" r="1.9"/>
+    <circle cx="14" cy="19.5" r="1.9"/>
+    <circle cx="20" cy="19.5" r="1.9"/>
+    <circle cx="26" cy="19.5" r="1.9"/>
+  </g>
+</svg>

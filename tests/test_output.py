@@ -10,8 +10,6 @@ from pathlib import Path
 from padel_scheduler import Config, Economics, Player, build_schedule, storage
 from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_analysis
 from padel_scheduler.html_report import build_html
-from padel_scheduler.pdf import text_width, truncate
-from padel_scheduler.pdf_report import build_pdf
 from padel_scheduler.report import to_csv, to_dict, to_personal_text, to_text
 from padel_scheduler.roles import assign_roles
 
@@ -153,12 +151,6 @@ class TestExports(unittest.TestCase):
         self.assertEqual(len(rows), total_matches + 1)
         self.assertIn("wasit", rows[0])
 
-    def test_pdf_is_structurally_valid(self):
-        data = build_pdf(self.sch, title="Tes", event_date="1 Jan 2026")
-        self.assertTrue(data.startswith(b"%PDF-1.4"))
-        self.assertIn(b"%%EOF", data[-20:])
-        self.assertIn(b"/Type /Catalog", data)
-
     def test_html_has_print_rules(self):
         h = build_html(self.sch, title="Tes")
         for needle in ("@page", "break-inside:avoid", "print-color-adjust",
@@ -171,20 +163,6 @@ class TestExports(unittest.TestCase):
         h = build_html(sch)
         self.assertNotIn("<script>", h)
         self.assertIn("&lt;script&gt;", h)
-
-
-class TestPdfPrimitives(unittest.TestCase):
-    def test_width_grows_with_text(self):
-        self.assertLess(text_width("ii", 10), text_width("WW", 10))
-        self.assertGreater(text_width("abc", 20), text_width("abc", 10))
-
-    def test_truncate_respects_limit(self):
-        s = truncate("Nama Yang Sangat Panjang Sekali", 40, 9)
-        self.assertLessEqual(text_width(s, 9), 40)
-        self.assertTrue(s.endswith(".."))
-
-    def test_short_text_untouched(self):
-        self.assertEqual(truncate("Andi", 200, 9), "Andi")
 
 
 class TestStorage(unittest.TestCase):
