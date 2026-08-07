@@ -502,7 +502,7 @@ export function restShareChart(stats, width = 640) {
   const W = Math.max(360, Math.round(width) || 640);
   const labelW = Math.min(140, Math.max(78, W * 0.2)), valueW = 46;
   const iw = W - labelW - valueW - 12;
-  const H = rows.length * (barH + gap) + 30;
+  const H = rows.length * (barH + gap) + 34;
   const sx = (v) => (v / maxV) * iw;
 
   const svg = s('svg', {
@@ -512,7 +512,7 @@ export function restShareChart(stats, width = 640) {
   });
 
   rows.forEach((r, i) => {
-    const y = i * (barH + gap) + 4;
+    const y = i * (barH + gap) + 18;
     svg.appendChild(txt('text', {
       x: labelW - 10, y: y + barH * 0.5 + 4, fill: VIZ.muted,
       'font-size': 11, 'text-anchor': 'end', class: 'viz-name',
@@ -540,14 +540,19 @@ export function restShareChart(stats, width = 640) {
     }, r.rest_pct + '%'));
   });
 
-  // Garis acuan rata-rata - inti dari grafik ini.
+  // Garis acuan rata-rata - inti dari grafik ini. Labelnya diletakkan di ATAS:
+  // wadah plot bisa ter-scroll, dan label di dasar grafik terpotong sehingga
+  // garisnya jadi garis vertikal tanpa keterangan apa pun.
   const ax = labelW + sx(avg);
   svg.appendChild(s('line', {
-    x1: ax, x2: ax, y1: 0, y2: H - 22, stroke: VIZ.warn, 'stroke-width': 1,
+    x1: ax, x2: ax, y1: 14, y2: H - 8, stroke: VIZ.warn, 'stroke-width': 1,
   }));
+  const avgLabel = `rata-rata ${avg.toFixed(0)}%`;
+  const nearRight = ax > labelW + iw * 0.75;
   svg.appendChild(txt('text', {
-    x: ax + 6, y: H - 8, fill: VIZ.muted, 'font-size': 10,
-  }, `rata-rata ${avg.toFixed(0)}%`));
+    x: ax + (nearRight ? -5 : 5), y: 10, fill: VIZ.warn, 'font-size': 10,
+    'text-anchor': nearRight ? 'end' : 'start',
+  }, avgLabel));
 
   const plot = document.createElement('div');
   plot.className = 'viz-plot scroll';

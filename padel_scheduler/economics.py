@@ -92,19 +92,21 @@ def evaluate(
     play_min = cap.playing_minutes_per_player
     cost_per_min = (cost_pp / play_min) if play_min > 0 else 0.0
 
+    # Urutan penting: penampil hanya menunjukkan beberapa label pertama, jadi
+    # yang berstatus (rugi, court menganggur) harus mendahului yang deskriptif.
     labels: list[str] = []
+    if econ.fee_per_player > 0 and profit < 0:
+        labels.append("rugi")
     if cap.courts_idle > 0:
         labels.append(f"{cap.courts_idle} court menganggur")
     if cap.rest_ratio > 1 / 3:
         labels.append("banyak yang duduk")
     elif cap.byes_per_round == 0:
         labels.append("semua main terus")
-    if play_min >= DECENT_PLAY_MINUTES:
-        labels.append("waktu main layak")
     if not cap.opponent_unique_feasible:
         labels.append("lawan berulang")
-    if econ.fee_per_player > 0 and profit < 0:
-        labels.append("rugi")
+    if play_min >= DECENT_PLAY_MINUTES:
+        labels.append("waktu main layak")
 
     return Option(
         courts=courts,

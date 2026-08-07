@@ -71,14 +71,21 @@ const STATE_MARK = {
   bad: { icon: '✕', word: 'bermasalah' },
 };
 
-function statTile(k, v, sub, state) {
-  const n = el('div', 'stat' + (state ? ' ' + state : ''));
+/** Bentuk HTML-nya dipisah supaya panel yang merakit string bisa memakai ulang
+ *  kartu yang sama - kalau tidak, panel itu diam-diam kehilangan glif status. */
+function statTileHTML(k, v, sub, state) {
   const mark = STATE_MARK[state];
-  n.innerHTML =
+  return `<div class="stat${state ? ' ' + state : ''}">` +
     `<div class="k">${esc(k)}</div>` +
     `<div class="v">${mark ? `<span class="ico" aria-hidden="true">${mark.icon}</span>` : ''}${esc(v)}</div>` +
-    `<div class="s">${esc(sub)}${mark ? ` <span class="state-word">· ${mark.word}</span>` : ''}</div>`;
-  return n;
+    `<div class="s">${esc(sub)}${mark ? ` <span class="state-word">· ${mark.word}</span>` : ''}</div>` +
+    `</div>`;
+}
+
+function statTile(k, v, sub, state) {
+  const box = el('div');
+  box.innerHTML = statTileHTML(k, v, sub, state);
+  return box.firstElementChild;
 }
 
 // ---------------------------------------------------------------------------
@@ -987,7 +994,7 @@ async function loadPlayerStats() {
         `<td class="num">${s.rounds_played}</td><td class="num">${s.rounds_rested}</td>` +
         `<td class="num" style="color:${s.rest_pct > 40 ? 'var(--warn)' : 'inherit'}">${s.rest_pct}%</td>` +
         `<td class="num">${s.duties}</td>` +
-        `<td>${esc((s.last_seen || '').slice(0, 10))}</td></tr>`
+        `<td>${esc(tanggalID((s.last_seen || '').slice(0, 10)))}</td></tr>`
       ).join('') + '</tbody></table>';
   } catch (e) {
     $('stats-table').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
@@ -1031,9 +1038,7 @@ $('calc-econ').onclick = async () => {
     const d = await api('/api/economics', buildPayload());
     const c = d.current;
 
-    const tile = (k, v, s, cls) =>
-      `<div class="stat${cls ? ' ' + cls : ''}"><div class="k">${esc(k)}</div>` +
-      `<div class="v">${esc(v)}</div><div class="s">${esc(s)}</div></div>`;
+    const tile = statTileHTML;
 
     $('econ-now').innerHTML = '<div class="stat-grid">' +
       tile('Biaya total', rp(c.total_cost), `${c.courts} court x ${c.hours} jam`) +
@@ -1098,8 +1103,12 @@ async function loadClubSummary() {
     const tile = (k, v, sub) =>
       `<div class="stat"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div>` +
       `<div class="s">${esc(sub)}</div></div>`;
+    // "Anggota 0" di samping puluhan kehadiran itu akurat tapi membingungkan:
+    // peserta yang ditempel di tab Setup tidak otomatis jadi anggota master.
+    const memberHint = (!s.members && s.attendances)
+      ? 'belum ada · simpan peserta ke master' : 'aktif';
     $('club-summary').innerHTML = '<div class="stat-grid">' +
-      tile('Anggota', s.members, 'aktif') +
+      tile('Anggota', s.members, memberHint) +
       tile('Acara', s.events, 'tersimpan') +
       tile('Total hadir', s.attendances, 'kehadiran') +
       tile('Pemasukan', rp(s.revenue), 'akumulasi') +
