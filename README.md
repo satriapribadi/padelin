@@ -1,0 +1,125 @@
+# Generator Jadwal Meet Padel
+
+Web app lokal untuk menyusun jadwal meet padel: Americano, pool rating, Mexicano,
+pasangan tetap, dan format bersegmen (putra / putri / mixed) — lengkap dengan
+pembagian tugas wasit & ballboy, analisa biaya, laporan PDF, dan database.
+
+**Nol dependency.** Cukup Python 3.10+, tanpa `pip install` apa pun.
+
+```bash
+python run.py
+```
+
+Lalu buka <http://127.0.0.1:8770> (browser terbuka otomatis).
+Ganti port dengan `--port 9000`, matikan auto-open dengan `--no-browser`.
+
+---
+
+## Masalah yang diselesaikan
+
+Menyusun jadwal Americano yang adil itu bukan soal ketelitian, tapi soal
+kombinatorik. Tiap ronde seorang pemain dapat **1 partner dan 2 lawan**, jadi:
+
+| Syarat | Batas |
+|---|---|
+| Partner 100% unik | ronde main per orang ≤ `N - 1` |
+| Lawan 100% unik | ronde main per orang ≤ `(N - 1) / 2` |
+
+Artinya untuk 8 pemain, lawan unik hanya mungkin sampai **3 ronde**. Ronde ke-4
+dan seterusnya pasti mengulang — itu batas matematis, bukan kelemahan algoritma.
+App ini menghitung batas tersebut di muka dan memberitahu sebelum kamu terlanjur
+menjanjikan sesuatu ke peserta.
+
+Yang sering disalahpahami: **grup besar justru lebih mudah**. Dengan 26 pemain di
+4 court, banyak yang duduk bergiliran sehingga tiap orang cuma main ~6 ronde —
+jauh di bawah batas 12, jadi keunikan penuh tercapai. Yang sulit adalah grup
+kecil dengan durasi panjang.
+
+## Cara kerja
+
+Tiga lapis yang terpisah rapi:
+
+1. **Konstruksi eksak** — 1-factorization (circle method) pada graf lengkap
+   menjamin setiap kombinasi partner muncul tepat sekali, secara struktural.
+   Untuk babak mixed dipakai rotasi Latin square pada graf bipartit.
+2. **Optimasi** — simulated annealing dengan evaluasi delta O(1) merapikan siapa
+   lawan siapa, giliran istirahat, dan keseimbangan rating.
+3. **Batas keras** — aturan gender, partner terkunci, dan pemisahan pool rating
+   ditegakkan dengan menolak gerakan ilegal, bukan lewat penalti. Jadwal yang
+   keluar mustahil melanggarnya.
+
+Fungsi biayanya memakai bentuk `c·(c-1)` yang konveks, sehingga pengulangan yang
+tidak terhindarkan tersebar rata — sistem lebih memilih "4 orang mengulang 1×"
+daripada "1 orang mengulang 4×".
+
+## Fitur
+
+**Format**
+- Americano, pool berdasarkan rating, Mexicano (tim diseimbangkan), pasangan tetap
+- Babak bersegmen, mis. `Putra 3 – Putri 3 – Mixed 6` (ada preset siap pakai)
+- Preferensi per peserta: partner tetap, atau minta court khusus 4 perempuan /
+  4 laki-laki. Boleh sebagian — peserta lain tetap rotasi bebas
+- 4–26+ pemain, meet satu gender penuh juga didukung
+
+**Wasit & ballboy**
+Diambil dari yang sedang istirahat dan dirotasi adil. Dengan 26 pemain di 4 court,
+10 orang duduk tiap ronde — tapi 8 di antaranya bertugas, jadi hanya 2 yang
+benar-benar menganggur. Ini yang membuat court sedikit tetap masuk akal.
+
+**Biaya & margin**
+Rekomendasi tidak berhenti di "sewa lebih banyak court". Panel ini menunjukkan
+biaya, pemasukan, margin, dan waktu main per peserta untuk tiap kombinasi
+court × durasi, plus berapa fee harus naik kalau menambah satu court — supaya
+keputusannya sadar, bukan menebak.
+
+**Laporan**
+- HTML + CSS siap cetak (Ctrl+P → Save as PDF) — paling rapi
+- PDF sekali klik, ditulis murni Python tanpa library eksternal
+- Teks siap tempel ke grup WhatsApp, plus jadwal per pemain
+- CSV untuk Excel / Google Sheets
+
+**Master data (SQLite)**
+Klub, venue (harga sewa mengisi panel Biaya otomatis), pemain, riwayat acara,
+dan statistik lintas acara — siapa yang rajin datang, siapa yang paling sering
+kebagian duduk.
+
+## Struktur
+
+```
+run.py                      web server (stdlib http.server)
+padel_scheduler/
+  models.py                 tipe data inti
+  capacity.py               analisa kelayakan + batas matematis
+  factorization.py          1-factorization & Latin square
+  optimizer.py              simulated annealing + batas keras
+  scheduler.py              perakit jadwal
+  roles.py                  pembagian wasit & ballboy
+  economics.py              biaya, margin, trade-off court
+  storage.py                SQLite: klub, venue, pemain, acara
+  report.py                 ekspor teks / CSV / JSON
+  html_report.py            laporan HTML siap cetak
+  pdf.py                    penulis PDF minimal
+  pdf_report.py             susunan laporan PDF
+  presets.py                format meet siap pilih
+web/                        antarmuka (HTML/CSS/JS, tanpa framework)
+tests/                      49 tes
+```
+
+## Tes
+
+```bash
+python -m unittest discover -s tests
+```
+
+Yang diuji adalah properti keras: tidak ada pemain di dua court sekaligus,
+aturan gender ditegakkan 100%, partner terkunci tetap terkunci, pemula tidak
+pernah melawan pemain kuat di mode pool, istirahat terbagi merata, dan PDF
+menghasilkan struktur yang valid.
+
+## Catatan
+
+- Database ada di `padel.db` (satu file, gampang di-backup).
+- Jadwal deterministik: seed yang sama menghasilkan jadwal yang sama. Ganti
+  seed untuk variasi lain dengan kualitas setara.
+- App ini sengaja dibuat tanpa dependency agar jalan offline dan tidak rusak
+  saat Python naik versi.

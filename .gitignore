@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Database (data acara milik host, jangan ikut di-commit)
+padel.db
+padel.db-wal
+padel.db-shm
+
+# Keluaran & log
+server.log
+*.pdf
+!docs/*.pdf
+
+# IDE
+.idea/
+.vscode/

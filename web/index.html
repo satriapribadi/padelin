@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Generator Jadwal Padel</title>
+<link rel="stylesheet" href="/web/style.css">
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>Generator Jadwal Padel</h1>
+    <div class="sub">Americano &middot; pool rating &middot; mixed &middot; pasangan tetap</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="tabs">
+    <button data-view="setup" class="on">Setup</button>
+    <button data-view="jadwal">Jadwal</button>
+    <button data-view="biaya">Biaya &amp; Margin</button>
+    <button data-view="riwayat">Riwayat</button>
+    <button data-view="master">Master Data</button>
+  </div>
+</header>
+
+<main>
+
+<!-- ==================== SETUP ==================== -->
+<section class="view on" id="view-setup">
+<div class="grid">
+
+  <div>
+    <div class="card">
+      <h2>Acara</h2>
+      <div class="row">
+        <div><label>Klub</label><select id="club_id"></select></div>
+        <div><label>Venue</label><select id="venue_id"></select></div>
+      </div>
+      <div class="row one">
+        <div><label>Judul</label><input id="title" value="Meet Padel"></div>
+      </div>
+      <div class="row">
+        <div><label>Tanggal</label><input id="event_date" placeholder="Sabtu, 9 Agustus 2026"></div>
+        <div><label>Jam mulai</label><input id="start_clock" placeholder="19:00"></div>
+      </div>
+      <div class="row one">
+        <div><label>Lokasi (teks bebas)</label><input id="venue" placeholder="Nama venue"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Setup lapangan</h2>
+      <div class="row three">
+        <div><label>Jumlah court</label><input type="number" id="courts" value="2" min="1" max="12"></div>
+        <div><label>Durasi sewa (menit)</label><input type="number" id="duration" value="120" min="30" step="15"></div>
+        <div><label>Menit / ronde</label><input type="number" id="round_min" value="12" min="5" max="30"></div>
+      </div>
+      <div class="row">
+        <div><label>Pemanasan (menit)</label><input type="number" id="warmup" value="10" min="0" max="30"></div>
+        <div><label>Mode</label>
+          <select id="mode">
+            <option value="americano">Americano (semua ketemu semua)</option>
+            <option value="tiered">Pool berdasarkan rating</option>
+            <option value="mexicano">Mexicano (tim diseimbangkan)</option>
+            <option value="team">Semua pasangan tetap</option>
+          </select>
+        </div>
+      </div>
+      <div class="row" id="tier-row" style="display:none">
+        <div><label>Jumlah pool rating</label><input type="number" id="tier_count" value="2" min="2" max="5"></div>
+        <div></div>
+      </div>
+      <div class="row">
+        <div><label>Wasit per court</label>
+          <select id="referees"><option value="0">Tidak ada</option><option value="1">1 orang</option></select>
+        </div>
+        <div><label>Ballboy per court</label>
+          <select id="ballboys"><option value="0">Tidak ada</option><option value="1">1 orang</option><option value="2">2 orang</option></select>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Format babak <span class="hint">kosongkan untuk satu babak biasa</span></h2>
+      <div class="row one">
+        <div><label>Preset</label><select id="preset"></select></div>
+      </div>
+      <div id="preset-desc" style="font-size:12px;color:var(--muted);margin-bottom:12px"></div>
+      <div id="segments"></div>
+      <div class="btn-row">
+        <button class="btn ghost sm" id="add-seg">+ Tambah babak</button>
+        <button class="btn ghost sm" id="clear-seg">Kosongkan</button>
+      </div>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2>Peserta <span class="hint">tempel daftar nama, satu per baris</span></h2>
+      <div class="row one">
+        <div>
+          <textarea id="bulk" placeholder="Contoh (rating & L/P opsional):&#10;Andi, 4, L&#10;Rina, 3.5, P&#10;Budi&#10;Sinta, 2, P"></textarea>
+        </div>
+      </div>
+      <div class="btn-row">
+        <button class="btn sm" id="parse-bulk">Masukkan ke daftar</button>
+        <button class="btn ghost sm" id="load-roster">Ambil dari master pemain</button>
+        <button class="btn ghost sm" id="save-roster">Simpan ke master pemain</button>
+        <button class="btn ghost sm" id="clear-players">Hapus semua</button>
+      </div>
+      <div class="counts" id="counts"></div>
+      <div class="players"><table class="ptable" id="ptable"></table></div>
+    </div>
+
+    <div class="card">
+      <h2>Analisa kelayakan <span class="hint">diperbarui otomatis</span></h2>
+      <div id="analysis"><div class="empty">Isi peserta dan setup untuk melihat analisa.</div></div>
+    </div>
+
+    <div class="card">
+      <h2>Buat jadwal</h2>
+      <div class="row three">
+        <div><label>Variasi (seed)</label><input type="number" id="seed" value="42"></div>
+        <div><label>Kualitas optimasi</label>
+          <select id="effort">
+            <option value="10000">Cepat</option>
+            <option value="30000" selected>Normal</option>
+            <option value="80000">Teliti</option>
+            <option value="160000">Sangat teliti</option>
+          </select>
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button class="btn" id="generate" style="width:100%">Generate</button>
+        </div>
+      </div>
+      <div id="gen-msg"></div>
+    </div>
+  </div>
+
+</div>
+</section>
+
+<!-- ==================== JADWAL ==================== -->
+<section class="view" id="view-jadwal">
+  <div class="card">
+    <h2>Hasil</h2>
+    <div id="sched-stats"></div>
+    <div class="btn-row">
+      <button class="btn" id="save-event">Simpan ke database</button>
+      <button class="btn ghost" id="open-html">Laporan cantik / PDF</button>
+      <button class="btn ghost" id="dl-pdf">Unduh PDF langsung</button>
+      <button class="btn ghost" id="copy-wa">Salin untuk WhatsApp</button>
+      <button class="btn ghost" id="copy-personal">Salin jadwal per pemain</button>
+      <button class="btn ghost" id="dl-csv">Unduh CSV</button>
+    </div>
+    <div id="save-msg"></div>
+  </div>
+  <div class="grid">
+    <div>
+      <div class="card"><h2>Rekap pemain</h2><div id="recap"></div></div>
+      <div class="card"><h2>Catatan</h2><div id="notes"></div></div>
+    </div>
+    <div class="card"><h2>Susunan pertandingan</h2><div id="rounds"><div class="empty">Belum ada jadwal.</div></div></div>
+  </div>
+</section>
+
+<!-- ==================== BIAYA ==================== -->
+<section class="view" id="view-biaya">
+  <div class="grid">
+    <div class="card">
+      <h2>Biaya &amp; harga</h2>
+      <div class="row one">
+        <div><label>Sewa court per jam (Rp)</label><input type="number" id="court_price" value="200000" step="10000"></div>
+      </div>
+      <div class="row one">
+        <div><label>Fee per peserta (Rp)</label><input type="number" id="fee" value="75000" step="5000"></div>
+      </div>
+      <div class="row one">
+        <div><label>Biaya lain (bola, air, hadiah)</label><input type="number" id="other_costs" value="0" step="10000"></div>
+      </div>
+      <div class="btn-row"><button class="btn" id="calc-econ">Hitung</button></div>
+      <div id="fee-suggest" style="margin-top:14px"></div>
+    </div>
+    <div>
+      <div class="card"><h2>Skenario saat ini</h2><div id="econ-now"><div class="empty">Klik Hitung.</div></div></div>
+      <div class="card"><h2>Kalau tambah 1 court</h2><div id="econ-up"></div></div>
+      <div class="card"><h2>Perbandingan pilihan <span class="hint">urut dari waktu main terbanyak</span></h2><div id="econ-table"></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ==================== RIWAYAT ==================== -->
+<section class="view" id="view-riwayat">
+  <div class="card">
+    <h2>Jadwal tersimpan</h2>
+    <div class="row"><div><label>Cari</label><input id="search-event" placeholder="judul / venue / tanggal"></div><div></div></div>
+    <div id="events"><div class="empty">Memuat...</div></div>
+  </div>
+</section>
+
+<!-- ==================== MASTER DATA ==================== -->
+<section class="view" id="view-master">
+  <div class="card">
+    <h2>Ringkasan klub</h2>
+    <div id="club-summary"><div class="empty">Pilih klub di tab Setup.</div></div>
+  </div>
+
+  <div class="tabs" style="margin-bottom:16px;display:inline-flex" id="master-tabs">
+    <button data-m="players" class="on">Pemain</button>
+    <button data-m="clubs">Klub</button>
+    <button data-m="venues">Venue</button>
+    <button data-m="stats">Statistik Pemain</button>
+  </div>
+
+  <div class="mview" id="m-players">
+    <div class="card">
+      <h2>Tambah / ubah pemain</h2>
+      <input type="hidden" id="pl_id">
+      <div class="row three">
+        <div><label>Nama</label><input id="pl_name"></div>
+        <div><label>Panggilan</label><input id="pl_nickname"></div>
+        <div><label>Kontak</label><input id="pl_contact" placeholder="opsional"></div>
+      </div>
+      <div class="row three">
+        <div><label>Gender</label><select id="pl_gender"><option value="">-</option><option value="M">Laki-laki</option><option value="F">Perempuan</option></select></div>
+        <div><label>Rating</label><input type="number" id="pl_rating" value="3" step="0.5" min="0" max="7"></div>
+        <div><label>Level</label><input id="pl_level" placeholder="Beginner / Intermediate"></div>
+      </div>
+      <div class="row one"><div><label>Catatan</label><input id="pl_notes"></div></div>
+      <div class="btn-row">
+        <button class="btn sm" id="pl-save">Simpan</button>
+        <button class="btn ghost sm" id="pl-reset">Bersihkan form</button>
+      </div>
+    </div>
+    <div class="card"><h2>Daftar pemain</h2><div id="players-table"><div class="empty">Memuat...</div></div></div>
+  </div>
+
+  <div class="mview" id="m-clubs" style="display:none">
+    <div class="card">
+      <h2>Tambah / ubah klub</h2>
+      <input type="hidden" id="cl_id">
+      <div class="row"><div><label>Nama klub</label><input id="cl_name"></div>
+        <div><label>Kota</label><input id="cl_city"></div></div>
+      <div class="row"><div><label>Kontak</label><input id="cl_contact"></div>
+        <div><label>Link grup WA</label><input id="cl_wa"></div></div>
+      <div class="row one"><div><label>Catatan</label><input id="cl_notes"></div></div>
+      <div class="btn-row">
+        <button class="btn sm" id="cl-save">Simpan</button>
+        <button class="btn ghost sm" id="cl-reset">Bersihkan form</button>
+      </div>
+    </div>
+    <div class="card"><h2>Daftar klub</h2><div id="clubs-table"><div class="empty">Memuat...</div></div></div>
+  </div>
+
+  <div class="mview" id="m-venues" style="display:none">
+    <div class="card">
+      <h2>Tambah / ubah venue <span class="hint">harga sewa dipakai otomatis di panel Biaya</span></h2>
+      <input type="hidden" id="vn_id">
+      <div class="row"><div><label>Nama venue</label><input id="vn_name"></div>
+        <div><label>Klub</label><select id="vn_club"></select></div></div>
+      <div class="row three">
+        <div><label>Jumlah court</label><input type="number" id="vn_courts" value="4" min="1"></div>
+        <div><label>Harga / jam (Rp)</label><input type="number" id="vn_price" value="200000" step="10000"></div>
+        <div><label>Alamat</label><input id="vn_address"></div>
+      </div>
+      <div class="btn-row">
+        <button class="btn sm" id="vn-save">Simpan</button>
+        <button class="btn ghost sm" id="vn-reset">Bersihkan form</button>
+      </div>
+    </div>
+    <div class="card"><h2>Daftar venue</h2><div id="venues-table"><div class="empty">Memuat...</div></div></div>
+  </div>
+
+  <div class="mview" id="m-stats" style="display:none">
+    <div class="card">
+      <h2>Statistik pemain lintas acara <span class="hint">dari jadwal yang tersimpan</span></h2>
+      <div id="stats-table"><div class="empty">Memuat...</div></div>
+    </div>
+  </div>
+</section>
+
+</main>
+<script src="/web/app.js"></script>
+</body>
+</html>
