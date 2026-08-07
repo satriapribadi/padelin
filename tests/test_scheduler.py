@@ -132,10 +132,118 @@ class TestByeFairness(unittest.TestCase):
         sch = build_schedule(make_players(26), cfg)
         assert_structurally_valid(self, sch)
         plays = list(sch.stats.plays_per_player.values())
+        # 9 ronde x 16 slot = 144, dibagi 26 -> 5.54, jadi minimum yang mungkin
+        # adalah selisih 1. Dulu ambangnya 2 dan menyembunyikan ketimpangan.
         self.assertLessEqual(
-            max(plays) - min(plays), 2,
+            max(plays) - min(plays), 1,
             f"jumlah main tidak merata: {min(plays)}..{max(plays)}",
         )
+
+
+class TestPlayFairness(unittest.TestCase):
+    """Jumlah main harus serata yang dimungkinkan aritmetika.
+
+    Ini jaminan keadilan yang paling terasa buat peserta: mereka membayar fee
+    yang sama. Sebelum ada pass perataan, optimizer menukar kerataan demi
+    variasi lawan - dan makin lama optimasinya makin timpang hasilnya.
+    """
+
+    def _plays(self, n, courts, rounds, seed=0, effort=20000, genders=None):
+        cfg = Config(courts=courts, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, mode="americano", seed=seed,
+                     effort=effort, rounds_override=rounds)
+        sch = build_schedule(make_players(n, genders=genders), cfg)
+        assert_structurally_valid(self, sch)
+        return sorted(sch.stats.plays_per_player.values())
+
+    def test_exactly_even_when_slots_divide(self):
+        # 12 ronde x 4 slot = 48, dibagi 8 pemain = 6 tepat.
+        for seed in range(6):
+            plays = self._plays(8, 1, 12, seed)
+            self.assertEqual(plays, [6] * 8, f"seed {seed}: {plays}")
+
+    def test_more_effort_never_makes_it_worse(self):
+        # Justru inilah gejala bug lamanya: optimasi lebih lama = lebih timpang.
+        for effort in (5000, 30000, 120000):
+            plays = self._plays(8, 1, 12, seed=2, effort=effort)
+            self.assertEqual(plays, [6] * 8, f"effort {effort}: {plays}")
+
+    def test_spread_at_most_one_across_configs(self):
+        cases = [
+            (8, 1, 11), (8, 2, 9), (10, 2, 10), (12, 2, 12),
+            (16, 3, 10), (20, 4, 12), (26, 4, 9), (14, 2, 11),
+        ]
+        for n, courts, rounds in cases:
+            plays = self._plays(n, courts, rounds, seed=1, effort=12000)
+            slots = rounds * 4 * min(courts, n // 4)
+            spread = plays[-1] - plays[0]
+            self.assertLessEqual(spread, 1, f"{n}/{courts}/{rounds}: {plays}")
+            self.assertEqual(sum(plays), slots, f"{n}/{courts}/{rounds}")
+            if slots % n == 0:
+                self.assertEqual(spread, 0,
+                                 f"{n}/{courts}/{rounds} habis dibagi tapi {plays}")
+
+    def test_rebalance_respects_gender_segments(self):
+        """Perataan tidak boleh menurunkan pemain yang tidak berhak main."""
+        genders = ["M"] * 4 + ["F"] * 4
+        players = make_players(8, genders=genders)
+        gmap = {p.id: p.gender for p in players}
+        cfg = Config(
+            courts=1, duration_minutes=120, warmup_minutes=10, effort=20000,
+            segments=[Segment("Putra", 3, "men"), Segment("Putri", 3, "women"),
+                      Segment("Mixed", 6, "mixed")],
+        )
+        sch = build_schedule(players, cfg)
+        assert_structurally_valid(self, sch)
+        for rnd in sch.rounds:
+            for m in rnd.matches:
+                gs = [gmap[p] for p in m.players()]
+                if rnd.segment == "Putra":
+                    self.assertTrue(all(g == "M" for g in gs), f"ronde {rnd.index}")
+                elif rnd.segment == "Putri":
+                    self.assertTrue(all(g == "F" for g in gs), f"ronde {rnd.index}")
+                elif rnd.segment == "Mixed":
+                    self.assertNotEqual(gmap[m.team_a[0]], gmap[m.team_a[1]])
+                    self.assertNotEqual(gmap[m.team_b[0]], gmap[m.team_b[1]])
+
+    def test_rebalance_respects_locked_partners(self):
+        players = make_players(12)
+        for i in range(0, 12, 2):
+            players[i].partner_id = i + 1
+            players[i + 1].partner_id = i
+        cfg = Config(courts=2, duration_minutes=120, mode="team", effort=15000,
+                     rounds_override=11)
+        sch = build_schedule(players, cfg)
+        expected = {p.id: p.partner_id for p in players}
+        for rnd in sch.rounds:
+            for m in rnd.matches:
+                for team in (m.team_a, m.team_b):
+                    self.assertEqual(expected[team[0]], team[1])
+
+    def test_cost_bookkeeping_stays_exact(self):
+        """Perataan memasang & melepas match berulang kali; biaya inkremental
+        harus tetap sama dengan hitungan dari nol."""
+        from padel_scheduler.optimizer import ScheduleState, Weights, rebalance_plays
+
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, effort=8000, rounds_override=12)
+        sch = build_schedule(make_players(8), cfg)
+
+        st = ScheduleState(8, [3.0] * 8, Weights(), len(sch.rounds))
+        for r, rnd in enumerate(sch.rounds):
+            quads = [[*m.team_a, *m.team_b] for m in rnd.matches]
+            st.place_round(r, quads, list(rnd.byes))
+        incremental = st.cost()
+        rebalance_plays(st)
+
+        fresh = ScheduleState(8, [3.0] * 8, Weights(), st.n_rounds)
+        for r in range(st.n_rounds):
+            playing = {p for q in st.matches[r] for p in q}
+            fresh.place_round(r, [q[:] for q in st.matches[r]],
+                              sorted(set(range(8)) - playing))
+        self.assertAlmostEqual(st.cost(), fresh.cost(), places=6,
+                               msg="pembukuan biaya inkremental melenceng")
+        self.assertGreater(incremental, -1)
 
 
 class TestGenderSegments(unittest.TestCase):

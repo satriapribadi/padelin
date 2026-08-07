@@ -49,6 +49,16 @@ Tiga lapis yang terpisah rapi:
 3. **Batas keras** — aturan gender, partner terkunci, dan pemisahan pool rating
    ditegakkan dengan menolak gerakan ilegal, bukan lewat penalti. Jadwal yang
    keluar mustahil melanggarnya.
+4. **Perataan jumlah main** — pass deterministik setelah optimasi. Selama masih
+   ada pemain yang main dua ronde lebih banyak daripada yang lain dan ada
+   pertukaran sah yang memperbaikinya, tukar. Hasilnya selisih maksimal 1, dan
+   rata sempurna kalau total slot habis dibagi jumlah pemain.
+
+Lapis keempat itu ada karena optimasi saja tidak cukup: annealing meminimalkan
+biaya gabungan, jadi kerataan main bisa tergadai demi variasi lawan — dan makin
+lama optimasinya, makin sering tergadai. Kerataan main sengaja diberi bobot di
+atas variasi lawan: peserta membayar fee yang sama, kehilangan satu ronde main
+itu kerugian nyata sedangkan sekali bertemu lawan yang sama hampir tak terasa.
 
 Fungsi biayanya memakai bentuk `c·(c-1)` yang konveks, sehingga pengulangan yang
 tidak terhindarkan tersebar rata — sistem lebih memilih "4 orang mengulang 1×"
@@ -119,13 +129,13 @@ web/
   _selftest.html            halaman verifikasi visual grafik (bukan bagian app)
 tools/
   uitest.py                 uji interaksi UI lewat DevTools Protocol
-tests/                      47 tes unit
+tests/                      55 tes unit
 ```
 
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 47 tes unit
+python -m unittest discover -s tests    # 55 tes unit
 python tools/uitest.py                  # 14 uji interaksi di browser sungguhan
 ```
 
@@ -140,8 +150,12 @@ dan baru ketahuan dari menjalankan serta melihat aplikasinya sungguhan.
 
 Yang diuji adalah properti keras: tidak ada pemain di dua court sekaligus,
 aturan gender ditegakkan 100%, partner terkunci tetap terkunci, pemula tidak
-pernah melawan pemain kuat di mode pool, istirahat terbagi merata, tugas hanya
-jatuh ke yang sedang duduk, dan nama pemain selalu di-escape di laporan.
+pernah melawan pemain kuat di mode pool, tugas hanya jatuh ke yang sedang duduk,
+dan nama pemain selalu di-escape di laporan.
+
+Yang dijaga paling ketat adalah kerataan jumlah main: diuji di delapan
+konfigurasi berbeda, dan diuji bahwa optimasi yang lebih lama tidak pernah
+membuatnya lebih timpang.
 
 ## Catatan
 

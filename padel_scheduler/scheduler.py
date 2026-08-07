@@ -31,7 +31,13 @@ from .models import (
     ScheduleStats,
     Segment,
 )
-from .optimizer import Rules, ScheduleState, Weights, anneal
+from .optimizer import (
+    Rules,
+    ScheduleState,
+    Weights,
+    anneal,
+    rebalance_plays,
+)
 from .roles import assign_roles, coverage_note
 
 
@@ -565,6 +571,9 @@ def build_schedule(players: list[Player], config: Config) -> Schedule:
 
     # --- Optimasi --------------------------------------------------------
     anneal(st, max(1000, config.effort), rng)
+    # Kerataan jumlah main tidak boleh bergantung pada keberuntungan annealing:
+    # ini menegakkannya secara deterministik setelahnya.
+    rebalance_plays(st)
 
     # --- Rakit hasil -----------------------------------------------------
     pref_labels = {

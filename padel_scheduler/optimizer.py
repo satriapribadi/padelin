@@ -34,7 +34,13 @@ from dataclasses import dataclass, field
 class Weights:
     partner: float = 1000.0
     opponent: float = 120.0
-    bye: float = 60.0
+    # Kerataan jumlah main mengalahkan variasi lawan, dan itu disengaja.
+    # Peserta membayar fee yang sama; kehilangan satu ronde main itu kerugian
+    # nyata, sedangkan sekali bertemu lawan yang sama hampir tak terasa. Dengan
+    # bobot lama (60) satu gerakan yang menambah pengulangan lawan dinilai lebih
+    # mahal daripada meratakan giliran, sehingga optimasi yang lebih lama justru
+    # membuat jumlah main makin timpang.
+    bye: float = 500.0
     b2b_bye: float = 400.0
     rating: float = 0.0
     spread: float = 0.0
@@ -381,6 +387,95 @@ def _swap_team_with_bye(st: ScheduleState, r: int, rng: random.Random) -> bool:
     st._set_bye(r, out_a, True)
     st._set_bye(r, out_b, True)
     return True
+
+
+def play_counts(st: ScheduleState) -> list[int]:
+    """Berapa ronde tiap pemain benar-benar turun."""
+    counts = [0] * st.n
+    for rnd in st.matches:
+        for quad in rnd:
+            for p in quad:
+                counts[p] += 1
+    return counts
+
+
+def _try_swap(st: ScheduleState, r: int, mi: int, pi: int, incoming: int):
+    """Turunkan `incoming` menggantikan penghuni slot; kembalikan fungsi pembatal."""
+    quad = st.matches[r][mi]
+    outgoing = quad[pi]
+    st._touch_match(quad, -1)
+    quad[pi] = incoming
+    st._touch_match(quad, +1)
+    st._set_bye(r, incoming, False)
+    st._set_bye(r, outgoing, True)
+
+    def undo() -> None:
+        st._touch_match(quad, -1)
+        quad[pi] = outgoing
+        st._touch_match(quad, +1)
+        st._set_bye(r, outgoing, False)
+        st._set_bye(r, incoming, True)
+
+    return undo
+
+
+def rebalance_plays(st: ScheduleState, max_steps: int = 500) -> int:
+    """Ratakan jumlah main sampai selisihnya mencapai minimum yang mungkin.
+
+    Annealing meminimalkan biaya gabungan, jadi kerataan main selalu bisa
+    tergadai demi tujuan lain - dan makin lama optimasinya, makin sering
+    tergadai. Ini penjamin deterministiknya, dijalankan setelah annealing.
+
+    Aturannya sederhana: selama ada pemain yang main dua ronde lebih banyak
+    daripada pemain lain DAN ada pertukaran sah yang memperbaikinya, tukar -
+    pilih yang paling murah. Tiap langkah menurunkan jumlah kuadrat jumlah-main,
+    jadi prosesnya pasti berhenti. Hasil akhirnya selisih maksimal 1; dan kalau
+    total slot habis dibagi jumlah pemain, selisih 1 mustahil (jumlahnya tidak
+    akan cocok), sehingga hasilnya rata sempurna.
+    """
+    swaps = 0
+    for _ in range(max_steps):
+        counts = play_counts(st)
+        order = sorted(range(st.n), key=lambda p: counts[p])
+        best = None
+
+        # Pasangan paling timpang lebih dulu; berhenti begitu ada yang bisa.
+        pairs = [(counts[hi] - counts[lo], hi, lo)
+                 for hi in reversed(order) for lo in order
+                 if counts[hi] - counts[lo] >= 2]
+        if not pairs:
+            break
+        pairs.sort(key=lambda t: -t[0])
+
+        for _gap, hi, lo in pairs:
+            for r in range(st.n_rounds):
+                if lo not in st.byes[r]:
+                    continue
+                eligible = (st.rules.round_eligible[r]
+                            if r < len(st.rules.round_eligible) else None)
+                if eligible is not None and lo not in eligible:
+                    continue
+                for mi, quad in enumerate(st.matches[r]):
+                    if hi not in quad:
+                        continue
+                    pi = quad.index(hi)
+                    before = st.cost()
+                    undo = _try_swap(st, r, mi, pi, lo)
+                    ok = st.rules.quad_ok(st.matches[r][mi], r)
+                    delta = st.cost() - before
+                    undo()
+                    if ok and (best is None or delta < best[0]):
+                        best = (delta, r, mi, pi, lo)
+            if best is not None:
+                break
+
+        if best is None:
+            break
+        _, r, mi, pi, lo = best
+        _try_swap(st, r, mi, pi, lo)
+        swaps += 1
+
+    return swaps
 
 
 def anneal(
