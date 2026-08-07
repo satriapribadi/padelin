@@ -225,6 +225,23 @@ class Browser:
 PASS, FAIL = [], []
 
 
+def load_roster(path: str | None) -> list[str]:
+    """Baca "Nama, rating, L/P" per baris; kalau tidak ada, pakai contoh.
+
+    Nama anggota klub itu data pribadi - biarkan di file lokal yang
+    di-gitignore, bukan di dalam berkas sumber.
+    """
+    if path:
+        raw = Path(path).read_text(encoding="utf-8").splitlines()
+        rows = [l.strip() for l in raw
+                if l.strip() and not l.lstrip().startswith("#")]
+        if len(rows) < 4:
+            raise SystemExit(f"{path}: butuh minimal 4 peserta, ada {len(rows)}")
+        return rows
+    return [f"Pemain {i + 1}, {2 + (i % 6) * 0.5}, {'L' if i < 13 else 'P'}"
+            for i in range(26)]
+
+
 def check(name: str, fn) -> None:
     try:
         detail = fn()
@@ -238,7 +255,14 @@ def check(name: str, fn) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", default="http://127.0.0.1:8770")
+    ap.add_argument("--roster", metavar="FILE",
+                    help="daftar peserta 'Nama, rating, L/P' per baris. "
+                         "Tanpa ini dipakai nama contoh Pemain 1..26. "
+                         "Simpan roster asli di file yang di-gitignore, "
+                         "jangan di dalam kode.")
     args = ap.parse_args()
+
+    roster = load_roster(args.roster)
 
     # Nama unik per run supaya baris quick-add memang selalu "baru".
     stamp = time.strftime('%H%M%S')
@@ -260,17 +284,13 @@ def main() -> int:
 
         # --- 1. isi peserta lewat tempel massal ---------------------------
         def bulk():
-            names = "\\n".join(
-                f"Pemain {i+1}, {2 + (i % 6) * 0.5}, {'L' if i < 13 else 'P'}"
-                for i in range(26))
-            b.js(f"""
-              document.getElementById('bulk').value = "{names}";
-              document.getElementById('parse-bulk').click(); true
-            """)
-            b.wait_for("document.querySelectorAll('#ptable tbody tr').length === 26",
-                       label="26 baris peserta")
+            b.js("(() => { document.getElementById('bulk').value = "
+                 + json.dumps("\n".join(roster))
+                 + "; document.getElementById('parse-bulk').click(); })(); true")
+            b.wait_for("document.querySelectorAll('#ptable tbody tr').length === "
+                       f"{len(roster)}", label=f"{len(roster)} baris peserta")
             return b.js("document.getElementById('counts').textContent.trim()")
-        check("Tempel massal 26 peserta", bulk)
+        check(f"Tempel massal {len(roster)} peserta", bulk)
 
         # --- 2. analisa kelayakan otomatis --------------------------------
         def analyze():

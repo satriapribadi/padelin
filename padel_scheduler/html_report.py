@@ -216,11 +216,25 @@ def build_html(
     )
 
     # Kartu angka
+    # Angka pengulangan tanpa konteks terbaca seperti cacat jadwal, padahal
+    # sering kali itu batas matematis: tiap ronde seorang pemain dapat 1 partner
+    # dan 2 lawan, jadi lawan unik mentok di (N-1)/2 ronde. Batasnya disebut di
+    # kartunya sendiri, bukan hanya di catatan yang jauh di bawah.
+    n_players = len(schedule.players)
+    max_partner_rounds = max(0, n_players - 1)
+    max_opp_rounds = max(0, (n_players - 1) // 2)
+    played = max(plays)
+
+    partner_note = ("pasang" if played <= max_partner_rounds
+                    else f"pasang · batas {max_partner_rounds} ronde")
+    opp_note = ("pasang" if played <= max_opp_rounds
+                else f"pasang · batas matematis {max_opp_rounds} ronde")
+
     tiles = [
         ("Ronde", str(len(schedule.rounds)), f"{cfg.round_minutes} menit / ronde"),
         ("Main per orang", f"{min(plays)}-{max(plays)}", "ronde"),
-        ("Partner berulang", str(st.partner_repeat_pairs), "pasang"),
-        ("Lawan berulang", str(st.opponent_repeat_pairs), "pasang"),
+        ("Partner berulang", str(st.partner_repeat_pairs), partner_note),
+        ("Lawan berulang", str(st.opponent_repeat_pairs), opp_note),
         ("Kualitas", f"{st.quality_score}", "dari 100"),
     ]
     if show_roles:
@@ -318,7 +332,7 @@ def build_html(
 
     parts.append(
         f"<div class='foot'><span>{_e(title)}</span>"
-        f"<span>Dibuat dengan generator jadwal padel</span></div>"
+        f"<span class='madeby'>{APP_MARK} Dibuat dengan Padelin</span></div>"
     )
     parts.append("</div></body></html>")
     return "".join(parts)

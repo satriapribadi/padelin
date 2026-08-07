@@ -5,6 +5,10 @@ __pycache__/
 venv/
 *.egg-info/
 
+# Daftar nama anggota - data pribadi, jangan ikut di-commit
+roster*.txt
+roster*.csv
+
 # Database (data acara milik host, jangan ikut di-commit)
 padel.db
 padel.db-wal

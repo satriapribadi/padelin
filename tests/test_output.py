@@ -157,6 +157,31 @@ class TestExports(unittest.TestCase):
                        "Rekap per pemain"):
             self.assertIn(needle, h)
 
+    def test_html_carries_branding_and_limits(self):
+        """Branding pernah hilang diam-diam dari footer saat rebrand.
+
+        Juga dijaga: kartu pengulangan harus menyebut batas matematisnya, kalau
+        tidak angkanya terbaca seperti cacat jadwal oleh peserta.
+        """
+        # 8 pemain, 9 ronde -> lawan unik mustahil di atas 3 ronde.
+        players = [Player(id=i, name=f"P{i}", gender="F") for i in range(8)]
+        sch = build_schedule(players, Config(courts=1, duration_minutes=120))
+        h = build_html(sch, title="Uji")
+
+        self.assertIn("Padelin", h, "branding hilang dari laporan")
+        self.assertNotIn("generator jadwal padel", h, "teks branding lama tersisa")
+        self.assertIn("batas matematis 3 ronde", h,
+                      "kartu lawan berulang tidak menyebut batasnya")
+
+    def test_html_omits_limit_note_when_not_forced(self):
+        # 26 pemain, 4 court -> tiap orang main sedikit, keunikan tercapai.
+        players = [Player(id=i, name=f"P{i}") for i in range(26)]
+        sch = build_schedule(players, Config(courts=4, duration_minutes=120,
+                                             effort=4000))
+        h = build_html(sch)
+        self.assertNotIn("batas matematis", h,
+                         "batas disebut padahal tidak ada pengulangan paksa")
+
     def test_html_escapes_player_names(self):
         players = [Player(id=i, name=f"<script>{i}</script>") for i in range(8)]
         sch = build_schedule(players, Config(courts=2, duration_minutes=60))
