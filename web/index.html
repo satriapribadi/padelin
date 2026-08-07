@@ -108,12 +108,17 @@
       <div class="row one">
         <div><label>Preset</label><select id="preset"></select></div>
       </div>
-      <div id="preset-desc" style="font-size:12px;color:var(--muted);margin-bottom:12px"></div>
+      <div id="preset-desc" style="font-size:12px;color:var(--muted);margin-bottom:10px"></div>
+      <div class="btn-row" style="margin-top:0;margin-bottom:12px">
+        <button class="btn ghost sm" id="preset-append">+ Tambahkan preset</button>
+        <button class="btn ghost sm" id="preset-replace">Ganti dengan preset</button>
+      </div>
       <div id="segments"></div>
       <div class="btn-row">
-        <button class="btn ghost sm" id="add-seg">+ Tambah babak</button>
-        <button class="btn ghost sm" id="clear-seg">Kosongkan</button>
+        <button class="btn ghost sm" id="add-seg">+ Babak kosong</button>
+        <button class="btn ghost sm" id="clear-seg">Kosongkan semua</button>
       </div>
+      <div id="seg-total" class="seg-total"></div>
     </div>
   </div>
 

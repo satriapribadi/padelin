@@ -186,7 +186,25 @@ table.data .pick{color:var(--good);font-weight:700}
 .msg.ok{background:var(--good-dim);color:#bdf0d8;border-left:3px solid var(--good)}
 .empty{color:var(--dim);text-align:center;padding:40px 20px;font-size:13px}
 
-.seg-editor{display:grid;grid-template-columns:1fr 70px 130px 30px;gap:6px;margin-bottom:6px;align-items:center}
+.seg-editor{
+  display:grid;grid-template-columns:20px 1fr 66px 128px 28px 24px;gap:6px;
+  margin-bottom:6px;align-items:center;
+  border-radius:7px;padding:2px;background:transparent;
+}
+.seg-editor.dragging{opacity:.45;background:var(--panel-2)}
+.seg-grip{
+  cursor:grab;color:var(--dim);text-align:center;font-size:14px;line-height:1;
+  user-select:none;border-radius:4px;
+}
+.seg-grip:hover{color:var(--ink)}
+.seg-grip:focus{outline:2px solid var(--accent);outline-offset:1px}
+.seg-editor.dragging .seg-grip{cursor:grabbing}
+.seg-dup{
+  background:transparent;border:0;color:var(--dim);cursor:pointer;
+  font-size:14px;padding:0;line-height:1;
+}
+.seg-dup:hover{color:var(--accent)}
+.seg-total{margin-top:10px;font-size:11.5px;color:var(--dim)}
 .toast{
   position:fixed;bottom:22px;left:50%;transform:translateX(-50%);
   background:var(--good);color:#06231a;padding:11px 22px;border-radius:9px;

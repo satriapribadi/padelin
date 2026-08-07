@@ -245,43 +245,149 @@ $('clear-players').onclick = () => {
 // ---------------------------------------------------------------------------
 function segRows() { return Array.from(document.querySelectorAll('.seg-editor')); }
 
-function addSeg(label = '', rounds = 3, rule = 'open') {
+const SEG_RULES = [
+  ['open', 'Bebas'], ['men', 'Putra saja'], ['women', 'Putri saja'],
+  ['mixed', 'Mixed (1L+1P)'], ['same_gender', 'Tim satu gender'],
+];
+
+function addSeg(label = '', rounds = 3, rule = 'open', after = null) {
   const row = el('div', 'seg-editor');
+  const opts = SEG_RULES.map(
+    ([v, t]) => `<option value="${v}" ${rule === v ? 'selected' : ''}>${t}</option>`
+  ).join('');
   row.innerHTML =
+    `<span class="seg-grip" tabindex="0" role="button"` +
+    ` title="Seret untuk mengurutkan (atau panah atas/bawah)">⠿</span>` +
     `<input placeholder="Nama babak" value="${esc(label)}">` +
     `<input type="number" min="1" max="40" value="${rounds}">` +
-    `<select>
-       <option value="open" ${rule === 'open' ? 'selected' : ''}>Bebas</option>
-       <option value="men" ${rule === 'men' ? 'selected' : ''}>Putra saja</option>
-       <option value="women" ${rule === 'women' ? 'selected' : ''}>Putri saja</option>
-       <option value="mixed" ${rule === 'mixed' ? 'selected' : ''}>Mixed (1L+1P)</option>
-       <option value="same_gender" ${rule === 'same_gender' ? 'selected' : ''}>Tim satu gender</option>
-     </select>` +
-    `<button class="x">&times;</button>`;
-  row.querySelector('.x').onclick = () => { row.remove(); scheduleAnalyze(); };
-  row.addEventListener('change', scheduleAnalyze);
-  row.addEventListener('input', scheduleAnalyze);
-  $('segments').appendChild(row);
+    `<select>${opts}</select>` +
+    `<button class="seg-dup" title="Gandakan babak ini">⧉</button>` +
+    `<button class="x" title="Hapus babak ini">&times;</button>`;
+
+  row.querySelector('.x').onclick = () => { row.remove(); onSegChange(); };
+  row.querySelector('.seg-dup').onclick = () => {
+    const [name, num, sel] = [row.children[1], row.children[2], row.children[3]];
+    addSeg(name.value, +num.value || 1, sel.value, row);
+    onSegChange();
+  };
+
+  // Baris hanya bisa diseret lewat gagangnya. Kalau seluruh baris draggable,
+  // menyeleksi teks di dalam input justru ikut memulai drag.
+  const grip = row.querySelector('.seg-grip');
+  grip.addEventListener('mousedown', () => { row.draggable = true; });
+  grip.addEventListener('keydown', (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    const sib = e.key === 'ArrowUp'
+      ? row.previousElementSibling : row.nextElementSibling;
+    if (!sib) return;
+    if (e.key === 'ArrowUp') row.parentNode.insertBefore(row, sib);
+    else row.parentNode.insertBefore(sib, row);
+    grip.focus();
+    onSegChange();
+  });
+
+  row.addEventListener('dragstart', () => row.classList.add('dragging'));
+  row.addEventListener('dragend', () => {
+    row.classList.remove('dragging');
+    row.draggable = false;
+    onSegChange();
+  });
+
+  row.addEventListener('change', onSegChange);
+  row.addEventListener('input', onSegChange);
+
+  const host = $('segments');
+  if (after && after.parentNode === host) after.after(row);
+  else host.appendChild(row);
+  return row;
+}
+
+/** Sisipkan baris yang sedang diseret di posisi terdekat dengan kursor. */
+function segDropTarget(container, y) {
+  const others = [...container.querySelectorAll('.seg-editor:not(.dragging)')];
+  return others.reduce((closest, child) => {
+    const box = child.getBoundingClientRect();
+    const offset = y - box.top - box.height / 2;
+    return offset < 0 && offset > closest.offset
+      ? { offset, element: child } : closest;
+  }, { offset: Number.NEGATIVE_INFINITY, element: null }).element;
+}
+
+$('segments').addEventListener('dragover', (e) => {
+  e.preventDefault();
+  const dragging = document.querySelector('.seg-editor.dragging');
+  if (!dragging) return;
+  const target = segDropTarget($('segments'), e.clientY);
+  if (target) $('segments').insertBefore(dragging, target);
+  else $('segments').appendChild(dragging);
+});
+
+/** Total ronde ikut diperlihatkan: itu yang menentukan menit per ronde. */
+function onSegChange() {
+  const segs = getSegments();
+  const total = segs.reduce((t, s) => t + s.rounds, 0);
+  const box = $('seg-total');
+  if (!total) {
+    box.textContent = '';
+  } else {
+    const usable = (+$('duration').value || 0) - (+$('warmup').value || 0);
+    const per = total ? Math.max(1, Math.floor(usable / total)) : 0;
+    box.textContent = `${segs.length} babak · ${total} ronde · `
+      + `${per} menit per ronde agar pas ${$('duration').value} menit sewa`;
+  }
+  scheduleAnalyze();
 }
 
 function getSegments() {
-  return segRows().map((r) => {
-    const [name, rounds, rule] = [r.children[0], r.children[1], r.children[2]];
-    return { label: name.value || 'Babak', rounds: +rounds.value || 0, rule: rule.value };
-  }).filter((s) => s.rounds > 0);
+  // Kolom 0 adalah gagang seret, jadi field-nya mulai dari indeks 1.
+  return segRows().map((r) => ({
+    label: r.children[1].value || 'Babak',
+    rounds: +r.children[2].value || 0,
+    rule: r.children[3].value,
+  })).filter((s) => s.rounds > 0);
 }
 
-$('add-seg').onclick = (e) => { e.preventDefault(); addSeg('Babak', 3, 'open'); scheduleAnalyze(); };
-$('clear-seg').onclick = (e) => { e.preventDefault(); $('segments').innerHTML = ''; $('preset').value = 'single'; scheduleAnalyze(); };
-
-$('preset').onchange = () => {
-  const key = $('preset').value;
-  const p = presets[key];
-  $('segments').innerHTML = '';
-  $('preset-desc').textContent = p ? p.description : '';
-  if (p) p.segments.forEach((s) => addSeg(s.label, s.rounds, s.rule));
-  scheduleAnalyze();
+$('add-seg').onclick = (e) => {
+  e.preventDefault();
+  addSeg('Babak', 3, 'open');
+  onSegChange();
 };
+
+$('clear-seg').onclick = (e) => {
+  e.preventDefault();
+  if (segRows().length && !confirm('Hapus semua babak?')) return;
+  $('segments').innerHTML = '';
+  onSegChange();
+};
+
+// Memilih preset TIDAK mengubah apa pun - hanya memperlihatkan penjelasannya.
+// Sebelumnya pemilihan langsung menghapus seluruh babak yang sudah disusun,
+// dan itu kejutan yang merugikan: susunan hilang tanpa bisa dibatalkan.
+$('preset').onchange = () => {
+  const p = presets[$('preset').value];
+  $('preset-desc').textContent = p ? p.description : '';
+};
+
+function applyPreset(replace) {
+  const p = presets[$('preset').value];
+  if (!p || !p.segments.length) {
+    toast(replace ? 'Preset ini memang tanpa babak' : 'Preset ini tidak punya babak');
+    if (replace) { $('segments').innerHTML = ''; onSegChange(); }
+    return;
+  }
+  if (replace && segRows().length
+      && !confirm(`Ganti ${segRows().length} babak yang ada dengan preset ini?`)) {
+    return;
+  }
+  if (replace) $('segments').innerHTML = '';
+  p.segments.forEach((s) => addSeg(s.label, s.rounds, s.rule));
+  onSegChange();
+  toast(replace ? 'Preset diterapkan' : `${p.segments.length} babak ditambahkan`);
+}
+
+$('preset-append').onclick = (e) => { e.preventDefault(); applyPreset(false); };
+$('preset-replace').onclick = (e) => { e.preventDefault(); applyPreset(true); };
 
 // ---------------------------------------------------------------------------
 // Payload

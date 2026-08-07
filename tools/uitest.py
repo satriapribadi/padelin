@@ -293,7 +293,7 @@ def main() -> int:
         check(f"Tempel massal {len(roster)} peserta", bulk)
 
         # --- 1b. autocomplete peserta dari master -------------------------
-        PC = "document.getElementById('pick_player').closest('.combo')"
+        pick_combo = "document.getElementById('pick_player').closest('.combo')"
 
         def picker():
             # Simpan dulu roster ke master supaya ada yang bisa disarankan.
@@ -312,10 +312,10 @@ def main() -> int:
             b.js("(() => { const i = document.getElementById('pick_player');"
                  " i.focus(); i.value = " + json.dumps(removed[:3]) + ";"
                  " i.dispatchEvent(new Event('input', {bubbles:true})); })(); true")
-            b.wait_for(PC + ".querySelector('.combo-row')", timeout=5,
+            b.wait_for(pick_combo + ".querySelector('.combo-row')", timeout=5,
                        label="saran peserta")
-            suggestions = b.js(PC + ".querySelectorAll('.combo-row').length")
-            b.js(PC + ".querySelector('.combo-row').dispatchEvent("
+            suggestions = b.js(pick_combo + ".querySelectorAll('.combo-row').length")
+            b.js(pick_combo + ".querySelector('.combo-row').dispatchEvent("
                  "new MouseEvent('mousedown', {bubbles:true})); true")
             b.wait_for(f"document.querySelectorAll('#ptable tbody tr').length === "
                        f"{before}", timeout=5, label="peserta kembali")
@@ -332,8 +332,8 @@ def main() -> int:
                  " i.focus(); i.value = " + json.dumps("") + ";"
                  " i.dispatchEvent(new Event('input', {bubbles:true})); })(); true")
             time.sleep(0.4)
-            listed = b.js(PC + ".querySelectorAll('.combo-row')"
-                          ".length && [..." + PC + ".querySelectorAll('.combo-row')]"
+            listed = b.js(pick_combo + ".querySelectorAll('.combo-row')"
+                          ".length && [..." + pick_combo + ".querySelectorAll('.combo-row')]"
                           ".map(e => e.textContent)")
             if listed:
                 assert not any(name in t for t in listed), (
@@ -347,6 +347,101 @@ def main() -> int:
             assert after == before, f"tempel ulang menggandakan: {before} -> {after}"
             return f"tetap {after} peserta"
         check("Duplikat peserta ditolak", no_duplicate)
+
+        # --- 1c. editor babak: preset, duplikat, urutan -------------------
+        def preset_no_wipe():
+            b.js("(() => { document.getElementById('segments').innerHTML = '';"
+                 " document.getElementById('add-seg').click();"
+                 " const r = document.querySelector('.seg-editor');"
+                 " r.children[1].value = 'Babak Saya';"
+                 " r.children[2].value = 5; })(); true")
+            b.wait_for("document.querySelectorAll('.seg-editor').length === 1",
+                       timeout=5, label="satu babak")
+
+            # Memilih preset TIDAK boleh menghapus apa pun.
+            b.js("(() => { const s = document.getElementById('preset');"
+                 " s.value = 'gender_3_3_6';"
+                 " s.dispatchEvent(new Event('change', {bubbles:true})); })(); true")
+            time.sleep(0.3)
+            after = b.js("document.querySelectorAll('.seg-editor').length")
+            assert after == 1, f"memilih preset menghapus babak: {after}"
+            name = b.js("document.querySelector('.seg-editor').children[1].value")
+            assert name == 'Babak Saya', f"isian ikut hilang: {name}"
+
+            # Tombol tambah menyambung, bukan mengganti.
+            b.js("document.getElementById('preset-append').click(); true")
+            b.wait_for("document.querySelectorAll('.seg-editor').length === 4",
+                       timeout=5, label="preset ditambahkan")
+            first = b.js("document.querySelector('.seg-editor').children[1].value")
+            assert first == 'Babak Saya', "babak lama tergeser/hilang"
+            return "1 babak dipertahankan, 3 ditambahkan"
+        check("Preset tidak menghapus babak yang ada", preset_no_wipe)
+
+        def duplicate_seg():
+            before = b.js("document.querySelectorAll('.seg-editor').length")
+            b.js("document.querySelector('.seg-editor .seg-dup').click(); true")
+            b.wait_for(f"document.querySelectorAll('.seg-editor').length === "
+                       f"{before + 1}", timeout=5, label="babak digandakan")
+            pair = b.js("[...document.querySelectorAll('.seg-editor')].slice(0,2)"
+                        ".map(r => r.children[1].value + '/' + r.children[2].value"
+                        " + '/' + r.children[3].value)")
+            assert pair[0] == pair[1], f"salinan tidak sama: {pair}"
+            return f"'{pair[0]}' digandakan tepat di bawahnya"
+        check("Gandakan babak", duplicate_seg)
+
+        def reorder_seg():
+            # Nama dibuat berbeda dulu. Tanpa ini semua baris bernama sama dan
+            # assertion-nya benar secara otomatis - tes yang tidak bisa gagal.
+            b.js("(() => { [...document.querySelectorAll('.seg-editor')]"
+                 ".forEach((r, i) => { r.children[1].value = 'Babak ' + i; });"
+                 " })(); true")
+            before = b.js("[...document.querySelectorAll('.seg-editor')]"
+                          ".map(r => r.children[1].value)")
+            assert len(set(before)) == len(before), f"nama masih sama: {before}"
+
+            # Jalur keyboard: panah bawah pada gagang baris pertama.
+            b.js("(() => { const g = document.querySelector('.seg-grip');"
+                 " g.focus();"
+                 " g.dispatchEvent(new KeyboardEvent('keydown',"
+                 "   {key: 'ArrowDown', bubbles: true})); })(); true")
+            time.sleep(0.3)
+            after = b.js("[...document.querySelectorAll('.seg-editor')]"
+                         ".map(r => r.children[1].value)")
+            assert after[0] == before[1] and after[1] == before[0], (
+                f"panah bawah tidak menukar: {before} -> {after}")
+
+            # Jalur seret: baris terakhir dijatuhkan ke posisi pertama.
+            b.js("""(() => {
+              const host = document.getElementById('segments');
+              const rows = [...host.querySelectorAll('.seg-editor')];
+              const moving = rows[rows.length - 1];
+              const target = rows[0].getBoundingClientRect();
+              moving.draggable = true;
+              moving.dispatchEvent(new DragEvent('dragstart', {bubbles: true}));
+              host.dispatchEvent(new DragEvent('dragover',
+                {bubbles: true, clientY: target.top + 2}));
+              moving.dispatchEvent(new DragEvent('dragend', {bubbles: true}));
+            })(); true""")
+            time.sleep(0.3)
+            dragged = b.js("[...document.querySelectorAll('.seg-editor')]"
+                           ".map(r => r.children[1].value)")
+            assert dragged[0] == after[-1], (
+                f"seret tidak memindahkan ke atas: {after} -> {dragged}")
+            assert sorted(dragged) == sorted(before), (
+                f"ada babak hilang saat diseret: {dragged}")
+            return f"panah: {before[0]}<->{before[1]}, seret: {after[-1]} ke atas"
+        check("Urutkan babak (panah & seret)", reorder_seg)
+
+        def seg_total():
+            txt = b.js("document.getElementById('seg-total').textContent")
+            assert 'babak' in txt and 'ronde' in txt, f"ringkasan kosong: {txt}"
+            # Bersihkan supaya skenario berikutnya kembali ke satu babak biasa.
+            b.js("(() => { document.getElementById('segments').innerHTML = '';"
+                 " document.getElementById('duration').dispatchEvent("
+                 "   new Event('input', {bubbles:true})); })(); true")
+            time.sleep(0.3)
+            return txt[:52]
+        check("Ringkasan total ronde", seg_total)
 
         # --- 2. analisa kelayakan otomatis --------------------------------
         def analyze():
@@ -436,7 +531,7 @@ def main() -> int:
 
         # Halaman punya DUA combobox (klub & venue). querySelector polos
         # mengambil yang klub, jadi setiap selektor dilingkupi ke wadah venue.
-        VC = "document.getElementById('venue_name').closest('.combo')"
+        venue_combo = "document.getElementById('venue_name').closest('.combo')"
 
         # --- 7. combobox: autocomplete ------------------------------------
         def combo_filter():
@@ -445,9 +540,9 @@ def main() -> int:
               i.focus(); i.value = 'Arena';
               i.dispatchEvent(new Event('input', {bubbles:true}));
             })(); true""")
-            b.wait_for(VC + ".querySelector('.combo-list').style.display === 'block'",
+            b.wait_for(venue_combo + ".querySelector('.combo-list').style.display === 'block'",
                        timeout=5, label="daftar saran venue")
-            return b.js(VC + ".querySelectorAll('.combo-row').length + ' saran'")
+            return b.js(venue_combo + ".querySelectorAll('.combo-row').length + ' saran'")
         check("Combobox menampilkan saran", combo_filter)
 
         # --- 8. combobox: quick-add untuk nama yang belum ada -------------
@@ -455,35 +550,35 @@ def main() -> int:
             b.js("(() => { const i = document.getElementById('venue_name');"
                  " i.focus(); i.value = " + json.dumps(new_venue) + ";"
                  " i.dispatchEvent(new Event('input', {bubbles:true})); })(); true")
-            b.wait_for(VC + ".querySelector('.combo-add')", timeout=5,
+            b.wait_for(venue_combo + ".querySelector('.combo-add')", timeout=5,
                        label="baris quick-add")
-            text = b.js(VC + ".querySelector('.combo-add').textContent")
-            b.js(VC + ".querySelector('.combo-add').dispatchEvent("
+            text = b.js(venue_combo + ".querySelector('.combo-add').textContent")
+            b.js(venue_combo + ".querySelector('.combo-add').dispatchEvent("
                  "new MouseEvent('mousedown', {bubbles:true})); true")
-            b.wait_for(VC + ".querySelector('.combo-form')", timeout=5,
+            b.wait_for(venue_combo + ".querySelector('.combo-form')", timeout=5,
                        label="formulir quick-add")
-            fields = b.js(VC + ".querySelectorAll('.combo-form input').length")
+            fields = b.js(venue_combo + ".querySelectorAll('.combo-form input').length")
             assert fields == 2, f"jumlah field tak terduga: {fields}"
             return f"{text.strip()}, {fields} field"
         check("Quick-add muncul untuk nama baru", combo_add)
 
         # --- 9. validasi quick-add menolak masukan tak sah ----------------
         def combo_validate():
-            b.js("(() => { const c = " + VC + ";"
+            b.js("(() => { const c = " + venue_combo + ";"
                  " const ins = c.querySelectorAll('.combo-form input');"
                  " ins[0].value = '0';"
                  " c.querySelector('.combo-form .btn').dispatchEvent("
                  "   new MouseEvent('mousedown', {bubbles:true})); })(); true")
-            b.wait_for(VC + ".querySelector('.combo-err').textContent.length > 0",
+            b.wait_for(venue_combo + ".querySelector('.combo-err').textContent.length > 0",
                        timeout=5, label="pesan validasi")
-            msg = b.js(VC + ".querySelector('.combo-err').textContent")
+            msg = b.js(venue_combo + ".querySelector('.combo-err').textContent")
             assert "court" in msg.lower(), f"pesan tak terduga: {msg}"
             return msg
         check("Validasi quick-add menolak court = 0", combo_validate)
 
         # --- 10. quick-add benar-benar menyimpan ke master -----------------
         def combo_save():
-            b.js("(() => { const c = " + VC + ";"
+            b.js("(() => { const c = " + venue_combo + ";"
                  " const ins = c.querySelectorAll('.combo-form input');"
                  " ins[0].value = '3'; ins[1].value = '175000';"
                  " c.querySelector('.combo-form .btn').dispatchEvent("

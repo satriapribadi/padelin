@@ -68,7 +68,10 @@ daripada "1 orang mengulang 4×".
 
 **Format**
 - Americano, pool berdasarkan rating, Mexicano (tim diseimbangkan), pasangan tetap
-- Babak bersegmen, mis. `Putra 3 – Putri 3 – Mixed 6` (ada preset siap pakai)
+- Babak bersegmen, mis. `Putra 3 – Putri 3 – Mixed 6`. Preset bisa ditambahkan
+  ke susunan yang ada atau menggantinya - memilihnya saja tidak mengubah apa pun.
+  Tiap babak bisa digandakan dan diurutkan dengan diseret (atau panah atas/bawah
+  pada gagangnya), dengan total ronde dan menit per ronde terhitung di bawahnya
 - Preferensi per peserta: partner tetap, atau minta court khusus 4 perempuan /
   4 laki-laki. Boleh sebagian — peserta lain tetap rotasi bebas
 - 4–26+ pemain, meet satu gender penuh juga didukung
@@ -154,7 +157,7 @@ tests/                      62 tes unit
 
 ```bash
 python -m unittest discover -s tests    # 62 tes unit
-python tools/uitest.py                  # 17 uji interaksi di browser sungguhan
+python tools/uitest.py                  # 21 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 ```
 
