@@ -161,7 +161,7 @@ tests/                      62 tes unit
 
 ```bash
 python -m unittest discover -s tests    # 62 tes unit
-python tools/uitest.py                  # 21 uji interaksi di browser sungguhan
+python tools/uitest.py                  # 22 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 ```
 
@@ -186,6 +186,13 @@ diuji bahwa optimasi yang lebih lama tidak pernah membuatnya lebih timpang.
 Saat generate, kemajuan dikirim ke UI lewat Server-Sent Events - persentase,
 tahap, dan biaya terbaik yang sedang dicapai optimizer. Angkanya nyata, jadi
 kalau prosesnya lambat kamu tahu di tahap mana.
+
+## Kalau ada yang janggal
+
+Tombol **Salin info debug** di tab Setup menyalin seluruh setup: court, durasi,
+babak, daftar peserta beserta rating/gender/pasangan terkunci, dan jadwal yang
+dihasilkan. Nama peserta diganti jadi P1..Pn - yang dibutuhkan untuk
+mereproduksi masalah penjadwalan hanyalah strukturnya, bukan nama anggota klub.
 
 ## Catatan
 

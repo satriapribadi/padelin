@@ -620,6 +620,21 @@ def main() -> int:
             return f"pager={'ada' if has_pager else 'satu halaman'}, {info.strip()[:60]}"
         check("Master data memuat tabel berhalaman", paging)
 
+        # --- 12b. tombol info debug ---------------------------------------
+        def debug_button():
+            b.js("document.getElementById('copy-debug').click(); true")
+            b.wait_for("document.getElementById('debug-out').value.length > 50",
+                       timeout=5, label="teks debug")
+            txt = b.js("document.getElementById('debug-out').value")
+            for needed in ("INFO DEBUG PADELIN", "court=", "seed=", "peserta="):
+                assert needed in txt, f"bagian '{needed}' hilang"
+            # Nama asli TIDAK boleh ikut - itu inti penyamarannya.
+            first = roster[0].split(",")[0].strip()
+            assert first not in txt, f"nama asli '{first}' bocor ke info debug"
+            assert "P1 " in txt, "nama samaran tidak dipakai"
+            return f"{len(txt.splitlines())} baris, nama disamarkan"
+        check("Tombol info debug", debug_button)
+
         # --- 13. tidak ada error JS sepanjang sesi ------------------------
         def no_errors():
             errs = b.js("window.__errs")

@@ -140,6 +140,76 @@ class TestByeFairness(unittest.TestCase):
         )
 
 
+class TestSameGenderRule(unittest.TestCase):
+    """"Sesama gender" berarti KEEMPAT pemain satu gender.
+
+    Dulu syaratnya hanya "tiap tim satu gender", yang membolehkan tim putri
+    melawan tim putra - bukan itu yang dimaksud, dan terbukti muncul di jadwal
+    sungguhan.
+    """
+
+    def _build(self, seed, rounds=4, courts=1):
+        players = make_players(8, genders=["M"] * 4 + ["F"] * 4)
+        cfg = Config(courts=courts, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, effort=15000, seed=seed,
+                     interleave_segments=True,
+                     segments=[Segment("Sesama gender", rounds, "same_gender"),
+                               Segment("Mixed", 4, "mixed")])
+        return build_schedule(players, cfg)
+
+    def test_all_four_players_share_gender(self):
+        for seed in range(6):
+            sch = self._build(seed)
+            assert_structurally_valid(self, sch)
+            gmap = {p.id: p.gender for p in sch.players}
+            for rnd in sch.rounds:
+                if rnd.segment != "Sesama gender":
+                    continue
+                for m in rnd.matches:
+                    genders = {gmap[p] for p in m.players()}
+                    self.assertEqual(
+                        len(genders), 1,
+                        f"seed {seed} ronde {rnd.index}: court bercampur "
+                        f"{sorted(genders)}")
+
+    def test_courts_alternate_between_genders(self):
+        """Satu gender tidak boleh memonopoli court sepanjang babak."""
+        sch = self._build(3, rounds=6)
+        gmap = {p.id: p.gender for p in sch.players}
+        men = women = 0
+        for rnd in sch.rounds:
+            if rnd.segment != "Sesama gender":
+                continue
+            for m in rnd.matches:
+                if gmap[m.team_a[0]] == "M":
+                    men += 1
+                else:
+                    women += 1
+        self.assertGreater(men, 0, "putra tidak pernah kebagian court")
+        self.assertGreater(women, 0, "putri tidak pernah kebagian court")
+        self.assertLessEqual(abs(men - women), 1,
+                             f"court timpang antar gender: {men} vs {women}")
+
+    def test_forced_repeat_is_explained(self):
+        """4 orang hanya punya 3 susunan match; ronde ke-4 pasti mengulang.
+
+        Yang penting bukan pengulangannya - itu tak terhindarkan - tapi bahwa
+        host diberi tahu, karena tanpa keterangan itu terbaca seperti bug.
+        """
+        sch = self._build(0, rounds=8)
+        seen = {}
+        for rnd in sch.rounds:
+            for m in rnd.matches:
+                key = tuple(sorted((tuple(sorted(m.team_a)),
+                                    tuple(sorted(m.team_b)))))
+                seen.setdefault(key, []).append(rnd.index)
+        repeats = [v for v in seen.values() if len(v) > 1]
+        self.assertTrue(repeats, "setup ini memang harus memaksa pengulangan")
+        self.assertTrue(
+            any("terulang persis sama" in nt for nt in sch.notes),
+            f"pengulangan tidak dijelaskan di catatan: {sch.notes}")
+
+
 class TestInterleaveSegments(unittest.TestCase):
     """Babak yang memakai orang berbeda tidak boleh berjalan sebagai blok.
 

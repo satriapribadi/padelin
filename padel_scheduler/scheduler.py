@@ -374,8 +374,42 @@ def _build_round(
     tier_of: dict[int, int] | None,
     rng: random.Random,
     rating_weight: float,
+    group_of: dict[int, str] | None = None,
 ) -> list[list[int]]:
-    """Rakit satu ronde: pilih siapa turun, lalu tentukan siapa lawan siapa."""
+    """Rakit satu ronde: pilih siapa turun, lalu tentukan siapa lawan siapa.
+
+    `group_of` memaksa satu court diisi satu kelompok saja (dipakai babak
+    "sesama gender": court putra dan court putri tidak boleh bercampur).
+    """
+    if group_of is not None:
+        pools: dict[str, list[tuple[int, int]]] = {}
+        for pr in row:
+            pools.setdefault(group_of[pr[0]], []).append(pr)
+
+        # Court diberikan ke kelompok yang paling banyak menganggur sejauh ini.
+        # Tanpa ini satu gender bisa memonopoli court sepanjang acara.
+        quads: list[list[int]] = []
+        left = courts
+        order = sorted(
+            pools,
+            key=lambda k: (
+                -sum(st.bye_count[p] for pr in pools[k] for p in pr)
+                / max(1, len(pools[k]) * 2),
+                rng.random(),
+            ),
+        )
+        for key in order:
+            if left <= 0:
+                break
+            avail = pools[key]
+            take = min(left, len(avail) // 2)
+            if take <= 0:
+                continue
+            chosen = _select_pairs(avail, st, take * 2, rng)
+            quads.extend(_group_into_matches(chosen, st, rng, rating_weight))
+            left -= take
+        return quads
+
     if tier_of is None:
         chosen = _select_pairs(row, st, min(courts, len(row) // 2) * 2, rng)
         return _group_into_matches(chosen, st, rng, rating_weight)
@@ -594,7 +628,12 @@ def build_schedule(players: list[Player], config: Config,
                 f"Segmen '{seg.label or 'Main'}' tidak punya cukup pemain "
                 f"untuk mengisi satu court."
             )
-        quads = _build_round(row, st, courts, tier_of, rng, weights.rating)
+        # Babak "sesama gender": tiap court dikunci ke satu gender, kalau tidak
+        # optimizer bisa menyusun tim putri melawan tim putra.
+        group_of = ({p.id: (p.gender or "?") for p in local_players}
+                    if seg.rule == "same_gender" else None)
+        quads = _build_round(row, st, courts, tier_of, rng, weights.rating,
+                             group_of=group_of)
         if not quads:
             raise ScheduleError(
                 f"Segmen '{seg.label or 'Main'}' tidak bisa mengisi court "
@@ -743,6 +782,33 @@ def build_schedule(players: list[Player], config: Config,
         interleave_segments=config.interleave_segments,
         fit_rounds_to_duration=config.fit_rounds_to_duration,
     )
+
+    # Match yang terulang UTUH (empat orang sama, tim sama) paling mudah dikira
+    # bug oleh host. Sering kali itu batas matematis: kelompok p orang hanya
+    # punya C(p,4) x 3 susunan match, dan untuk 4 orang itu cuma 3. Kalau memang
+    # tak terhindarkan, katakan sekalian dengan angkanya.
+    repeat_seen: dict[tuple, list[int]] = {}
+    for rnd in rounds:
+        for m in rnd.matches:
+            key = tuple(sorted((tuple(sorted(m.team_a)), tuple(sorted(m.team_b)))))
+            repeat_seen.setdefault(key, []).append(rnd.index)
+    repeated = {k: v for k, v in repeat_seen.items() if len(v) > 1}
+    if repeated:
+        detail = "; ".join(
+            f"ronde {' & '.join(str(x) for x in v)}"
+            for v in list(repeated.values())[:4]
+        )
+        pool = min(
+            (len(set(_eligible_for(seg.rule, local_players))) for seg in segments),
+            default=n,
+        )
+        combos = math.comb(pool, 4) * 3 if pool >= 4 else 0
+        notes.append(
+            f"{len(repeated)} match terulang persis sama ({detail}). "
+            f"Kelompok terkecil di acara ini {pool} orang, yang hanya punya "
+            f"{combos} susunan match berbeda - dengan {total_rounds} ronde, "
+            f"pengulangan seperti ini tidak selalu bisa dihindari."
+        )
 
     if violations:
         affected = {v.player_name for v in violations}

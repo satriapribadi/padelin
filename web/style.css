@@ -361,3 +361,8 @@ input[type=file]{padding:6px 8px;font-size:12px}
 .seg-toggle input{margin-top:2px;flex:none}
 .seg-toggle .hint{display:block;color:var(--dim);font-size:11px;font-style:italic}
 .seg-total{white-space:pre-line}
+
+#debug-out{
+  margin-top:10px;font-family:ui-monospace,Menlo,Consolas,monospace;
+  font-size:11px;line-height:1.5;color:var(--muted);background:var(--bg);
+}

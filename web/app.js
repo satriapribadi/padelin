@@ -770,6 +770,87 @@ function download(filename, content, type) {
   setTimeout(() => URL.revokeObjectURL(url), 1500);
 }
 
+/**
+ * Salinan setup lengkap untuk dilaporkan saat ada yang janggal.
+ *
+ * Nama peserta DIGANTI jadi P1..Pn. Yang dibutuhkan untuk mereproduksi masalah
+ * penjadwalan hanyalah strukturnya - jumlah orang, gender, rating, pasangan
+ * terkunci, dan setelan babak. Nama anggota klub itu data pribadi dan tidak
+ * perlu ikut keluar dari mesin ini.
+ */
+function debugSnapshot() {
+  const alias = new Map();
+  players.forEach((p, i) => alias.set(p.id, `P${i + 1}`));
+
+  const payload = buildPayload();
+  const lines = [
+    '--- INFO DEBUG PADELIN ---',
+    `court=${payload.courts} durasi=${payload.duration_minutes}m `
+      + `ronde=${payload.round_minutes}m pemanasan=${payload.warmup_minutes}m`,
+    `mode=${payload.mode} pool_rating=${payload.tier_count} `
+      + `wasit=${payload.referees_per_court} ballboy=${payload.ballboys_per_court}`,
+    `seed=${payload.seed} effort=${payload.effort} `
+      + `selang_seling=${payload.interleave_segments}`,
+    `babak=[${payload.segments.map((s) => `${s.label}:${s.rounds}:${s.rule}`)
+      .join(', ') || '(satu babak)'}]`,
+    `peserta=${players.length} `
+      + `(L${players.filter((p) => p.gender === 'M').length} `
+      + `P${players.filter((p) => p.gender === 'F').length} `
+      + `?${players.filter((p) => !p.gender).length})`,
+    '',
+    'peserta (nama disamarkan):',
+  ];
+  players.forEach((p) => {
+    const bits = [alias.get(p.id), `rating=${p.rating}`, `g=${p.gender || '-'}`];
+    if (p.partner_id !== null) bits.push(`partner=${alias.get(p.partner_id)}`);
+    if (p.court_preference) bits.push(`minta=${p.court_preference}`);
+    lines.push('  ' + bits.join(' '));
+  });
+
+  if (schedule) {
+    const st = schedule.stats;
+    lines.push('', 'hasil:',
+      `  ronde=${schedule.rounds.length} kualitas=${st.quality_score}`,
+      `  partner_ulang=${st.partner_repeat_pairs} `
+        + `lawan_ulang=${st.opponent_repeat_pairs} `
+        + `duduk_beruntun=${st.back_to_back_byes}`,
+      `  main_per_orang=${Math.min(...Object.values(st.plays_per_player))}-`
+        + `${Math.max(...Object.values(st.plays_per_player))}`);
+    lines.push('', 'jadwal:');
+    schedule.rounds.forEach((r) => {
+      r.matches.forEach((m) => {
+        const a = m.team_a.map((x) => alias.get(x.id) || x.name).join('+');
+        const bb = m.team_b.map((x) => alias.get(x.id) || x.name).join('+');
+        lines.push(`  R${r.index} C${m.court} ${a} vs ${bb}`);
+      });
+    });
+    if (schedule.notes && schedule.notes.length) {
+      lines.push('', 'catatan:');
+      schedule.notes.forEach((nt) => lines.push('  - ' + nt));
+    }
+  } else {
+    lines.push('', '(jadwal belum dibuat)');
+  }
+  return lines.join('\n');
+}
+
+$('copy-debug').onclick = async () => {
+  const text = debugSnapshot();
+  // Teksnya ditampilkan juga, bukan hanya disalin: clipboard bisa ditolak
+  // browser, dan kalau begitu host tidak punya jalan lain untuk mengambilnya.
+  const box = $('debug-out');
+  box.value = text;
+  box.style.display = '';
+  box.rows = Math.min(14, text.split('\n').length);
+  try {
+    await navigator.clipboard.writeText(text);
+    toast('Info debug tersalin - nama peserta sudah disamarkan');
+  } catch (e) {
+    box.select();
+    toast('Clipboard ditolak browser - teksnya sudah diseleksi, tekan Ctrl+C');
+  }
+};
+
 $('copy-wa').onclick = async () => {
   if (!schedule) return toast('Belum ada jadwal');
   await navigator.clipboard.writeText(schedule.text);

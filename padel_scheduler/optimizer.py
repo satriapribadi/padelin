@@ -148,8 +148,12 @@ class Rules:
                 return False
             return g[a] != g[b] and g[c] != g[d]
         if rule == "same_gender":
+            # KEEMPAT pemain satu gender - putra lawan putra, putri lawan putri.
+            # Dulu syaratnya hanya "tiap tim satu gender", yang membolehkan tim
+            # putri melawan tim putra; itu bukan yang dimaksud "sesama gender".
             g = self.gender
-            return g.get(a) == g.get(b) and g.get(c) == g.get(d)
+            ga = g.get(a)
+            return ga is not None and ga == g.get(b) == g.get(c) == g.get(d)
         # open / men / women sudah dijamin lewat round_eligible.
         return True
 
