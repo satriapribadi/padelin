@@ -18,6 +18,7 @@ import binascii
 import json
 import mimetypes
 import threading
+import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -483,6 +484,53 @@ class Handler(BaseHTTPRequestHandler):
 
         # /api/report dikirim lewat form submit (bukan fetch) supaya hasilnya
         # bisa dibuka sebagai tab baru dan langsung di-print jadi PDF.
+        if path == "/api/schedule/stream":
+            # Server-Sent Events: tiap tahap dikirim begitu terjadi supaya host
+            # melihat kemajuan yang sebenarnya, bukan animasi.
+            try:
+                payload = json.loads(raw or b"{}")
+            except json.JSONDecodeError:
+                self._send_json({"error": "JSON tidak valid."}, 400)
+                return
+
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+            self.send_header("Cache-Control", "no-cache")
+            self.send_header("X-Accel-Buffering", "no")
+            self.end_headers()
+
+            def emit(event: str, data: dict) -> None:
+                # Format SSE: baris "event:", baris "data:", lalu baris kosong
+                # sebagai penutup frame.
+                payload_json = json.dumps(data, ensure_ascii=False, default=str)
+                body = f"event: {event}\ndata: {payload_json}\n\n"
+                self.wfile.write(body.encode("utf-8"))
+                self.wfile.flush()
+
+            try:
+                started = time.perf_counter()
+
+                def on_progress(frac: float, message: str) -> None:
+                    emit("progress", {"pct": round(frac * 100, 1),
+                                      "message": message,
+                                      "elapsed": round(time.perf_counter() - started, 2)})
+
+                sch = build_schedule(_players_from(payload), _config_from(payload),
+                                     progress=on_progress)
+                clock = payload.get("start_clock") or None
+                data = to_dict(sch)
+                data["text"] = to_text(sch, start_clock=clock,
+                                       title=payload.get("title") or "JADWAL PADEL")
+                data["personal_text"] = to_personal_text(sch, start_clock=clock)
+                data["csv"] = to_csv(sch)
+                data["elapsed"] = round(time.perf_counter() - started, 2)
+                emit("done", data)
+            except ScheduleError as exc:
+                emit("error", {"error": str(exc)})
+            except Exception as exc:  # noqa: BLE001
+                emit("error", {"error": f"Kesalahan internal: {exc}"})
+            return
+
         if path == "/api/report":
             try:
                 fields = parse_qs(raw.decode("utf-8"))

@@ -314,6 +314,18 @@ def main() -> int:
                         " + ' ronde'")
         check("Generate jadwal", generate)
 
+        # --- 3b. log kemajuan terisi dari server --------------------------
+        def proglog():
+            lines = b.js("document.querySelectorAll('#prog-log div').length")
+            assert lines >= 5, f"log terlalu sedikit: {lines} baris"
+            pct = b.js("document.getElementById('prog-pct').textContent")
+            assert pct == "100%", f"progres tidak selesai: {pct}"
+            stage = b.js("document.getElementById('prog-stage').textContent")
+            first = b.js("document.querySelector('#prog-log div').textContent")
+            assert "Memeriksa setup" in first, f"baris pertama tak terduga: {first}"
+            return f"{lines} baris, akhir '{stage}'"
+        check("Log kemajuan terisi dari server", proglog)
+
         # --- 4. grafik keterlibatan ---------------------------------------
         def engagement():
             b.wait_for("document.querySelector('#engagement svg')",

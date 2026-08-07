@@ -370,18 +370,100 @@ $('mode').addEventListener('change', () => {
 // ---------------------------------------------------------------------------
 // Generate
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Generate dengan log kemajuan
+// ---------------------------------------------------------------------------
+function logLine(text, cls) {
+  const box = $('prog-log');
+  const line = el('div');
+  const t = el('span', 't');
+  const d = new Date();
+  t.textContent = `${String(d.getHours()).padStart(2, '0')}:`
+    + `${String(d.getMinutes()).padStart(2, '0')}:`
+    + `${String(d.getSeconds()).padStart(2, '0')}`;
+  const msg = el('span', cls || '');
+  msg.textContent = text;                 // pesan server, jangan lewat innerHTML
+  line.append(t, msg);
+  box.appendChild(line);
+  box.scrollTop = box.scrollHeight;
+}
+
+function setProgress(pct, stage) {
+  $('prog-fill').style.width = Math.max(0, Math.min(100, pct)) + '%';
+  $('prog-pct').textContent = Math.round(pct) + '%';
+  if (stage) $('prog-stage').textContent = stage;
+}
+
+/**
+ * Baca Server-Sent Events dari respons streaming.
+ *
+ * EventSource hanya bisa GET, sedangkan payload peserta terlalu besar untuk
+ * query string - jadi framenya diurai sendiri dari body fetch.
+ */
+async function streamSSE(path, payload, onEvent) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true });
+    let idx;
+    // Frame SSE dipisahkan baris kosong; tiap frame berisi baris "event:"
+    // dan "data:".
+    while ((idx = buf.indexOf('\n\n')) !== -1) {
+      const frame = buf.slice(0, idx);
+      buf = buf.slice(idx + 2);
+      let event = 'message', data = '';
+      frame.split('\n').forEach((line) => {
+        if (line.startsWith('event:')) event = line.slice(6).trim();
+        else if (line.startsWith('data:')) data += line.slice(5).trim();
+      });
+      if (data) onEvent(event, JSON.parse(data));
+    }
+  }
+}
+
 $('generate').onclick = async () => {
   const btn = $('generate');
   btn.disabled = true; btn.textContent = 'Menghitung...';
   $('gen-msg').innerHTML = '';
+  $('prog-log').textContent = '';
+  $('gen-progress').style.display = '';
+  setProgress(0, 'Mengirim data ke generator');
+
+  let failed = null;
   try {
-    schedule = await api('/api/schedule', buildPayload());
-    currentEventId = null;
+    await streamSSE('/api/schedule/stream', buildPayload(), (event, data) => {
+      if (event === 'progress') {
+        setProgress(data.pct, data.message);
+        logLine(`${String(data.pct).padStart(5)}%  ${data.message}`);
+      } else if (event === 'done') {
+        schedule = data;
+        currentEventId = null;
+        setProgress(100, `Selesai dalam ${data.elapsed} detik`);
+        logLine(`Selesai dalam ${data.elapsed} detik`, 'ok');
+      } else if (event === 'error') {
+        failed = data.error;
+        logLine(data.error, 'err');
+      }
+    });
+    if (failed) throw new Error(failed);
+    if (!schedule) throw new Error('Server tidak mengirim jadwal.');
+
     document.querySelector('.tabs button[data-view="jadwal"]').click();
     renderSchedule();
     toast('Jadwal siap');
   } catch (e) {
     $('gen-msg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
+    logLine(e.message, 'err');
   } finally {
     btn.disabled = false; btn.textContent = 'Generate';
   }

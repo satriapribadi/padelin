@@ -36,6 +36,7 @@ from .optimizer import (
     ScheduleState,
     Weights,
     anneal,
+    play_counts,
     rebalance_plays,
 )
 from .roles import assign_roles, coverage_note
@@ -459,8 +460,18 @@ def pair_matrix(st: ScheduleState, players: list[Player]) -> list[PairStat]:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def build_schedule(players: list[Player], config: Config) -> Schedule:
-    """Bangun jadwal lengkap. Ini fungsi yang dipanggil UI."""
+def build_schedule(players: list[Player], config: Config,
+                   progress=None) -> Schedule:
+    """Bangun jadwal lengkap. Ini fungsi yang dipanggil UI.
+
+    `progress(frac, pesan)` opsional: dipanggil di tiap tahap supaya host tahu
+    apa yang sedang dikerjakan. Angkanya nyata, bukan animasi.
+    """
+    def say(frac, msg):
+        if progress is not None:
+            progress(frac, msg)
+
+    say(0.01, "Memeriksa setup")
     segments = _resolve_segments(config)
     _validate(players, config, segments)
 
@@ -533,8 +544,11 @@ def build_schedule(players: list[Player], config: Config) -> Schedule:
     courts = config.courts
 
     # --- Konstruksi awal, segmen demi segmen ----------------------------
+    say(0.04, f"Menyusun pasangan untuk {n} peserta")
     r_global = 0
     for seg in segments:
+        label = seg.label or "babak utama"
+        say(0.05, f"Membentuk kombinasi partner - {label}")
         cands = _candidate_rounds(seg, local_players, config, tier_of, locked)
         if not cands:
             raise ScheduleError(
@@ -570,10 +584,18 @@ def build_schedule(players: list[Player], config: Config) -> Schedule:
                 )
 
     # --- Optimasi --------------------------------------------------------
-    anneal(st, max(1000, config.effort), rng)
+    say(0.10, f"Mengoptimasi {total_rounds} ronde")
+    anneal(
+        st, max(1000, config.effort), rng,
+        progress=(lambda f, m: say(0.10 + f * 0.72, m)) if progress else None,
+    )
     # Kerataan jumlah main tidak boleh bergantung pada keberuntungan annealing:
     # ini menegakkannya secara deterministik setelahnya.
-    rebalance_plays(st)
+    say(0.84, "Meratakan jumlah main")
+    swaps = rebalance_plays(st)
+    plays_now = sorted(play_counts(st))
+    say(0.88, f"Perataan: {swaps} pertukaran, jumlah main "
+              f"{plays_now[0]}-{plays_now[-1]} ronde")
 
     # --- Rakit hasil -----------------------------------------------------
     pref_labels = {
@@ -603,6 +625,7 @@ def build_schedule(players: list[Player], config: Config) -> Schedule:
 
     # Tugas wasit / ballboy diambil dari yang istirahat. Ini murni pasca-proses:
     # tidak mengubah susunan match, hanya memanfaatkan orang yang sedang duduk.
+    say(0.90, "Membagi tugas wasit & ballboy")
     byes_seq = [sorted(st.byes[r]) for r in range(total_rounds)]
     courts_seq = [list(range(1, len(st.matches[r]) + 1)) for r in range(total_rounds)]
     role_assign, role_summary = assign_roles(
@@ -647,6 +670,7 @@ def build_schedule(players: list[Player], config: Config) -> Schedule:
         )
         start += round_minutes
 
+    say(0.95, "Menghitung statistik")
     stats = _build_stats(st, local_players, total_rounds)
     # Kembalikan statistik ke id asli.
     stats.plays_per_player = {inv[k]: v for k, v in stats.plays_per_player.items()}
@@ -694,5 +718,6 @@ def build_schedule(players: list[Player], config: Config) -> Schedule:
             f"({', '.join(sorted(affected))}). Detailnya ada di daftar preferensi."
         )
 
+    say(1.0, f"Selesai - kualitas {stats.quality_score}/100")
     return Schedule(players=final_players, config=resolved, rounds=rounds,
                     stats=stats, notes=notes, violations=violations)

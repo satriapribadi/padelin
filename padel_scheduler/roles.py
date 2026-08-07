@@ -73,11 +73,169 @@ def assign_roles(
 
         assignments.append(round_assign)
 
+    _rebalance(assignments, byes_per_round)
+
+    total_counts.clear()
+    role_counts.clear()
+    for row in assignments:
+        for pid, role, _court in row:
+            total_counts[pid] += 1
+            role_counts[pid][role] += 1
+
     summary = {
         pid: {"total": total_counts[pid], **dict(role_counts[pid])}
         for pid in total_counts
     }
     return assignments, summary
+
+
+def _rebalance(assignments, byes_per_round, max_steps: int = 4000) -> int:
+    """Ratakan tugas setelah pembagian greedy.
+
+    Greedy per ronde hanya melihat keadaan saat itu, jadi hasilnya bisa timpang:
+    terukur wasit 0 sampai 3 kali padahal idealnya 2 rata. Ini pass perbaikannya,
+    memakai dua jenis pertukaran:
+
+      1. Pindahkan satu tugas ke peserta lain yang sedang duduk dan belum
+         bertugas ronde itu - memperbaiki total sekaligus per-peran.
+      2. Tukar peran antar dua petugas di ronde yang sama (wasit <-> ballboy) -
+         total tidak berubah, tapi ketimpangan per-peran hilang.
+
+    Sasarannya jumlah kuadrat: total tiap orang, ditambah hitungan tiap peran.
+    Tiap pertukaran menurunkan nilai itu, jadi prosesnya pasti berhenti.
+    """
+    totals: dict[int, int] = defaultdict(int)
+    per_role: dict[str, dict[int, int]] = defaultdict(lambda: defaultdict(int))
+    for row in assignments:
+        for pid, role, _court in row:
+            totals[pid] += 1
+            per_role[role][pid] += 1
+
+    steps = 0
+    improved = True
+    while improved and steps < max_steps:
+        improved = False
+
+        for r, row in enumerate(assignments):
+            if not row:
+                continue
+            busy = {pid for pid, _, _ in row}
+            free = [p for p in byes_per_round[r] if p not in busy]
+
+            # 1. Serahkan tugas ke peserta yang lebih jarang kebagian.
+            for idx, (hi, role, court) in enumerate(row):
+                target = None
+                for lo in free:
+                    delta = (2 * (totals[lo] - totals[hi] + 1)
+                             + 2 * (per_role[role][lo] - per_role[role][hi] + 1))
+                    if delta < 0:
+                        target = lo
+                        break
+                if target is None:
+                    continue
+                row[idx] = (target, role, court)
+                totals[hi] -= 1
+                totals[target] += 1
+                per_role[role][hi] -= 1
+                per_role[role][target] += 1
+                free.remove(target)
+                free.append(hi)
+                improved = True
+                steps += 1
+
+            # 2. Tukar peran antar petugas di ronde ini.
+            for i in range(len(row)):
+                for j in range(i + 1, len(row)):
+                    a, role_a, court_a = row[i]
+                    b, role_b, court_b = row[j]
+                    if role_a == role_b:
+                        continue
+                    delta = (2 * (per_role[role_a][b] - per_role[role_a][a] + 1)
+                             + 2 * (per_role[role_b][a] - per_role[role_b][b] + 1))
+                    if delta >= 0:
+                        continue
+                    # Slot tugas ditukar UTUH (peran + court). Kalau hanya
+                    # perannya yang ditukar, satu court bisa berakhir punya dua
+                    # ballboy dan tanpa wasit sama sekali.
+                    row[i] = (a, role_b, court_b)
+                    row[j] = (b, role_a, court_a)
+                    per_role[role_a][a] -= 1
+                    per_role[role_a][b] += 1
+                    per_role[role_b][b] -= 1
+                    per_role[role_b][a] += 1
+                    improved = True
+                    steps += 1
+
+        if not improved:
+            improved = _chain_fix(assignments, per_role)
+            steps += 1 if improved else 0
+
+    return steps
+
+
+def _chain_fix(assignments, per_role) -> bool:
+    """Keluar dari optimum lokal lewat rantai dua langkah.
+
+    Kalau semua yang istirahat selalu bertugas, satu-satunya gerakan adalah
+    tukar peran di ronde yang sama - dan itu mentok kalau pemain yang kelebihan
+    peran X tidak pernah seronde dengan pemain yang kekurangan peran X.
+
+    Jalan keluarnya lewat perantara: hi menyerahkan X ke m di satu ronde, lalu m
+    menyerahkan X ke lo di ronde lain. Hitungan m kembali seperti semula, hi
+    berkurang satu, lo bertambah satu.
+    """
+    roles = list(per_role)
+    for role in roles:
+        counts = per_role[role]
+        if not counts:
+            continue
+        players = list(counts)
+        hi = max(players, key=lambda p: counts[p])
+        lo = min(players, key=lambda p: counts[p])
+        if counts[hi] - counts[lo] < 2:
+            continue
+        other = [x for x in roles if x != role]
+        if not other:
+            continue
+
+        # Langkah 1: ronde tempat hi memegang `role` dan m memegang peran lain.
+        for r1, row1 in enumerate(assignments):
+            hi_idx = next((i for i, (p, ro, _) in enumerate(row1)
+                           if p == hi and ro == role), None)
+            if hi_idx is None:
+                continue
+            for m_idx, (m, m_role, m_court) in enumerate(row1):
+                if m == hi or m_role == role:
+                    continue
+                # Langkah 2: ronde tempat m memegang `role` dan lo memegang lainnya.
+                for r2, row2 in enumerate(assignments):
+                    if r2 == r1:
+                        continue
+                    m2 = next((i for i, (p, ro, _) in enumerate(row2)
+                               if p == m and ro == role), None)
+                    lo2 = next((i for i, (p, ro, _) in enumerate(row2)
+                                if p == lo and ro != role), None)
+                    if m2 is None or lo2 is None:
+                        continue
+
+                    # Sama seperti di atas: yang berpindah adalah slot tugas
+                    # utuh, supaya tiap court tetap punya satu wasit satu ballboy.
+                    hp, _hr, hc = row1[hi_idx]
+                    row1[hi_idx] = (hp, m_role, m_court)
+                    row1[m_idx] = (m, role, hc)
+                    mp, _mr, mc = row2[m2]
+                    lp, lr, lc = row2[lo2]
+                    row2[m2] = (mp, lr, lc)
+                    row2[lo2] = (lp, role, mc)
+
+                    per_role[role][hi] -= 1
+                    per_role[m_role][hi] += 1
+                    per_role[m_role][m] -= 1
+                    per_role[role][lo] += 1
+                    per_role[lr][lo] -= 1
+                    per_role[lr][m] += 1
+                    return True
+    return False
 
 
 def coverage_note(

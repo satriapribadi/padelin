@@ -483,8 +483,13 @@ def anneal(
     iterations: int,
     rng: random.Random,
     start_temp: float | None = None,
+    progress=None,
 ) -> float:
-    """Simulated annealing. Mengembalikan biaya akhir (state dimodifikasi in-place)."""
+    """Simulated annealing. Mengembalikan biaya akhir (state dimodifikasi in-place).
+
+    `progress(frac, pesan)` dipanggil sesekali kalau diberikan - angkanya nyata
+    (iterasi yang sudah dijalani dan biaya terbaik saat ini), bukan animasi.
+    """
     rounds_with_matches = [r for r in range(st.n_rounds) if st.matches[r]]
     if not rounds_with_matches:
         return st.cost()
@@ -497,7 +502,12 @@ def anneal(
     t_end = 0.05
     locked = st.rules.locked
 
+    tick = max(1, iterations // 25)
     for it in range(iterations):
+        if progress is not None and it % tick == 0:
+            progress(it / iterations,
+                     f"Optimasi {it * 100 // iterations}% - biaya terbaik "
+                     f"{best:,.0f}".replace(",", "."))
         temp = t0 * math.pow(t_end / t0, it / iterations)
         r = rng.choice(rounds_with_matches)
 

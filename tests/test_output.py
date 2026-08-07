@@ -65,6 +65,103 @@ class TestRoles(unittest.TestCase):
         self.assertEqual(len(rnd.roles), 8)
         self.assertEqual(len(rnd.resting_only()), 2)
 
+    def test_duty_split_is_even_per_role(self):
+        """Tugas harus rata PER PERAN, bukan cuma totalnya.
+
+        Dilaporkan host: jumlah main dan duduk sudah sama, tapi ada yang jadi
+        wasit 1 kali dan ada yang 3 kali. Pembagian greedy per ronde menyeimbang-
+        kan total tapi membiarkan komposisi peran timpang.
+        """
+        from collections import Counter
+
+        cases = [(8, 1, 12), (12, 2, 12), (10, 2, 10), (26, 4, 11), (14, 3, 12)]
+        for n, courts, rounds in cases:
+            players = [Player(id=i, name=f"P{i}") for i in range(n)]
+            cfg = Config(courts=courts, duration_minutes=120, round_minutes=10,
+                         warmup_minutes=0, effort=8000, rounds_override=rounds,
+                         referees_per_court=1, ballboys_per_court=1)
+            sch = build_schedule(players, cfg)
+
+            w, b, tot = Counter(), Counter(), Counter()
+            for rnd in sch.rounds:
+                for r in rnd.roles:
+                    (w if r.role == "wasit" else b)[r.player_id] += 1
+                    tot[r.player_id] += 1
+            ids = [p.id for p in sch.players]
+            for label, c in (("wasit", w), ("ballboy", b), ("total", tot)):
+                vals = [c[i] for i in ids]
+                spread = max(vals) - min(vals)
+                self.assertLessEqual(
+                    spread, 1,
+                    f"{n}p/{courts}c/{rounds}r {label} timpang: "
+                    f"{min(vals)}..{max(vals)}")
+                # Kalau habis dibagi rata, selisih 1 pun tidak boleh ada.
+                if sum(vals) % n == 0:
+                    self.assertEqual(
+                        spread, 0,
+                        f"{n}p/{courts}c/{rounds}r {label} habis dibagi tapi "
+                        f"{sorted(vals)}")
+
+    def test_every_court_gets_its_full_duty_set(self):
+        """Tiap court harus dapat satu wasit DAN satu ballboy sendiri.
+
+        Pass perataan sempat menukar peran sambil mempertahankan court, sehingga
+        satu court bisa berakhir punya dua ballboy dan tanpa wasit sama sekali.
+        Yang benar: yang ditukar adalah slot tugas utuh (peran + court).
+        """
+        from collections import Counter
+
+        for n, courts, rounds in ((26, 4, 11), (12, 2, 12), (8, 1, 12),
+                                  (10, 2, 10), (24, 5, 11)):
+            players = [Player(id=i, name=f"P{i}") for i in range(n)]
+            cfg = Config(courts=courts, duration_minutes=120, round_minutes=10,
+                         warmup_minutes=0, effort=6000, rounds_override=rounds,
+                         referees_per_court=1, ballboys_per_court=1)
+            sch = build_schedule(players, cfg)
+
+            for rnd in sch.rounds:
+                per_court = Counter()
+                for r in rnd.roles:
+                    per_court[(r.court, r.role)] += 1
+                    self.assertLessEqual(
+                        per_court[(r.court, r.role)], 1,
+                        f"{n}p/{courts}c ronde {rnd.index}: court {r.court} "
+                        f"punya lebih dari satu {r.role}")
+
+                # Kalau yang istirahat cukup, tiap court wajib lengkap.
+                if len(rnd.byes) >= len(rnd.matches) * 2:
+                    for m in rnd.matches:
+                        for role in ("wasit", "ballboy"):
+                            self.assertEqual(
+                                per_court[(m.court, role)], 1,
+                                f"{n}p/{courts}c ronde {rnd.index}: court "
+                                f"{m.court} tanpa {role}")
+
+    def test_referees_filled_before_ballboys_when_short(self):
+        """Kalau yang istirahat kurang, wasit didahulukan - court tanpa wasit
+        jauh lebih mengganggu daripada court tanpa ballboy."""
+        # 20 pemain / 4 court -> 4 istirahat untuk 8 tugas.
+        players = [Player(id=i, name=f"P{i}") for i in range(20)]
+        cfg = Config(courts=4, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, effort=6000, rounds_override=10,
+                     referees_per_court=1, ballboys_per_court=1)
+        sch = build_schedule(players, cfg)
+        for rnd in sch.rounds:
+            refs = sum(1 for r in rnd.roles if r.role == "wasit")
+            self.assertEqual(refs, len(rnd.matches),
+                             f"ronde {rnd.index}: ada court tanpa wasit padahal "
+                             f"orang yang istirahat cukup untuk semua wasit")
+
+    def test_duty_never_double_booked(self):
+        sch = make_schedule(n=26, courts=4, refs=1, balls=1)
+        for rnd in sch.rounds:
+            ids = [r.player_id for r in rnd.roles]
+            self.assertEqual(len(ids), len(set(ids)),
+                             f"ronde {rnd.index}: satu orang dua tugas")
+            for r in rnd.roles:
+                self.assertIn(r.player_id, rnd.byes,
+                              f"ronde {rnd.index}: petugas sedang main")
+
     def test_disabled_by_default(self):
         players = [Player(id=i, name=f"P{i}") for i in range(8)]
         sch = build_schedule(players, Config(courts=2, duration_minutes=60))

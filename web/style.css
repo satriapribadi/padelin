@@ -286,3 +286,22 @@ table.data .pick{color:var(--good);font-weight:700}
   margin-right:8px;border-radius:4px;
 }
 input[type=file]{padding:6px 8px;font-size:12px}
+
+/* Log generate: kemajuan nyata dari server, bukan animasi. */
+.prog{margin-top:12px;border:1px solid var(--line);border-radius:8px;
+  padding:10px 12px;background:var(--panel-2)}
+.prog-bar{height:4px;background:var(--bg);border-radius:99px;overflow:hidden}
+.prog-fill{height:100%;width:0;background:var(--accent);
+  transition:width .18s linear}
+.prog-head{display:flex;justify-content:space-between;margin-top:7px;
+  font-size:12px;color:var(--ink)}
+.prog-head #prog-pct{color:var(--muted);font-variant-numeric:tabular-nums}
+.prog-log{
+  margin-top:8px;max-height:132px;overflow-y:auto;
+  font-family:ui-monospace,Menlo,Consolas,monospace;font-size:11px;
+  color:var(--muted);line-height:1.6;
+}
+.prog-log div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.prog-log .t{color:var(--dim);margin-right:7px}
+.prog-log .ok{color:var(--good)}
+.prog-log .err{color:var(--bad)}

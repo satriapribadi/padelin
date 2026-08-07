@@ -43,7 +43,7 @@ CSS = """
 }
 *{box-sizing:border-box}
 body{
-  margin:0; padding:32px 28px 60px;
+  margin:0; padding:24px 26px 40px;
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   color:var(--ink); background:#fff; font-size:13px; line-height:1.5;
   -webkit-print-color-adjust:exact; print-color-adjust:exact;
@@ -51,74 +51,105 @@ body{
 .sheet{max-width:900px;margin:0 auto}
 
 .masthead{
-  border-bottom:3px solid var(--accent); padding-bottom:16px; margin-bottom:22px;
+  border-bottom:2px solid var(--accent); padding-bottom:10px; margin-bottom:14px;
   display:flex; justify-content:space-between; align-items:flex-end; gap:24px;
 }
-.masthead h1{margin:0 0 6px; font-size:26px; letter-spacing:-.02em}
+.masthead h1{margin:0 0 3px; font-size:21px; letter-spacing:-.02em}
 .brand{display:flex; align-items:center; gap:14px}
-.logo{width:52px; height:52px; object-fit:contain; flex:none}
+.logo{width:40px; height:40px; object-fit:contain; flex:none}
 .masthead .meta{color:var(--muted); font-size:12.5px}
 .badge{
   background:var(--accent); color:#fff; border-radius:999px;
   padding:7px 15px; font-size:12px; font-weight:600; white-space:nowrap;
 }
 
-.tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr));
-  gap:10px; margin-bottom:26px}
-.tile{background:var(--band); border:1px solid var(--line); border-radius:9px;
-  padding:11px 13px}
-.tile .k{font-size:9.5px; text-transform:uppercase; letter-spacing:.07em;
+.tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr));
+  gap:6px; margin-bottom:14px}
+.tile{background:var(--band); border:1px solid var(--line); border-radius:7px;
+  padding:6px 9px}
+.tile .k{font-size:8.5px; text-transform:uppercase; letter-spacing:.06em;
   color:var(--muted); font-weight:600}
-.tile .v{font-size:17px; font-weight:700; margin-top:3px; letter-spacing:-.01em}
-.tile .s{font-size:10.5px; color:var(--muted); margin-top:1px}
+.tile .v{font-size:15px; font-weight:700; margin-top:1px; letter-spacing:-.01em}
+.tile .s{font-size:9px; color:var(--muted); margin-top:0}
 
-h2{font-size:11px; text-transform:uppercase; letter-spacing:.09em;
-  color:var(--accent); margin:30px 0 12px; padding-bottom:7px;
+h2{font-size:10px; text-transform:uppercase; letter-spacing:.09em;
+  color:var(--accent); margin:16px 0 7px; padding-bottom:4px;
   border-bottom:1px solid var(--line)}
 
 .segbar{
   background:var(--accent-soft); border-left:4px solid var(--accent);
-  padding:8px 13px; border-radius:0 6px 6px 0; margin:18px 0 12px;
-  font-weight:700; font-size:13px; color:var(--accent);
+  padding:4px 10px; border-radius:0 5px 5px 0;
+  font-weight:700; font-size:11px; color:var(--accent);
 }
-.round{border:1px solid var(--line); border-radius:9px; margin-bottom:11px;
+/* Card ronde disusun grid. Jumlah kolom mengikuti lebar isi card: 1 court
+   berarti satu match per card, jadi 3 kolom masih lega; 3+ court butuh selebar
+   halaman. Tanpa ini laporan 12 ronde memakan 3 halaman. */
+.rounds{display:grid; gap:7px; align-items:start}
+.rounds.cols-1{grid-template-columns:1fr}
+.rounds.cols-2{grid-template-columns:repeat(2,1fr)}
+.rounds.cols-3{grid-template-columns:repeat(3,1fr)}
+.rounds .segbar{grid-column:1 / -1; margin:10px 0 3px}
+
+.round{border:1px solid var(--line); border-radius:7px;
   overflow:hidden; break-inside:avoid; page-break-inside:avoid}
-.round-head{background:var(--band); padding:7px 13px; display:flex;
-  justify-content:space-between; align-items:center; border-bottom:1px solid var(--line)}
-.round-head .n{font-weight:700; font-size:13px}
-.round-head .t{color:var(--muted); font-size:11.5px; font-variant-numeric:tabular-nums}
+.round-head{background:var(--band); padding:3px 9px; display:flex;
+  justify-content:space-between; align-items:baseline; gap:8px;
+  border-bottom:1px solid var(--line)}
+.round-head .n{font-weight:700; font-size:11px}
+.round-head .t{color:var(--muted); font-size:10px; font-variant-numeric:tabular-nums}
 
 table{width:100%; border-collapse:collapse}
-.matches td{padding:7px 13px; border-bottom:1px solid #f0f2f5; vertical-align:middle}
-.matches tr:last-child td{border-bottom:none}
-.court{font-weight:700; color:var(--accent); width:34px; font-size:12px}
-.team{font-size:12.5px}
-.vs{color:var(--muted); font-size:10.5px; text-align:center; width:26px;
-  font-style:italic}
-.duty{color:var(--muted); font-size:10.5px; white-space:nowrap; text-align:right}
-.duty b{color:var(--ink); font-weight:600}
-.pool{display:inline-block; background:var(--accent-soft); color:var(--accent);
-  border-radius:4px; padding:1px 6px; font-size:9.5px; font-weight:600;
-  margin-left:6px}
-.resting{padding:6px 13px; background:#fafbfc; color:var(--muted);
-  font-size:11px; border-top:1px solid #f0f2f5}
 
-.recap{border:1px solid var(--line); border-radius:9px; overflow:hidden}
-.recap th{background:var(--band); text-align:left; padding:8px 11px;
-  font-size:9.5px; text-transform:uppercase; letter-spacing:.06em;
+/* Baris match memakai GRID, bukan flex. Dengan flex, lebar kolom tugas berbeda
+   tiap baris (nama petugas panjang-pendek) sehingga posisi "vs" ikut bergeser
+   dan kolomnya terlihat bergoyang. Grid mengunci kolomnya:
+
+     court | tim A (rata kiri) | vs | tim B (rata kanan) | tugas (lebar tetap)
+
+   Tugas ditaruh di kolom kanan sendiri - bukan di tengah - supaya blok
+   "A & B vs C & D" tetap sejajar di semua baris dan mata bisa menyusuri satu
+   kolom saja saat mencari lawan. */
+.m{display:grid; grid-template-columns:22px 1fr 16px 1fr 112px;
+  align-items:baseline; gap:0 6px;
+  padding:4px 9px; border-bottom:1px solid #f0f2f5; font-size:11px}
+.m:last-of-type{border-bottom:none}
+.court{font-weight:700; color:var(--accent); font-size:10px}
+.team{min-width:0}
+.team.b{text-align:right}
+.vs{color:var(--muted); font-size:9px; font-style:italic; text-align:center}
+
+/* Card sempit (1-2 court): tugas turun ke baris sendiri di bawah matchnya. */
+.cols-2 .m,.cols-3 .m{grid-template-columns:22px 1fr 16px 1fr}
+/* Di card lebar tugas muat sebaris dengan matchnya; hanya di kolom sempit
+   ia turun ke baris sendiri. Memaksanya selalu turun membuat tiap match makan
+   dua baris dan laporan 4 court membengkak dua kali lipat. */
+.duty{color:var(--muted); font-size:9.5px; text-align:right;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
+.cols-2 .duty,.cols-3 .duty{grid-column:1 / -1; white-space:normal}
+.pool{display:inline-block; background:var(--accent-soft); color:var(--accent);
+  border-radius:4px; padding:0 5px; font-size:9px; font-weight:600;
+  margin-left:5px}
+.resting{padding:3px 9px; background:#fafbfc; color:var(--muted);
+  font-size:9.5px; border-top:1px solid #f0f2f5}
+
+.recap-wrap{display:grid; gap:8px; align-items:start}
+.recap-wrap.split{grid-template-columns:1fr 1fr}
+.recap{border:1px solid var(--line); border-radius:7px; overflow:hidden}
+.recap th{background:var(--band); text-align:left; padding:4px 9px;
+  font-size:8.5px; text-transform:uppercase; letter-spacing:.06em;
   color:var(--muted); border-bottom:1px solid var(--line)}
-.recap td{padding:7px 11px; border-bottom:1px solid #f2f4f7; font-size:12px}
+.recap td{padding:3px 9px; border-bottom:1px solid #f2f4f7; font-size:10.5px}
 .recap tr:last-child td{border-bottom:none}
 .recap td.num{font-variant-numeric:tabular-nums; text-align:center}
 .recap tbody tr:nth-child(even){background:#fcfdfe}
 
 .note{background:var(--band); border-left:3px solid var(--muted);
-  padding:9px 13px; border-radius:0 6px 6px 0; margin-bottom:8px; font-size:12px}
+  padding:5px 10px; border-radius:0 5px 5px 0; margin-bottom:5px; font-size:10px}
 .note.warn{background:var(--warn-soft); border-left-color:var(--warn)}
 .madeby{display:inline-flex; align-items:center; gap:6px}
 .madeby svg{width:14px; height:14px; color:var(--muted)}
-.foot{margin-top:34px; padding-top:12px; border-top:1px solid var(--line);
-  color:var(--muted); font-size:10.5px; display:flex; justify-content:space-between}
+.foot{margin-top:16px; padding-top:8px; border-top:1px solid var(--line);
+  color:var(--muted); font-size:9px; display:flex; justify-content:space-between}
 
 .toolbar{position:sticky; top:0; background:#fff; padding:10px 0 16px;
   margin:-32px auto 8px; max-width:900px; display:flex; gap:9px; z-index:5}
@@ -132,13 +163,20 @@ table{width:100%; border-collapse:collapse}
 .toolbar button:hover{opacity:.9}
 
 @media print{
-  body{padding:0; font-size:11.5px}
+  body{padding:0; font-size:10px}
   .toolbar{display:none !important}
   .sheet{max-width:none}
-  h2{margin-top:20px}
+  h2{margin-top:11px}
   .round{border-color:#d8dde4}
-  .masthead{margin-bottom:16px}
-  .tiles{margin-bottom:18px; gap:7px}
+  .masthead{margin-bottom:10px}
+  .tiles{margin-bottom:10px; gap:5px}
+  .rounds{gap:5px}
+  .m{padding:2px 7px; font-size:9.5px; line-height:1.35}
+  .resting{padding:1px 7px; font-size:8.5px; line-height:1.35}
+  .round-head{padding:1px 7px}
+  .recap td{padding:1.5px 8px; font-size:9.5px; line-height:1.35}
+  .recap th{padding:2px 8px}
+  .note{padding:4px 9px; font-size:9px; margin-bottom:4px}
   thead{display:table-header-group}
   tr{break-inside:avoid; page-break-inside:avoid}
 }
@@ -248,8 +286,22 @@ def build_html(
         )
     parts.append("</div>")
 
-    # Jadwal
+    # Jadwal - satu tabel padat, bukan satu kartu per ronde. Tujuannya muat
+    # sehalaman saat dicetak: kartu memakan ~4 baris per ronde untuk bingkai dan
+    # judulnya sendiri, tabel memakai satu baris per match.
+    #
+    # Tiap ronde dibungkus <tbody> sendiri supaya `break-inside: avoid` menjaga
+    # satu ronde tidak terbelah antar halaman - itu satu-satunya pengelompokan
+    # yang dihormati mesin cetak pada tabel panjang.
     parts.append("<h2>Jadwal pertandingan</h2>")
+
+    # Card tetap dipakai, tapi disusun dalam grid. Dengan 1 court tiap card
+    # hanya memuat satu match, jadi satu kolom membuang ruang horizontal dan
+    # laporan jadi berhalaman-halaman. Jumlah kolom mengikuti lebar isi card.
+    max_matches = max((len(r.matches) for r in schedule.rounds), default=1)
+    cols = 3 if max_matches == 1 else 2 if max_matches == 2 else 1
+    parts.append(f"<div class='rounds cols-{cols}'>")
+
     current_segment = None
     for rnd in schedule.rounds:
         if rnd.segment and rnd.segment != current_segment:
@@ -264,26 +316,24 @@ def build_html(
             f"<div class='round-head'><span class='n'>Ronde {rnd.index}</span>"
             f"<span class='t'>{_e(_clock(rnd.start_min, start_clock))}</span></div>"
         )
-        parts.append("<table class='matches'>")
         for m in rnd.matches:
             pool = rnd.court_labels.get(m.court, "")
             pool_html = f"<span class='pool'>{_e(pool)}</span>" if pool else ""
             duty_bits = []
             if m.court in refs:
-                duty_bits.append(f"wasit <b>{_e(refs[m.court])}</b>")
+                duty_bits.append(f"W {_e(refs[m.court])}")
             if m.court in balls:
-                duty_bits.append(f"ballboy <b>{_e(balls[m.court])}</b>")
-            duty_html = (f"<td class='duty'>{' &nbsp; '.join(duty_bits)}</td>"
-                         if duty_bits else "<td class='duty'></td>")
+                duty_bits.append(f"B {_e(balls[m.court])}")
+            duty_html = (f"<span class='duty'>{' · '.join(duty_bits)}</span>"
+                         if duty_bits else "")
             parts.append(
-                f"<tr><td class='court'>C{m.court}</td>"
-                f"<td class='team'>{_e(names[m.team_a[0]])} &amp; "
-                f"{_e(names[m.team_a[1]])}{pool_html}</td>"
-                f"<td class='vs'>vs</td>"
-                f"<td class='team'>{_e(names[m.team_b[0]])} &amp; "
-                f"{_e(names[m.team_b[1]])}</td>{duty_html}</tr>"
+                f"<div class='m'><span class='court'>C{m.court}</span>"
+                f"<span class='team'>{_e(names[m.team_a[0]])} &amp; "
+                f"{_e(names[m.team_a[1]])}{pool_html}</span>"
+                f"<span class='vs'>vs</span>"
+                f"<span class='team b'>{_e(names[m.team_b[0]])} &amp; "
+                f"{_e(names[m.team_b[1]])}</span>{duty_html}</div>"
             )
-        parts.append("</table>")
         idle = rnd.resting_only()
         if idle:
             parts.append(
@@ -291,31 +341,44 @@ def build_html(
                 f"{_e(', '.join(names[b] for b in idle))}</div>"
             )
         parts.append("</div>")
+    parts.append("</div>")
 
-    # Rekap pemain
+    # Rekap pemain. Dipecah dua kolom kalau pesertanya banyak: satu kolom
+    # panjang membuang separuh lebar halaman dan bisa menambah satu halaman
+    # penuh sendirian.
     parts.append("<h2>Rekap per pemain</h2>")
-    parts.append("<table class='recap'><thead><tr>")
-    headers = ["Nama", "Rating", "L/P", "Main", "Istirahat"]
+    roster = sorted(schedule.players, key=lambda x: x.name.lower())
+    split = len(roster) > 14
+    chunks = ([roster[: (len(roster) + 1) // 2], roster[(len(roster) + 1) // 2:]]
+              if split else [roster])
+
+    headers = ["Nama", "Rating", "L/P", "Main", "Duduk"]
     if show_roles:
-        headers += ["Wasit", "Ballboy"]
-    parts.append("".join(f"<th>{_e(h)}</th>" for h in headers))
-    parts.append("</tr></thead><tbody>")
-    for p in sorted(schedule.players, key=lambda x: x.name.lower()):
-        roles = st.roles_per_player.get(p.id, {})
-        cells = [
-            f"<td>{_e(p.name)}</td>",
-            f"<td class='num'>{p.rating:g}</td>",
-            f"<td class='num'>{_e({'M': 'L', 'F': 'P'}.get(p.gender or '', '-'))}</td>",
-            f"<td class='num'>{st.plays_per_player.get(p.id, 0)}</td>",
-            f"<td class='num'>{st.byes_per_player.get(p.id, 0)}</td>",
-        ]
-        if show_roles:
-            cells += [
-                f"<td class='num'>{roles.get('wasit', 0)}</td>",
-                f"<td class='num'>{roles.get('ballboy', 0)}</td>",
+        headers += ["W", "B"]
+
+    parts.append(f"<div class='recap-wrap{' split' if split else ''}'>")
+    for chunk in chunks:
+        parts.append("<table class='recap'><thead><tr>")
+        parts.append("".join(f"<th>{_e(h)}</th>" for h in headers))
+        parts.append("</tr></thead><tbody>")
+        for p in chunk:
+            roles = st.roles_per_player.get(p.id, {})
+            cells = [
+                f"<td>{_e(p.name)}</td>",
+                f"<td class='num'>{p.rating:g}</td>",
+                f"<td class='num'>"
+                f"{_e({'M': 'L', 'F': 'P'}.get(p.gender or '', '-'))}</td>",
+                f"<td class='num'>{st.plays_per_player.get(p.id, 0)}</td>",
+                f"<td class='num'>{st.byes_per_player.get(p.id, 0)}</td>",
             ]
-        parts.append("<tr>" + "".join(cells) + "</tr>")
-    parts.append("</tbody></table>")
+            if show_roles:
+                cells += [
+                    f"<td class='num'>{roles.get('wasit', 0)}</td>",
+                    f"<td class='num'>{roles.get('ballboy', 0)}</td>",
+                ]
+            parts.append("<tr>" + "".join(cells) + "</tr>")
+        parts.append("</tbody></table>")
+    parts.append("</div>")
 
     # Catatan
     if schedule.notes or schedule.violations:

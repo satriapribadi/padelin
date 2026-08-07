@@ -86,6 +86,11 @@ keputusannya sadar, bukan menebak.
 
 **Laporan**
 - HTML + CSS siap cetak: buka laporan, Ctrl+P, Save as PDF
+- Dipadatkan agar muat sesedikit mungkin halaman: card ronde disusun grid
+  (3 kolom untuk 1 court, 2 untuk 2 court, 1 untuk 3+), tim A rata kiri dan
+  tim B rata kanan dalam kolom terkunci, rekap pemain dipecah dua kolom kalau
+  peserta banyak. Meet 8 orang 12 ronde muat satu halaman; 26 orang 11 ronde
+  jadi dua
 - Logo klub tertanam di kepala laporan
 - Teks siap tempel ke grup WhatsApp, plus jadwal per pemain
 - CSV untuk Excel / Google Sheets
@@ -129,14 +134,15 @@ web/
   _selftest.html            halaman verifikasi visual grafik (bukan bagian app)
 tools/
   uitest.py                 uji interaksi UI lewat DevTools Protocol
-tests/                      55 tes unit
+tests/                      59 tes unit
 ```
 
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 55 tes unit
-python tools/uitest.py                  # 14 uji interaksi di browser sungguhan
+python -m unittest discover -s tests    # 59 tes unit
+python tools/uitest.py                  # 15 uji interaksi di browser sungguhan
+python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 ```
 
 `tools/uitest.py` menjalankan Edge/Chrome headless, menyambung ke DevTools
@@ -153,9 +159,13 @@ aturan gender ditegakkan 100%, partner terkunci tetap terkunci, pemula tidak
 pernah melawan pemain kuat di mode pool, tugas hanya jatuh ke yang sedang duduk,
 dan nama pemain selalu di-escape di laporan.
 
-Yang dijaga paling ketat adalah kerataan jumlah main: diuji di delapan
-konfigurasi berbeda, dan diuji bahwa optimasi yang lebih lama tidak pernah
-membuatnya lebih timpang.
+Yang dijaga paling ketat adalah kerataan: jumlah main diuji di delapan
+konfigurasi, pembagian tugas diuji rata PER PERAN (bukan cuma totalnya), dan
+diuji bahwa optimasi yang lebih lama tidak pernah membuatnya lebih timpang.
+
+Saat generate, kemajuan dikirim ke UI lewat Server-Sent Events - persentase,
+tahap, dan biaya terbaik yang sedang dicapai optimizer. Angkanya nyata, jadi
+kalau prosesnya lambat kamu tahu di tahap mana.
 
 ## Catatan
 
