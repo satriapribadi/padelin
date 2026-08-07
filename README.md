@@ -74,7 +74,10 @@ daripada "1 orang mengulang 4×".
 - 4–26+ pemain, meet satu gender penuh juga didukung
 
 **Wasit & ballboy**
-Diambil dari yang sedang istirahat dan dirotasi adil. Dengan 26 pemain di 4 court,
+Diambil dari yang sedang istirahat dan dirotasi adil - rata per peran, bukan
+cuma totalnya. Di rekap pemain kolomnya aditif: main + wasit + ballboy +
+istirahat = jumlah ronde, sehingga "istirahat" benar-benar berarti tidak main
+dan tidak bertugas. Dengan 26 pemain di 4 court,
 10 orang duduk tiap ronde — tapi 8 di antaranya bertugas, jadi hanya 2 yang
 benar-benar menganggur. Ini yang membuat court sedikit tetap masuk akal.
 

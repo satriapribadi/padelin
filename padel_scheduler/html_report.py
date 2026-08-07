@@ -355,10 +355,13 @@ def build_html(
 
     # (judul, apakah kolom angka). Judul kolom angka harus rata tengah juga -
     # kalau judulnya kiri sementara isinya tengah, keduanya terlihat meleset.
-    headers = [("Nama", False), ("Rating", True), ("L/P", True),
-               ("Main", True), ("Duduk", True)]
+    # Kolom dibuat aditif: main + wasit + ballboy + istirahat = jumlah ronde.
+    # "Duduk" yang lama menghitung ronde bertugas juga, jadi angkanya tidak bisa
+    # dijumlah dan peserta yang membacanya bingung.
+    headers = [("Nama", False), ("Rating", True), ("L/P", True), ("Main", True)]
     if show_roles:
         headers += [("W", True), ("B", True)]
+    headers.append(("Istirahat", True))
 
     parts.append(f"<div class='recap-wrap{' split' if split else ''}'>")
     for chunk in chunks:
@@ -370,19 +373,21 @@ def build_html(
         parts.append("</tr></thead><tbody>")
         for p in chunk:
             roles = st.roles_per_player.get(p.id, {})
+            idle = max(0, st.byes_per_player.get(p.id, 0)
+                       - int(roles.get("total", 0) or 0))
             cells = [
                 f"<td>{_e(p.name)}</td>",
                 f"<td class='num'>{p.rating:g}</td>",
                 f"<td class='num'>"
                 f"{_e({'M': 'L', 'F': 'P'}.get(p.gender or '', '-'))}</td>",
                 f"<td class='num'>{st.plays_per_player.get(p.id, 0)}</td>",
-                f"<td class='num'>{st.byes_per_player.get(p.id, 0)}</td>",
             ]
             if show_roles:
                 cells += [
                     f"<td class='num'>{roles.get('wasit', 0)}</td>",
                     f"<td class='num'>{roles.get('ballboy', 0)}</td>",
                 ]
+            cells.append(f"<td class='num'>{idle}</td>")
             parts.append("<tr>" + "".join(cells) + "</tr>")
         parts.append("</tbody></table>")
     parts.append("</div>")

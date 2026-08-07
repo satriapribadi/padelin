@@ -536,8 +536,14 @@ function renderSchedule() {
   $('sched-stats').innerHTML = '';
   $('sched-stats').appendChild(grid);
 
-  // Ronde
-  const box = el('div');
+  // Ronde. Card disusun grid, jumlah kolom mengikuti isi tiap card: dengan
+  // 1 court satu card hanya memuat satu match, jadi kolom tunggal membuang
+  // lebar panel dan memaksa scroll berkali-kali lipat.
+  const maxMatches = schedule.rounds.reduce(
+    (t, r) => Math.max(t, r.matches.length), 1);
+  const cols = maxMatches === 1 ? 3 : maxMatches === 2 ? 2 : 1;
+  const box = el('div', `rounds cols-${cols}`);
+
   let seg = null;
   schedule.rounds.forEach((r) => {
     if (r.segment && r.segment !== seg) {
@@ -546,22 +552,25 @@ function renderSchedule() {
     }
     const card = el('div', 'round');
     const time = schedule.config.warmup_minutes !== undefined
-      ? `+${r.start_min} mnt` : '';
+      ? `+${r.start_min}m` : '';
     card.appendChild(el('div', 'round-head',
-      `<span class="n">Ronde ${r.index}</span><span class="t">${esc(time)}</span>`));
+      `<span class="n">R${r.index}</span><span class="t">${esc(time)}</span>`));
 
     r.matches.forEach((m) => {
+      // Peran disingkat W/B: di card sempit nama lengkap "wasit"/"ballboy"
+      // memakan ruang yang dibutuhkan namanya sendiri.
       const duty = [];
       (r.roles || []).forEach((x) => {
-        if (x.court === m.court) duty.push(`${x.role} <b>${esc(nameOf(x.player_id))}</b>`);
+        if (x.court !== m.court) return;
+        duty.push(`${x.role === 'wasit' ? 'W' : 'B'} ${esc(nameOf(x.player_id))}`);
       });
       const pool = m.pool ? `<span class="pool">${esc(m.pool)}</span>` : '';
       card.appendChild(el('div', 'match',
-        `<div class="c">C${m.court}</div>` +
-        `<div>${esc(m.team_a.map((x) => x.name).join(' & '))}${pool}</div>` +
-        `<div class="vs">vs</div>` +
-        `<div>${esc(m.team_b.map((x) => x.name).join(' & '))}</div>` +
-        `<div class="duty">${duty.join(' &nbsp; ')}</div>`));
+        `<span class="c">C${m.court}</span>` +
+        `<span class="tm">${esc(m.team_a.map((x) => x.name).join(' & '))}${pool}</span>` +
+        `<span class="vs">vs</span>` +
+        `<span class="tm b">${esc(m.team_b.map((x) => x.name).join(' & '))}</span>` +
+        `<span class="duty">${duty.join(' · ')}</span>`));
     });
 
     const busy = new Set((r.roles || []).map((x) => x.player_id));
@@ -576,17 +585,23 @@ function renderSchedule() {
   $('rounds').appendChild(box);
 
   // Rekap
+  // Kolom dibuat ADITIF: main + wasit + ballboy + istirahat = jumlah ronde.
+  // Sebelumnya "Duduk" menghitung semua ronde tidak main termasuk ronde saat
+  // orangnya bertugas, jadi angkanya tidak bisa dijumlah dan menyesatkan -
+  // seseorang yang 3 kali jadi wasit tetap tercatat "duduk" 3 kali itu.
   const showRoles = schedule.config.referees_per_court || schedule.config.ballboys_per_court;
   let html = '<table class="data"><thead><tr><th>Nama</th>'
-    + '<th class="num">Main</th><th class="num">Duduk</th>'
+    + '<th class="num">Main</th>'
     + (showRoles ? '<th class="num">Wasit</th><th class="num">Ballboy</th>' : '')
-    + '</tr></thead><tbody>';
+    + '<th class="num">Istirahat</th></tr></thead><tbody>';
   schedule.players.slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((p) => {
     const roles = st.roles_per_player[p.id] || {};
-    html += `<tr><td>${esc(p.name)}</td><td class="num">${st.plays_per_player[p.id] || 0}</td>` +
-      `<td class="num">${st.byes_per_player[p.id] || 0}</td>` +
-      (showRoles ? `<td class="num">${roles.wasit || 0}</td><td class="num">${roles.ballboy || 0}</td>` : '') +
-      `</tr>`;
+    const idle = (st.byes_per_player[p.id] || 0) - (roles.total || 0);
+    html += `<tr><td>${esc(p.name)}</td>`
+      + `<td class="num">${st.plays_per_player[p.id] || 0}</td>`
+      + (showRoles ? `<td class="num">${roles.wasit || 0}</td>`
+                     + `<td class="num">${roles.ballboy || 0}</td>` : '')
+      + `<td class="num">${Math.max(0, idle)}</td></tr>`;
   });
   $('recap').innerHTML = html + '</tbody></table>';
 

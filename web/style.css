@@ -120,24 +120,48 @@ input[type=date],input[type=time]{color-scheme:dark}
   background:var(--accent-dim);color:#cfe6fa;border-radius:7px;
   padding:7px 13px;margin:16px 0 10px;font-weight:700;font-size:13px;
 }
-.round{background:var(--panel-2);border:1px solid var(--line);border-radius:9px;margin-bottom:10px;overflow:hidden}
-.round-head{
-  display:flex;justify-content:space-between;align-items:center;
-  padding:8px 13px;background:#1a222d;border-bottom:1px solid var(--line);
+/* Card ronde disusun grid supaya tidak memaksa scroll panjang: dengan 1 court
+   satu card hanya memuat satu match, jadi kolom tunggal membuang lebar panel. */
+.rounds{display:grid;gap:6px;align-items:start}
+.rounds.cols-1{grid-template-columns:1fr}
+.rounds.cols-2{grid-template-columns:repeat(2,1fr)}
+.rounds.cols-3{grid-template-columns:repeat(3,1fr)}
+.rounds .segbar{grid-column:1 / -1;margin:10px 0 2px}
+@media(max-width:1180px){
+  .rounds.cols-3{grid-template-columns:repeat(2,1fr)}
 }
-.round-head .n{font-weight:700;font-size:13px}
-.round-head .t{color:var(--muted);font-size:12px;font-variant-numeric:tabular-nums}
+@media(max-width:820px){
+  .rounds.cols-2,.rounds.cols-3{grid-template-columns:1fr}
+}
+
+.round{background:var(--panel-2);border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.round-head{
+  display:flex;justify-content:space-between;align-items:baseline;gap:6px;
+  padding:3px 9px;background:#1a222d;border-bottom:1px solid var(--line);
+}
+.round-head .n{font-weight:700;font-size:11.5px}
+.round-head .t{color:var(--dim);font-size:10px;font-variant-numeric:tabular-nums}
+
+/* Kolom dikunci supaya "vs" tidak bergoyang antar baris saat panjang nama
+   petugas berbeda-beda. Tim A rata kiri, tim B rata kanan. */
 .match{
-  display:grid;grid-template-columns:38px 1fr 30px 1fr auto;gap:8px;
-  align-items:center;padding:7px 13px;border-bottom:1px solid #1e2732;font-size:13px;
+  display:grid;grid-template-columns:24px 1fr 16px 1fr 104px;gap:0 6px;
+  align-items:baseline;padding:3px 9px;border-bottom:1px solid #1e2732;
+  font-size:12px;
 }
 .match:last-of-type{border-bottom:0}
-.match .c{color:var(--accent);font-weight:700;font-size:12px}
-.match .vs{color:var(--dim);font-size:11px;text-align:center;font-style:italic}
-.match .duty{color:var(--muted);font-size:11px;white-space:nowrap;text-align:right}
-.match .duty b{color:var(--ink);font-weight:600}
-.pool{background:var(--accent-dim);color:#a8d4f5;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:600;margin-left:6px}
-.resting{padding:6px 13px;background:#141b24;color:var(--muted);font-size:11.5px}
+.match .c{color:var(--accent);font-weight:700;font-size:10px}
+.match .tm{min-width:0;overflow-wrap:anywhere}
+.match .tm.b{text-align:right}
+.match .vs{color:var(--dim);font-size:9px;text-align:center;font-style:italic}
+.match .duty{color:var(--muted);font-size:10px;text-align:right;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+/* Card sempit: tugas turun ke barisnya sendiri. */
+.cols-2 .match,.cols-3 .match{grid-template-columns:24px 1fr 16px 1fr}
+.cols-2 .match .duty,.cols-3 .match .duty{grid-column:1 / -1;white-space:normal}
+
+.pool{background:var(--accent-dim);color:#a8d4f5;border-radius:4px;padding:0 5px;font-size:9px;font-weight:600;margin-left:5px}
+.resting{padding:2px 9px;background:#141b24;color:var(--dim);font-size:10px}
 
 /* ---------- tabel umum ---------- */
 table.data{width:100%;border-collapse:collapse;font-size:12.5px}
