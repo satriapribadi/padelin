@@ -412,14 +412,22 @@ class Handler(BaseHTTPRequestHandler):
                 "court_preferences": list(COURT_PREFERENCES),
             })
         elif path == "/api/master":
-            # Satu panggilan memuat semua master data yang dibutuhkan UI.
+            # Satu panggilan memuat master data yang dibutuhkan UI.
+            #
+            # Pemain dan venue disaring per klub DI SERVER. Sebelumnya seluruh
+            # pemain dari semua klub ikut terkirim tiap request lalu disaring di
+            # browser - boros, dan nama anggota klub lain terkirim padahal tidak
+            # diminta. Daftar klub tetap lengkap karena itu isi pemilihnya.
+            cid = (query.get("club_id") or [""])[0]
             with storage.session() as conn:
-                club_id = storage.ensure_default_club(conn)
+                default_club = storage.ensure_default_club(conn)
+                club_id = int(cid) if cid.isdigit() else default_club
                 self._send_json({
                     "clubs": storage.list_clubs(conn),
-                    "venues": storage.list_venues(conn),
-                    "players": storage.list_players(conn),
-                    "default_club_id": club_id,
+                    "venues": storage.list_venues(conn, club_id),
+                    "players": storage.list_players(conn, club_id),
+                    "club_id": club_id,
+                    "default_club_id": default_club,
                 })
         elif path == "/api/stats/players":
             cid = (query.get("club_id") or [""])[0]

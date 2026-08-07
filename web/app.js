@@ -205,7 +205,9 @@ $('ptable').addEventListener('click', (e) => {
 
 $('parse-bulk').onclick = () => {
   const lines = $('bulk').value.split('\n').map((s) => s.trim()).filter(Boolean);
-  let added = 0;
+  // Nama yang sudah ada dilewati, tanpa membedakan huruf besar-kecil - menempel
+  // daftar dua kali seharusnya tidak menggandakan pesertanya.
+  let added = 0, skipped = 0;
   lines.forEach((line) => {
     const parts = line.split(/[,;\t]/).map((s) => s.trim());
     const name = parts[0];
@@ -222,12 +224,15 @@ $('parse-bulk').onclick = () => {
         else if (['P', 'F', 'W', 'CEWEK', 'WANITA', 'PUTRI'].includes(g)) gender = 'F';
       }
     }
-    players.push({ id: nextId++, name, rating, gender, partner_id: null, court_preference: null });
-    added++;
+    if (addParticipant(name, rating, gender)) added++;
+    else skipped++;
   });
   $('bulk').value = '';
   renderPlayers();
-  if (added) toast(`${added} peserta ditambahkan`);
+  const bits = [];
+  if (added) bits.push(`${added} peserta ditambahkan`);
+  if (skipped) bits.push(`${skipped} dilewati (sudah ada)`);
+  if (bits.length) toast(bits.join(', '));
 };
 
 $('clear-players').onclick = () => {
@@ -320,7 +325,47 @@ function scheduleAnalyze() {
   analyzeTimer = setTimeout(runAnalyze, 250);
 }
 
+/**
+ * Ringkasan uang di tab Setup: biaya, pemasukan, untung, margin.
+ *
+ * Dihitung langsung di browser dari angka yang sama yang dipakai panel Biaya,
+ * supaya host melihat konsekuensi fee-nya sambil menyusun acara - bukan setelah
+ * pindah tab dan menekan tombol.
+ */
+function renderSetupEconomics(report) {
+  const host = $('setup-econ');
+  const n = players.length;
+  const price = +$('court_price').value || 0;
+  const fee = +$('fee').value || 0;
+  const other = +$('other_costs').value || 0;
+  const hours = (+$('duration').value || 0) / 60;
+  const courts = +$('courts').value || 0;
+
+  if (n < 4 || (!price && !fee)) { host.textContent = ''; return; }
+
+  const cost = courts * hours * price + other;
+  const revenue = n * fee;
+  const profit = revenue - cost;
+  const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
+  const perPlayer = n ? cost / n : 0;
+  const minutes = report ? report.playing_minutes_per_player : 0;
+
+  // Ambang bermakna, bukan selera: rugi itu bad, margin tipis (<15%) perlu
+  // diperhatikan, sisanya aman.
+  const state = profit < 0 ? 'bad' : margin < 15 ? 'warn' : 'good';
+
+  host.innerHTML = '<div class="stat-grid" style="margin-top:12px">'
+    + statTileHTML('Biaya total', rp(cost), `${courts} court x ${hours} jam`)
+    + statTileHTML('Pemasukan', rp(revenue), `${n} x ${rp(fee)}`)
+    + statTileHTML('Untung', rp(profit), `margin ${margin.toFixed(1)}%`, state)
+    + statTileHTML('Titik impas', rp(perPlayer), 'fee minimal / peserta')
+    + (minutes ? statTileHTML('Harga / menit main', rp(fee / minutes),
+                              `${minutes} menit di lapangan`) : '')
+    + '</div>';
+}
+
 async function runAnalyze() {
+  renderSetupEconomics(null);
   if (players.length < 4) {
     $('analysis').innerHTML = '<div class="empty">Butuh minimal 4 peserta.</div>';
     return;
@@ -355,13 +400,15 @@ async function runAnalyze() {
     }
     $('analysis').innerHTML = '';
     $('analysis').appendChild(box);
+    renderSetupEconomics(r);
   } catch (e) {
     $('analysis').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
   }
 }
 
-['courts', 'duration', 'round_min', 'warmup', 'mode', 'tier_count', 'referees', 'ballboys']
-  .forEach((id) => $(id).addEventListener('change', scheduleAnalyze));
+['courts', 'duration', 'round_min', 'warmup', 'mode', 'tier_count', 'referees',
+ 'ballboys', 'court_price', 'fee', 'other_costs']
+  .forEach((id) => $(id).addEventListener('input', scheduleAnalyze));
 
 $('mode').addEventListener('change', () => {
   $('tier-row').style.display = $('mode').value === 'tiered' ? '' : 'none';
@@ -530,8 +577,10 @@ function renderSchedule() {
 
   // Rekap
   const showRoles = schedule.config.referees_per_court || schedule.config.ballboys_per_court;
-  let html = '<table class="data"><thead><tr><th>Nama</th><th>Main</th><th>Duduk</th>' +
-    (showRoles ? '<th>Wasit</th><th>Ballboy</th>' : '') + '</tr></thead><tbody>';
+  let html = '<table class="data"><thead><tr><th>Nama</th>'
+    + '<th class="num">Main</th><th class="num">Duduk</th>'
+    + (showRoles ? '<th class="num">Wasit</th><th class="num">Ballboy</th>' : '')
+    + '</tr></thead><tbody>';
   schedule.players.slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((p) => {
     const roles = st.roles_per_player[p.id] || {};
     html += `<tr><td>${esc(p.name)}</td><td class="num">${st.plays_per_player[p.id] || 0}</td>` +
@@ -626,8 +675,10 @@ async function loadEvents() {
       renderPager($('events-pager'), d, () => {});
       return;
     }
-    let html = '<table class="data"><thead><tr><th>Judul</th><th>Tanggal</th><th>Venue</th>' +
-      '<th>Peserta</th><th>Court</th><th>Ronde</th><th>Kualitas</th><th></th></tr></thead><tbody>';
+    let html = '<table class="data"><thead><tr><th>Judul</th><th>Tanggal</th>'
+      + '<th>Venue</th><th class="num">Peserta</th><th class="num">Court</th>'
+      + '<th class="num">Ronde</th><th class="num">Kualitas</th><th></th>'
+      + '</tr></thead><tbody>';
     d.items.forEach((e) => {
       html += `<tr><td>${esc(e.title)}</td><td>${esc(tanggalID(e.event_date))}</td>` +
         `<td>${esc(e.venue || '-')}</td><td class="num">${e.n_players}</td>` +
@@ -723,13 +774,18 @@ function clubVenues() {
 }
 
 function clubPlayers() {
+  // Server sudah menyaring per klub; ini jaring pengaman kalau data lama
+  // masih punya pemain tanpa klub (mis. klubnya pernah dihapus).
   const cid = currentClubId();
   return master.players.filter((p) => !p.club_id || p.club_id === cid);
 }
 
 /** Muat data master untuk mengisi combobox. Tabel dimuat terpisah per halaman. */
 async function loadMaster() {
-  master = await api('/api/master');
+  // Klub yang aktif dikirim ke server supaya penyaringan terjadi di sana,
+  // bukan setelah data klub lain terlanjur ikut terkirim.
+  const cid = $('club_id').value;
+  master = await api('/api/master' + (cid ? `?club_id=${encodeURIComponent(cid)}` : ''));
   if (!$('club_id').value && master.default_club_id) {
     const c = master.clubs.find((x) => x.id === master.default_club_id);
     if (c) { $('club_id').value = c.id; $('club_name').value = c.name; }
@@ -737,6 +793,96 @@ async function loadMaster() {
   $('vn_club').innerHTML = master.clubs
     .map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   Object.values(combos).forEach((c) => c.refresh());
+}
+
+// -- pemilih peserta --------------------------------------------------------
+/** Tambahkan satu orang ke daftar peserta. Return false kalau sudah ada. */
+function addParticipant(name, rating, gender) {
+  const key = (name || '').trim().toLowerCase();
+  if (!key) return false;
+  if (players.some((p) => p.name.trim().toLowerCase() === key)) return false;
+  players.push({
+    id: nextId++, name: name.trim(),
+    rating: Number.isFinite(+rating) ? +rating : 3.0,
+    gender: gender || null, partner_id: null, court_preference: null,
+  });
+  return true;
+}
+
+function setupParticipantPicker() {
+  const input = $('pick_player');
+  combos.pick = createCombo({
+    input,
+    hidden: $('pick_player_id'),
+    // Yang sudah masuk daftar tidak ditawarkan lagi - kalau ditawarkan, host
+    // mengklik lalu tidak terjadi apa-apa dan itu terasa seperti bug.
+    getItems: () => {
+      const taken = new Set(players.map((p) => p.name.trim().toLowerCase()));
+      return clubPlayers().filter((m) => !taken.has(m.name.trim().toLowerCase()));
+    },
+    meta: (m) => [m.gender === 'M' ? 'L' : m.gender === 'F' ? 'P' : null,
+                  `rating ${m.rating}`].filter(Boolean).join(' · '),
+    emptyText: 'Semua anggota master sudah masuk daftar.',
+    onSelect: (m) => {
+      const ok = addParticipant(m.name, m.rating, m.gender);
+      // Kotak dikosongkan supaya bisa langsung mengetik nama berikutnya.
+      input.value = '';
+      $('pick_player_id').value = '';
+      renderPlayers();
+      toast(ok ? `${m.name} ditambahkan` : `${m.name} sudah ada di daftar`);
+      input.focus();
+    },
+    quickAdd: {
+      title: 'Peserta baru',
+      fields: [
+        { key: 'rating', label: 'Rating', type: 'number', step: '0.5',
+          min: 0, value: 3 },
+        { key: 'gender', label: 'L/P', type: 'select', value: '',
+          options: [{ value: '', label: '-' }, { value: 'M', label: 'Laki-laki' },
+                    { value: 'F', label: 'Perempuan' }] },
+      ],
+      validate: (name, v) => {
+        const r = Number(v.rating);
+        if (!Number.isFinite(r) || r < 0 || r > 7) return 'Rating harus 0-7.';
+        if (players.some((p) => p.name.trim().toLowerCase()
+                                === name.trim().toLowerCase())) {
+          return 'Nama itu sudah ada di daftar peserta.';
+        }
+        return null;
+      },
+      // Disimpan ke master sekaligus dimasukkan ke daftar peserta - host yang
+      // mengetik nama baru jelas bermaksud mengundangnya ke acara ini juga.
+      save: async (name, v) => {
+        const r = await api('/api/players/save', {
+          club_id: currentClubId(), name,
+          rating: +v.rating || 3, gender: v.gender || null,
+        });
+        await loadMaster();
+        addParticipant(name, +v.rating || 3, v.gender || null);
+        input.value = '';
+        $('pick_player_id').value = '';
+        renderPlayers();
+        toast(`${name} disimpan ke master & ditambahkan`);
+        return { id: r.id, name };
+      },
+    },
+  });
+
+  // Enter pada satu-satunya saran = langsung tambah, tanpa perlu klik.
+  input.addEventListener('keydown', (e) => {
+    if (e.key !== 'Enter') return;
+    const typed = input.value.trim();
+    if (!typed) return;
+    const hit = clubPlayers().find(
+      (m) => m.name.trim().toLowerCase() === typed.toLowerCase());
+    if (!hit) return;                  // biarkan combobox yang menangani
+    e.preventDefault();
+    if (addParticipant(hit.name, hit.rating, hit.gender)) {
+      input.value = '';
+      renderPlayers();
+      toast(`${hit.name} ditambahkan`);
+    }
+  });
 }
 
 // -- combobox Setup ---------------------------------------------------------
@@ -845,8 +991,9 @@ async function loadMasterTables() {
 async function renderPlayers_() {
   const d = await loadPaged('players');
   $('players-table').innerHTML = d.items.length
-    ? '<table class="data"><thead><tr><th>Nama</th><th>Panggilan</th><th>Rating</th>' +
-      '<th>L/P</th><th>Level</th><th></th></tr></thead><tbody>' +
+    ? '<table class="data"><thead><tr><th>Nama</th><th>Panggilan</th>'
+      + '<th class="num">Rating</th><th class="num">L/P</th><th>Level</th>'
+      + '<th></th></tr></thead><tbody>' +
       d.items.map((p) =>
         `<tr><td>${esc(p.name)}</td><td>${esc(p.nickname || '-')}</td>` +
         `<td class="num">${p.rating}</td>` +
@@ -877,7 +1024,8 @@ async function renderClubs_() {
 async function renderVenues_() {
   const d = await loadPaged('venues');
   $('venues-table').innerHTML = d.items.length
-    ? '<table class="data"><thead><tr><th>Nama</th><th>Court</th><th>Harga/jam</th><th>Alamat</th><th></th></tr></thead><tbody>' +
+    ? '<table class="data"><thead><tr><th>Nama</th><th class="num">Court</th>'
+      + '<th class="num">Harga/jam</th><th>Alamat</th><th></th></tr></thead><tbody>' +
       d.items.map((v) =>
         `<tr><td>${esc(v.name)}</td><td class="num">${v.court_count}</td>` +
         `<td class="num">${rp(v.price_per_hour)}</td><td>${esc(v.address || '-')}</td>` +
@@ -1069,8 +1217,10 @@ async function loadPlayerStats() {
     statsHost.textContent = '';
     statsHost.appendChild(restShareChart(d.stats, statsHost.clientWidth));
     $('stats-table').innerHTML =
-      '<table class="data"><thead><tr><th>Nama</th><th>Ikut acara</th><th>Ronde main</th>' +
-      '<th>Ronde duduk</th><th>% duduk</th><th>Tugas</th><th>Terakhir</th></tr></thead><tbody>' +
+      '<table class="data"><thead><tr><th>Nama</th>'
+      + '<th class="num">Ikut acara</th><th class="num">Ronde main</th>'
+      + '<th class="num">Ronde duduk</th><th class="num">% duduk</th>'
+      + '<th class="num">Tugas</th><th>Terakhir</th></tr></thead><tbody>' +
       d.stats.map((s) =>
         `<tr><td>${esc(s.name)}</td><td class="num">${s.events}</td>` +
         `<td class="num">${s.rounds_played}</td><td class="num">${s.rounds_rested}</td>` +
@@ -1215,6 +1365,7 @@ async function loadClubSummary() {
   } catch (e) { /* biarkan default */ }
 
   setupCombos();
+  setupParticipantPicker();
   try { await loadMaster(); } catch (e) { /* database belum siap, abaikan */ }
   renderPlayers();
 })();

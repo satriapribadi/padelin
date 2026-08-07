@@ -292,6 +292,62 @@ def main() -> int:
             return b.js("document.getElementById('counts').textContent.trim()")
         check(f"Tempel massal {len(roster)} peserta", bulk)
 
+        # --- 1b. autocomplete peserta dari master -------------------------
+        PC = "document.getElementById('pick_player').closest('.combo')"
+
+        def picker():
+            # Simpan dulu roster ke master supaya ada yang bisa disarankan.
+            b.js("document.getElementById('save-roster').click(); true")
+            time.sleep(1.2)
+            before = b.js("document.querySelectorAll('#ptable tbody tr').length")
+
+            # Hapus satu peserta, lalu tambahkan lagi lewat autocomplete.
+            removed = b.js("(() => { const t = document.querySelector("
+                           "'#ptable tbody tr:last-child .nm').value;"
+                           " document.querySelector('#ptable tbody tr:last-child "
+                           ".x').click(); return t; })()")
+            b.wait_for(f"document.querySelectorAll('#ptable tbody tr').length === "
+                       f"{before - 1}", timeout=5, label="peserta terhapus")
+
+            b.js("(() => { const i = document.getElementById('pick_player');"
+                 " i.focus(); i.value = " + json.dumps(removed[:3]) + ";"
+                 " i.dispatchEvent(new Event('input', {bubbles:true})); })(); true")
+            b.wait_for(PC + ".querySelector('.combo-row')", timeout=5,
+                       label="saran peserta")
+            suggestions = b.js(PC + ".querySelectorAll('.combo-row').length")
+            b.js(PC + ".querySelector('.combo-row').dispatchEvent("
+                 "new MouseEvent('mousedown', {bubbles:true})); true")
+            b.wait_for(f"document.querySelectorAll('#ptable tbody tr').length === "
+                       f"{before}", timeout=5, label="peserta kembali")
+            cleared = b.js("document.getElementById('pick_player').value === ''")
+            assert cleared, "kotak tidak dikosongkan setelah memilih"
+            return f"{suggestions} saran, '{removed}' dikembalikan"
+        check("Autocomplete peserta dari master", picker)
+
+        def no_duplicate():
+            before = b.js("document.querySelectorAll('#ptable tbody tr').length")
+            name = b.js("document.querySelector('#ptable tbody tr .nm').value")
+            # Nama yang sudah ada tidak boleh muncul sebagai saran.
+            b.js("(() => { const i = document.getElementById('pick_player');"
+                 " i.focus(); i.value = " + json.dumps("") + ";"
+                 " i.dispatchEvent(new Event('input', {bubbles:true})); })(); true")
+            time.sleep(0.4)
+            listed = b.js(PC + ".querySelectorAll('.combo-row')"
+                          ".length && [..." + PC + ".querySelectorAll('.combo-row')]"
+                          ".map(e => e.textContent)")
+            if listed:
+                assert not any(name in t for t in listed), (
+                    f"'{name}' masih ditawarkan padahal sudah di daftar")
+            # Tempel ulang seluruh roster: tidak boleh menggandakan.
+            b.js("(() => { document.getElementById('bulk').value = "
+                 + json.dumps("\n".join(roster))
+                 + "; document.getElementById('parse-bulk').click(); })(); true")
+            time.sleep(0.6)
+            after = b.js("document.querySelectorAll('#ptable tbody tr').length")
+            assert after == before, f"tempel ulang menggandakan: {before} -> {after}"
+            return f"tetap {after} peserta"
+        check("Duplikat peserta ditolak", no_duplicate)
+
         # --- 2. analisa kelayakan otomatis --------------------------------
         def analyze():
             b.js("document.getElementById('courts').value = 4;"

@@ -100,8 +100,16 @@ Klub (dengan logo), venue (harga sewa mengisi panel Biaya otomatis), pemain,
 riwayat acara, dan statistik lintas acara — siapa yang rajin datang, siapa yang
 paling sering kebagian duduk. Tabelnya berhalaman dan bisa dicari.
 
-Venue dan klub bisa ditambahkan langsung dari tab Setup: ketik namanya, kalau
-belum ada di master muncul tawaran menyimpannya di tempat, tanpa pindah menu.
+Venue, klub, dan peserta bisa ditambahkan langsung dari tab Setup: ketik
+namanya, kalau belum ada di master muncul tawaran menyimpannya di tempat, tanpa
+pindah menu. Peserta juga bisa ditempel sekaligus satu nama per baris.
+
+Nama yang sama dianggap orang yang sama walau beda huruf besar-kecil: "Nisa"
+dan "NISA" tidak akan jadi dua anggota. Ejaan yang sudah dipakai dipertahankan -
+menyimpan variasi kapital memperbarui datanya, bukan mengganti namanya.
+
+Fee peserta dan sewa court diisi di tab Setup, dan biaya, untung, serta margin
+langsung terhitung di sana sambil kamu menyusun acara.
 
 **Grafik**
 Tiga grafik yang menjawab pertanyaan yang tidak terjawab oleh satu angka:
@@ -134,14 +142,14 @@ web/
   _selftest.html            halaman verifikasi visual grafik (bukan bagian app)
 tools/
   uitest.py                 uji interaksi UI lewat DevTools Protocol
-tests/                      59 tes unit
+tests/                      62 tes unit
 ```
 
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 59 tes unit
-python tools/uitest.py                  # 15 uji interaksi di browser sungguhan
+python -m unittest discover -s tests    # 62 tes unit
+python tools/uitest.py                  # 17 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 ```
 

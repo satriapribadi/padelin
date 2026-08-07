@@ -364,6 +364,57 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(again, cid)
             self.assertEqual(rows[0]["city"], "B")
 
+    def test_duplicate_names_merge_regardless_of_case(self):
+        """"Nisa" dan "NISA" itu orang yang sama.
+
+        UNIQUE di SQLite membandingkan teks persis, jadi beda kapital lolos
+        sebagai dua anggota berbeda - sangat mungkin terjadi kalau host mengetik
+        nama yang sama di waktu berbeda.
+        """
+        with storage.session(self.db) as conn:
+            cid = storage.ensure_default_club(conn)
+            for names in (["Aci", "Aci"], ["Ebbie", " Ebbie "],
+                          ["Nisa", "NISA"], ["Orin", "orin"]):
+                before = len(storage.list_players(conn, cid))
+                storage.bulk_save_players(
+                    conn, cid, [{"name": n, "rating": 3} for n in names])
+                added = len(storage.list_players(conn, cid)) - before
+                self.assertEqual(added, 1, f"{names} jadi {added} baris")
+
+    def test_case_variant_updates_without_renaming(self):
+        """Menyimpan variasi kapital memperbarui datanya, bukan mengganti nama."""
+        with storage.session(self.db) as conn:
+            cid = storage.ensure_default_club(conn)
+            pid = storage.save_player(conn, {"club_id": cid, "name": "Aci",
+                                             "rating": 3})
+            again = storage.save_player(conn, {"club_id": cid, "name": "aCi",
+                                               "rating": 5})
+            rows = storage.list_players(conn, cid)
+            self.assertEqual(again, pid, "harusnya memakai baris yang sama")
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["name"], "Aci", "ejaan lama tidak boleh berubah")
+            self.assertEqual(rows[0]["rating"], 5.0)
+
+            # Ganti nama lewat id eksplisit tetap boleh - itu memang disengaja.
+            storage.save_player(conn, {"id": pid, "club_id": cid,
+                                       "name": "Aci Baru", "rating": 4})
+            self.assertEqual(storage.list_players(conn, cid)[0]["name"], "Aci Baru")
+
+    def test_venue_and_club_duplicates_also_merge(self):
+        with storage.session(self.db) as conn:
+            cid = storage.ensure_default_club(conn)
+            a = storage.save_venue(conn, {"club_id": cid, "name": "Arena Utama",
+                                          "court_count": 4})
+            b = storage.save_venue(conn, {"club_id": cid, "name": "ARENA UTAMA",
+                                          "court_count": 6})
+            self.assertEqual(a, b)
+            self.assertEqual(len(storage.list_venues(conn, cid)), 1)
+            self.assertEqual(storage.list_venues(conn, cid)[0]["court_count"], 6)
+
+            c1 = storage.save_club(conn, {"name": "Vinotek"})
+            c2 = storage.save_club(conn, {"name": "vinotek", "city": "Jakarta"})
+            self.assertEqual(c1, c2)
+
     def test_event_roundtrip_and_participants(self):
         sch = make_schedule(n=12, courts=2)
         data = to_dict(sch)

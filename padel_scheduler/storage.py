@@ -205,6 +205,28 @@ DEFAULT_PAGE_SIZE = 25
 MAX_PAGE_SIZE = 200
 
 
+def _find_by_name(conn, table: str, club_id, name: str):
+    """Cari baris berdasarkan nama, TANPA membedakan huruf besar-kecil.
+
+    UNIQUE di SQLite membandingkan teks secara persis, jadi "Nisa" dan "NISA"
+    lolos sebagai dua orang berbeda - kejadian yang sangat mungkin kalau host
+    mengetik nama yang sama di waktu berbeda. Pencarian ini yang mencegahnya.
+    """
+    name = (name or "").strip()
+    if not name:
+        return None
+    if table == "clubs":
+        row = conn.execute(
+            "SELECT id FROM clubs WHERE name = ? COLLATE NOCASE", (name,)
+        ).fetchone()
+    else:
+        row = conn.execute(
+            f"SELECT id FROM {table} WHERE club_id IS ? AND name = ? COLLATE NOCASE",
+            (club_id, name),
+        ).fetchone()
+    return int(row["id"]) if row else None
+
+
 def _where(table: str, club_id: int | None, include_inactive: bool,
            search: str) -> tuple[str, list]:
     sql = " WHERE 1=1"
@@ -277,6 +299,12 @@ def save_club(conn, data: dict) -> int:
     if not vals[0]:
         raise ValueError("Nama klub wajib diisi.")
     cid = data.get("id")
+    if not cid:
+        cid = _find_by_name(conn, "clubs", None, vals[0])
+        if cid:
+            row = conn.execute("SELECT name FROM clubs WHERE id=?",
+                               (cid,)).fetchone()
+            vals[0] = row["name"]
 
     # logo tidak disertakan -> pertahankan yang lama; string kosong -> hapus.
     logo = data.get("logo")
@@ -356,6 +384,12 @@ def save_venue(conn, data: dict) -> int:
         (data.get("notes") or "").strip(),
     )
     vid = data.get("id")
+    if not vid:
+        vid = _find_by_name(conn, "venues", vals[0], name)
+        if vid:
+            row = conn.execute("SELECT name FROM venues WHERE id=?",
+                               (vid,)).fetchone()
+            vals = (vals[0], row["name"], *vals[2:])
     if vid:
         conn.execute(
             "UPDATE venues SET club_id=?, name=?, address=?, court_count=?, "
@@ -424,6 +458,14 @@ def save_player(conn, data: dict) -> int:
         (data.get("joined_at") or "").strip(),
     )
     pid = data.get("id")
+    if not pid:
+        # Ditemukan lewat nama berarti host hanya salah kapital, bukan sedang
+        # mengganti nama - ejaan yang sudah dipakai dipertahankan.
+        pid = _find_by_name(conn, "players", vals[0], name)
+        if pid:
+            row = conn.execute("SELECT name FROM players WHERE id=?",
+                               (pid,)).fetchone()
+            vals = (vals[0], row["name"], *vals[2:])
     if pid:
         conn.execute(
             "UPDATE players SET club_id=?, name=?, nickname=?, contact=?, gender=?, "
@@ -468,19 +510,23 @@ def bulk_save_players(conn, club_id: int, people: list[dict]) -> int:
         if not name:
             continue
         gender = p.get("gender") if p.get("gender") in ("M", "F") else None
-        conn.execute(
-            """
-            INSERT INTO players (club_id, name, gender, rating, active,
-                                 created_at, updated_at)
-            VALUES (?,?,?,?,1,?,?)
-            ON CONFLICT(club_id, name) DO UPDATE SET
-                rating     = excluded.rating,
-                gender     = COALESCE(excluded.gender, players.gender),
-                active     = 1,
-                updated_at = excluded.updated_at
-            """,
-            (club_id, name, gender, float(p.get("rating", 3.0)), _now(), _now()),
-        )
+        rating = float(p.get("rating", 3.0))
+        existing = _find_by_name(conn, "players", club_id, name)
+        if existing:
+            # Nama yang sama beda kapital tetap orang yang sama; jangan bikin
+            # baris kedua. Nama aslinya dipertahankan supaya ejaan yang sudah
+            # dipakai host tidak berubah diam-diam.
+            conn.execute(
+                "UPDATE players SET rating=?, gender=COALESCE(?, gender), "
+                "active=1, updated_at=? WHERE id=?",
+                (rating, gender, _now(), existing),
+            )
+        else:
+            conn.execute(
+                "INSERT INTO players (club_id, name, gender, rating, active, "
+                "created_at, updated_at) VALUES (?,?,?,?,1,?,?)",
+                (club_id, name, gender, rating, _now(), _now()),
+            )
         n += 1
     conn.commit()
     return n

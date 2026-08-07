@@ -140,7 +140,8 @@ table{width:100%; border-collapse:collapse}
   color:var(--muted); border-bottom:1px solid var(--line)}
 .recap td{padding:3px 9px; border-bottom:1px solid #f2f4f7; font-size:10.5px}
 .recap tr:last-child td{border-bottom:none}
-.recap td.num{font-variant-numeric:tabular-nums; text-align:center}
+.recap td.num,.recap th.num{text-align:center}
+.recap td.num{font-variant-numeric:tabular-nums}
 .recap tbody tr:nth-child(even){background:#fcfdfe}
 
 .note{background:var(--band); border-left:3px solid var(--muted);
@@ -352,14 +353,20 @@ def build_html(
     chunks = ([roster[: (len(roster) + 1) // 2], roster[(len(roster) + 1) // 2:]]
               if split else [roster])
 
-    headers = ["Nama", "Rating", "L/P", "Main", "Duduk"]
+    # (judul, apakah kolom angka). Judul kolom angka harus rata tengah juga -
+    # kalau judulnya kiri sementara isinya tengah, keduanya terlihat meleset.
+    headers = [("Nama", False), ("Rating", True), ("L/P", True),
+               ("Main", True), ("Duduk", True)]
     if show_roles:
-        headers += ["W", "B"]
+        headers += [("W", True), ("B", True)]
 
     parts.append(f"<div class='recap-wrap{' split' if split else ''}'>")
     for chunk in chunks:
         parts.append("<table class='recap'><thead><tr>")
-        parts.append("".join(f"<th>{_e(h)}</th>" for h in headers))
+        parts.append("".join(
+            "<th class='num'>" + _e(h) + "</th>" if is_num
+            else "<th>" + _e(h) + "</th>"
+            for h, is_num in headers))
         parts.append("</tr></thead><tbody>")
         for p in chunk:
             roles = st.roles_per_player.get(p.id, {})

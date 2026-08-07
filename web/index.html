@@ -91,6 +91,19 @@
     </div>
 
     <div class="card">
+      <h2>Biaya &amp; fee <span class="hint">margin dihitung otomatis</span></h2>
+      <div class="row three">
+        <div><label>Sewa court / jam</label>
+          <input type="number" id="court_price" value="200000" step="10000"></div>
+        <div><label>Fee per peserta</label>
+          <input type="number" id="fee" value="75000" step="5000"></div>
+        <div><label>Biaya lain</label>
+          <input type="number" id="other_costs" value="0" step="10000"></div>
+      </div>
+      <div id="setup-econ"></div>
+    </div>
+
+    <div class="card">
       <h2>Format babak <span class="hint">kosongkan untuk satu babak biasa</span></h2>
       <div class="row one">
         <div><label>Preset</label><select id="preset"></select></div>
@@ -106,9 +119,19 @@
 
   <div>
     <div class="card">
-      <h2>Peserta <span class="hint">tempel daftar nama, satu per baris</span></h2>
+      <h2>Peserta</h2>
       <div class="row one">
         <div>
+          <label>Tambah satu per satu
+            <span class="hint">ketik nama, diambil dari master pemain</span></label>
+          <input id="pick_player" placeholder="Ketik nama peserta, lalu Enter">
+          <input type="hidden" id="pick_player_id">
+        </div>
+      </div>
+      <div class="row one">
+        <div>
+          <label>Atau tempel sekaligus
+            <span class="hint">satu nama per baris</span></label>
           <textarea id="bulk" placeholder="Contoh (rating & L/P opsional):&#10;Andi, 4, L&#10;Rina, 3.5, P&#10;Budi&#10;Sinta, 2, P"></textarea>
         </div>
       </div>
@@ -185,17 +208,12 @@
 <section class="view" id="view-biaya">
   <div class="grid">
     <div class="card">
-      <h2>Biaya &amp; harga</h2>
-      <div class="row one">
-        <div><label>Sewa court per jam (Rp)</label><input type="number" id="court_price" value="200000" step="10000"></div>
+      <h2>Biaya &amp; harga <span class="hint">diisi di tab Setup</span></h2>
+      <div id="econ-inputs-note" class="issue info">
+        <div class="d">Sewa court, fee peserta, dan biaya lain diisi di tab
+          <b>Setup</b> supaya angkanya satu tempat saja.</div>
       </div>
-      <div class="row one">
-        <div><label>Fee per peserta (Rp)</label><input type="number" id="fee" value="75000" step="5000"></div>
-      </div>
-      <div class="row one">
-        <div><label>Biaya lain (bola, air, hadiah)</label><input type="number" id="other_costs" value="0" step="10000"></div>
-      </div>
-      <div class="btn-row"><button class="btn" id="calc-econ">Hitung</button></div>
+      <div class="btn-row"><button class="btn" id="calc-econ">Hitung ulang</button></div>
       <div id="fee-suggest" style="margin-top:14px"></div>
     </div>
     <div>

@@ -147,12 +147,24 @@ export function createCombo(cfg) {
       const cell = document.createElement('div');
       const lab = document.createElement('label');
       lab.textContent = f.label;
-      const inp = document.createElement('input');
-      inp.type = f.type || 'text';
-      if (f.step) inp.step = f.step;
-      if (f.min !== undefined) inp.min = f.min;
-      inp.value = f.value !== undefined ? f.value : '';
-      inp.placeholder = f.placeholder || '';
+
+      let inp;
+      if (f.type === 'select') {
+        inp = document.createElement('select');
+        (f.options || []).forEach((o) => {
+          const opt = document.createElement('option');
+          opt.value = o.value;
+          opt.textContent = o.label;   // label bisa dari data, jangan innerHTML
+          inp.appendChild(opt);
+        });
+      } else {
+        inp = document.createElement('input');
+        inp.type = f.type || 'text';
+        if (f.step) inp.step = f.step;
+        if (f.min !== undefined) inp.min = f.min;
+        inp.placeholder = f.placeholder || '';
+      }
+      if (f.value !== undefined) inp.value = f.value;
       inputs[f.key] = inp;
       cell.append(lab, inp);
       grid.appendChild(cell);
