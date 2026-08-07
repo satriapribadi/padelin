@@ -63,8 +63,10 @@ body{
   padding:7px 15px; font-size:12px; font-weight:600; white-space:nowrap;
 }
 
-.tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(104px,1fr));
-  gap:6px; margin-bottom:14px}
+/* 94px supaya tujuh kartu (dengan fee) muat sebaris di lebar A4; dengan 104px
+   kartu terakhir jatuh sendirian ke baris kedua dan terlihat belum rampung. */
+.tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(94px,1fr));
+  gap:5px; margin-bottom:14px}
 .tile{background:var(--band); border:1px solid var(--line); border-radius:7px;
   padding:6px 9px}
 .tile .k{font-size:8.5px; text-transform:uppercase; letter-spacing:.06em;
@@ -189,6 +191,11 @@ def _e(s) -> str:
     return html.escape(str(s), quote=True)
 
 
+def _rupiah(value: float) -> str:
+    """Rp dengan pemisah ribuan gaya Indonesia (titik)."""
+    return "Rp " + f"{round(value):,}".replace(",", ".")
+
+
 def _clock(minutes: int, start_clock: str | None) -> str:
     if not start_clock:
         return f"+{minutes} mnt"
@@ -208,6 +215,7 @@ def build_html(
     start_clock: str | None = None,
     include_toolbar: bool = True,
     logo: str = "",
+    fee: float = 0.0,
 ) -> str:
     """Rakit laporan HTML lengkap sebagai satu dokumen mandiri."""
     names = {p.id: p.name for p in schedule.players}
@@ -269,7 +277,18 @@ def build_html(
     opp_note = ("pasang" if played <= max_opp_rounds
                 else f"pasang · batas matematis {max_opp_rounds} ronde")
 
-    tiles = [
+    tiles = []
+
+    # Fee ditaruh paling depan: itu hal pertama yang dicari peserta saat
+    # laporannya dibagikan. Keterangannya memakai harga per menit main, bukan
+    # per acara - peserta menilai harga dari waktu di lapangan.
+    if fee and fee > 0:
+        minutes = min(plays) * cfg.round_minutes
+        sub = (f"{_rupiah(fee / minutes)} / menit main" if minutes
+               else "per peserta")
+        tiles.append(("Fee per peserta", _rupiah(fee), sub))
+
+    tiles += [
         ("Ronde", str(len(schedule.rounds)), f"{cfg.round_minutes} menit / ronde"),
         ("Main per orang", f"{min(plays)}-{max(plays)}", "ronde"),
         ("Partner berulang", str(st.partner_repeat_pairs), partner_note),

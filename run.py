@@ -551,6 +551,7 @@ class Handler(BaseHTTPRequestHandler):
                     venue=payload.get("venue", ""),
                     start_clock=payload.get("start_clock") or None,
                     logo=_club_logo(payload.get("club_id")),
+                    fee=_econ_from(payload).fee_per_player,
                 )
                 self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
             except ScheduleError as exc:

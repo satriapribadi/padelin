@@ -279,6 +279,23 @@ class TestExports(unittest.TestCase):
         self.assertNotIn("batas matematis", h,
                          "batas disebut padahal tidak ada pengulangan paksa")
 
+    def test_html_shows_fee_per_player(self):
+        """Fee itu hal pertama yang dicari peserta saat laporan dibagikan."""
+        players = [Player(id=i, name=f"P{i}") for i in range(8)]
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, effort=4000, rounds_override=12)
+        sch = build_schedule(players, cfg)
+
+        h = build_html(sch, fee=85000)
+        self.assertIn("Fee per peserta", h)
+        self.assertIn("Rp 85.000", h, "pemisah ribuan harus titik")
+        # Keterangannya harga per menit main - peserta menilai harga dari waktu
+        # di lapangan, bukan dari lama acara.
+        self.assertIn("/ menit main", h)
+
+        # Tanpa fee, kartunya tidak boleh muncul sama sekali.
+        self.assertNotIn("Fee per peserta", build_html(sch, fee=0))
+
     def test_html_escapes_player_names(self):
         players = [Player(id=i, name=f"<script>{i}</script>") for i in range(8)]
         sch = build_schedule(players, Config(courts=2, duration_minutes=60))

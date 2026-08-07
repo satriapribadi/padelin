@@ -94,7 +94,9 @@ keputusannya sadar, bukan menebak.
   tim B rata kanan dalam kolom terkunci, rekap pemain dipecah dua kolom kalau
   peserta banyak. Meet 8 orang 12 ronde muat satu halaman; 26 orang 11 ronde
   jadi dua
-- Logo klub tertanam di kepala laporan
+- Logo klub tertanam di kepala laporan, dan fee per peserta jadi kartu paling
+  depan - lengkap dengan harga per menit main, karena peserta menilai harga dari
+  waktu di lapangan, bukan dari lama acara
 - Teks siap tempel ke grup WhatsApp, plus jadwal per pemain
 - CSV untuk Excel / Google Sheets
 
