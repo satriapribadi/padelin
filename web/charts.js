@@ -244,8 +244,8 @@ function dataTable(headers, rows) {
  * dipakai diberi warna aksen, sisanya abu-abu (bentuk emphasis, bukan
  * kategorikal — ceritanya satu titik, bukan identitas tiap titik).
  */
-export function tradeoffChart(options, current) {
-  const W = 640, H = 320;
+export function tradeoffChart(options, current, width = 640) {
+  const W = Math.max(420, Math.round(width) || 640), H = 320;
   const M = { t: 14, r: 20, b: 42, l: 66 };
   const iw = W - M.l - M.r, ih = H - M.t - M.b;
 
@@ -388,7 +388,7 @@ export function tradeoffChart(options, current) {
  * Inilah cara tercepat melihat apakah pembagiannya adil untuk 26 orang -
  * tabel 26 baris menyembunyikan pencilan, batang menampakkannya.
  */
-export function engagementChart(players, stats, totalRounds) {
+export function engagementChart(players, stats, totalRounds, width = 640) {
   const rows = players.map((p) => {
     const roles = stats.roles_per_player[p.id] || {};
     const play = stats.plays_per_player[p.id] || 0;
@@ -398,8 +398,8 @@ export function engagementChart(players, stats, totalRounds) {
 
   const barH = Math.min(BAR_MAX, Math.max(9, Math.floor(300 / rows.length)));
   const gap = Math.max(4, Math.round(barH * 0.45));
-  const labelW = 108, valueW = 40;
-  const W = 640;
+  const W = Math.max(360, Math.round(width) || 640);
+  const labelW = Math.min(140, Math.max(78, W * 0.2)), valueW = 40;
   const iw = W - labelW - valueW - 12;
   const H = rows.length * (barH + gap) + 26;
 
@@ -484,7 +484,7 @@ export function engagementChart(players, stats, totalRounds) {
  * Satu seri, satu warna. Yang memberi makna bukan warna melainkan garis acuan
  * rata-rata: siapa yang duduk jauh di atas porsi wajarnya selama ini.
  */
-export function restShareChart(stats) {
+export function restShareChart(stats, width = 640) {
   const rows = stats.filter((r) => (r.rounds_played + r.rounds_rested) > 0)
     .sort((a, b) => b.rest_pct - a.rest_pct);
   if (!rows.length) {
@@ -499,7 +499,8 @@ export function restShareChart(stats) {
 
   const barH = Math.min(BAR_MAX, Math.max(9, Math.floor(300 / rows.length)));
   const gap = Math.max(4, Math.round(barH * 0.45));
-  const labelW = 108, valueW = 46, W = 640;
+  const W = Math.max(360, Math.round(width) || 640);
+  const labelW = Math.min(140, Math.max(78, W * 0.2)), valueW = 46;
   const iw = W - labelW - valueW - 12;
   const H = rows.length * (barH + gap) + 30;
   const sx = (v) => (v / maxV) * iw;

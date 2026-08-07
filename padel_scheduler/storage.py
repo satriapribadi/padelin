@@ -296,13 +296,27 @@ def save_club(conn, data: dict) -> int:
         conn.commit()
         return int(cid)
 
-    cur = conn.execute(
-        "INSERT INTO clubs (name, city, contact, wa_group, notes, logo, "
-        "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+    # Baris yang pernah dihapus masih memegang UNIQUE(nama), jadi insert
+    # dengan nama sama harus MENGHIDUPKAN KEMBALI baris itu, bukan gagal.
+    conn.execute(
+        """
+        INSERT INTO clubs (name, city, contact, wa_group, notes, logo,
+                           created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(name) DO UPDATE SET
+            city       = excluded.city,
+            contact    = excluded.contact,
+            wa_group   = excluded.wa_group,
+            notes      = excluded.notes,
+            logo       = excluded.logo,
+            active     = 1,
+            updated_at = excluded.updated_at
+        """,
         (*vals, logo or "", _now(), _now()),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    row = conn.execute("SELECT id FROM clubs WHERE name = ?", (vals[0],)).fetchone()
+    return int(row["id"])
 
 
 def get_club(conn, club_id: int) -> dict | None:
@@ -350,13 +364,28 @@ def save_venue(conn, data: dict) -> int:
         )
         conn.commit()
         return int(vid)
-    cur = conn.execute(
-        "INSERT INTO venues (club_id, name, address, court_count, price_per_hour, "
-        "notes, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?)",
+    # Baris yang pernah dihapus masih memegang UNIQUE(nama), jadi insert
+    # dengan nama sama harus MENGHIDUPKAN KEMBALI baris itu, bukan gagal.
+    conn.execute(
+        """
+        INSERT INTO venues (club_id, name, address, court_count, price_per_hour,
+                            notes, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?)
+        ON CONFLICT(club_id, name) DO UPDATE SET
+            address        = excluded.address,
+            court_count    = excluded.court_count,
+            price_per_hour = excluded.price_per_hour,
+            notes          = excluded.notes,
+            active         = 1,
+            updated_at     = excluded.updated_at
+        """,
         (*vals, _now(), _now()),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    row = conn.execute(
+        "SELECT id FROM venues WHERE club_id IS ? AND name = ?", (vals[0], vals[1])
+    ).fetchone()
+    return int(row["id"])
 
 
 def delete_venue(conn, venue_id: int) -> None:
@@ -404,14 +433,31 @@ def save_player(conn, data: dict) -> int:
         )
         conn.commit()
         return int(pid)
-    cur = conn.execute(
-        "INSERT INTO players (club_id, name, nickname, contact, gender, rating, "
-        "level_label, notes, joined_at, created_at, updated_at) "
-        "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+    # Baris yang pernah dihapus masih memegang UNIQUE(nama), jadi insert
+    # dengan nama sama harus MENGHIDUPKAN KEMBALI baris itu, bukan gagal.
+    conn.execute(
+        """
+        INSERT INTO players (club_id, name, nickname, contact, gender, rating,
+                             level_label, notes, joined_at, created_at, updated_at)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(club_id, name) DO UPDATE SET
+            nickname    = excluded.nickname,
+            contact     = excluded.contact,
+            gender      = excluded.gender,
+            rating      = excluded.rating,
+            level_label = excluded.level_label,
+            notes       = excluded.notes,
+            joined_at   = excluded.joined_at,
+            active      = 1,
+            updated_at  = excluded.updated_at
+        """,
         (*vals, _now(), _now()),
     )
     conn.commit()
-    return int(cur.lastrowid)
+    row = conn.execute(
+        "SELECT id FROM players WHERE club_id IS ? AND name = ?", (vals[0], vals[1])
+    ).fetchone()
+    return int(row["id"])
 
 
 def bulk_save_players(conn, club_id: int, people: list[dict]) -> int:

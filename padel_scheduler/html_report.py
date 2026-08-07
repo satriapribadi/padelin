@@ -15,6 +15,7 @@ from __future__ import annotations
 import html
 
 from .models import Schedule
+from .report import format_date_id
 
 PREF_LABELS = {
     "women_only": "court isi 4 perempuan",
@@ -180,7 +181,7 @@ def build_html(
         fmt = " + ".join(f"{s.label} {s.rounds}r" for s in cfg.segments if s.rounds)
 
     plays = list(st.plays_per_player.values()) or [0]
-    meta_bits = [b for b in (event_date, venue) if b]
+    meta_bits = [b for b in (format_date_id(event_date), venue) if b]
     meta_bits.append(f"{len(schedule.players)} peserta")
     meta_bits.append(f"{cfg.courts} court")
     meta_bits.append(f"{cfg.duration_minutes} menit")

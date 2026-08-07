@@ -200,6 +200,48 @@ class TestStorage(unittest.TestCase):
             self.assertEqual(len(rows), 1, "nama sama tidak boleh dobel")
             self.assertEqual(rows[0]["rating"], 4.5)
 
+    def test_readd_after_delete_revives_row(self):
+        """Hapus lalu tambah lagi dengan nama sama harus menghidupkan barisnya.
+
+        Penghapusan bersifat soft agar riwayat acara tetap utuh, tapi baris itu
+        masih memegang UNIQUE(nama). Tanpa upsert, menambahkan kembali anggota
+        yang pernah keluar gagal dengan error internal - bukan skenario langka:
+        peserta keluar lalu bergabung lagi itu hal biasa di klub.
+        """
+        with storage.session(self.db) as conn:
+            cid = storage.ensure_default_club(conn)
+
+            for label, save, delete, lister, key in (
+                ("venue", storage.save_venue, storage.delete_venue,
+                 storage.list_venues, "court_count"),
+                ("player", storage.save_player, storage.delete_player,
+                 storage.list_players, "rating"),
+            ):
+                first = save(conn, {"club_id": cid, "name": f"Sama {label}",
+                                    "court_count": 2, "rating": 2.0})
+                delete(conn, first)
+                self.assertEqual(len(lister(conn, cid)), 0, label)
+
+                again = save(conn, {"club_id": cid, "name": f"Sama {label}",
+                                    "court_count": 5, "rating": 4.5})
+                rows = lister(conn, cid)
+                self.assertEqual(len(rows), 1, f"{label} terduplikasi")
+                self.assertEqual(again, first, f"{label} tidak memakai baris lama")
+                self.assertEqual(
+                    rows[0][key], 5 if key == "court_count" else 4.5,
+                    f"{label}: nilai baru tidak tersimpan")
+
+    def test_readd_club_after_delete(self):
+        with storage.session(self.db) as conn:
+            cid = storage.save_club(conn, {"name": "Klub Balik", "city": "A"})
+            storage.delete_club(conn, cid)
+            self.assertEqual(len(storage.list_clubs(conn)), 0)
+            again = storage.save_club(conn, {"name": "Klub Balik", "city": "B"})
+            rows = storage.list_clubs(conn)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(again, cid)
+            self.assertEqual(rows[0]["city"], "B")
+
     def test_event_roundtrip_and_participants(self):
         sch = make_schedule(n=12, courts=2)
         data = to_dict(sch)

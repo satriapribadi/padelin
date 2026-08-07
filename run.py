@@ -36,7 +36,13 @@ from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_an
 from padel_scheduler.html_report import build_html
 from padel_scheduler.models import COURT_PREFERENCES
 from padel_scheduler.presets import PRESETS
-from padel_scheduler.report import to_csv, to_dict, to_personal_text, to_text
+from padel_scheduler.report import (
+    format_date_id,
+    to_csv,
+    to_dict,
+    to_personal_text,
+    to_text,
+)
 from padel_scheduler.scheduler import ScheduleError
 
 WEB_DIR = Path(__file__).parent / "web"

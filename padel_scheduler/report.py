@@ -5,8 +5,29 @@ from __future__ import annotations
 import csv
 import io
 from dataclasses import asdict
+from datetime import date
 
 from .models import Schedule
+
+HARI = ("Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu")
+BULAN = ("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
+         "Agustus", "September", "Oktober", "November", "Desember")
+
+
+def format_date_id(value: str) -> str:
+    """ISO (2026-08-09) -> "Sabtu, 9 Agustus 2026".
+
+    Nilai yang bukan ISO dikembalikan apa adanya: acara lama tersimpan dengan
+    tanggal berupa teks bebas dan tidak boleh rusak hanya karena formatnya
+    berubah.
+    """
+    value = (value or "").strip()
+    try:
+        d = date.fromisoformat(value)
+    except (ValueError, TypeError):
+        return value
+    return f"{HARI[d.weekday()]}, {d.day} {BULAN[d.month - 1]} {d.year}"
+
 
 PREF_LABELS = {
     "women_only": "court isi 4 perempuan",

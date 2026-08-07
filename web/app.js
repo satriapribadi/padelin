@@ -16,6 +16,21 @@ const el = (tag, cls, html) => {
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const rp = (n) => 'Rp ' + Math.round(n || 0).toLocaleString('id-ID');
+
+const HARI = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
+const BULAN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli',
+  'Agustus', 'September', 'Oktober', 'November', 'Desember'];
+
+/** ISO (2026-08-09) -> "Sabtu, 9 Agustus 2026". Nilai lain lewat apa adanya. */
+function tanggalID(v) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec((v || '').trim());
+  if (!m) return v || '-';
+  // Konstruktor UTC, lalu dibaca sebagai UTC juga: kalau tidak, zona waktu
+  // negatif menggeser tanggalnya mundur satu hari.
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  return `${HARI[d.getUTCDay()]}, ${d.getUTCDate()} ${BULAN[d.getUTCMonth()]} `
+    + `${d.getUTCFullYear()}`;
+}
 const pct = (x) => (x * 100).toFixed(0) + '%';
 
 function toast(msg) {
@@ -355,8 +370,8 @@ $('generate').onclick = async () => {
   try {
     schedule = await api('/api/schedule', buildPayload());
     currentEventId = null;
-    renderSchedule();
     document.querySelector('.tabs button[data-view="jadwal"]').click();
+    renderSchedule();
     toast('Jadwal siap');
   } catch (e) {
     $('gen-msg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
@@ -440,9 +455,12 @@ function renderSchedule() {
   // Grafik komposisi ronde: mencari ketimpangan di antara 26 orang jauh
   // lebih cepat lewat batang daripada lewat tabel 26 baris.
   hideTip();
-  $('engagement').textContent = '';
-  $('engagement').appendChild(
-    engagementChart(schedule.players, st, schedule.rounds.length));
+  const host = $('engagement');
+  host.textContent = '';
+  // Lebar wadah dibaca saat ini juga; tab sudah ditampilkan lebih dulu supaya
+  // clientWidth-nya nyata, bukan nol.
+  host.appendChild(engagementChart(schedule.players, st,
+                                   schedule.rounds.length, host.clientWidth));
 
   // Catatan
   let notes = '';
@@ -522,7 +540,7 @@ async function loadEvents() {
     let html = '<table class="data"><thead><tr><th>Judul</th><th>Tanggal</th><th>Venue</th>' +
       '<th>Peserta</th><th>Court</th><th>Ronde</th><th>Kualitas</th><th></th></tr></thead><tbody>';
     d.items.forEach((e) => {
-      html += `<tr><td>${esc(e.title)}</td><td>${esc(e.event_date || '-')}</td>` +
+      html += `<tr><td>${esc(e.title)}</td><td>${esc(tanggalID(e.event_date))}</td>` +
         `<td>${esc(e.venue || '-')}</td><td class="num">${e.n_players}</td>` +
         `<td class="num">${e.courts}</td><td class="num">${e.rounds}</td>` +
         `<td class="num">${e.quality_score}</td>` +
@@ -553,8 +571,8 @@ $('events').addEventListener('click', async (e) => {
     applyRequest(d.event.request);
     schedule = d.event.schedule;
     currentEventId = +open;
-    renderSchedule();
     document.querySelector('.tabs button[data-view="jadwal"]').click();
+    renderSchedule();
     toast('Jadwal dimuat');
   } else if (del) {
     if (!confirm('Hapus jadwal ini?')) return;
@@ -958,8 +976,9 @@ async function loadPlayerStats() {
       return;
     }
     hideTip();
-    $('stats-chart').textContent = '';
-    $('stats-chart').appendChild(restShareChart(d.stats));
+    const statsHost = $('stats-chart');
+    statsHost.textContent = '';
+    statsHost.appendChild(restShareChart(d.stats, statsHost.clientWidth));
     $('stats-table').innerHTML =
       '<table class="data"><thead><tr><th>Nama</th><th>Ikut acara</th><th>Ronde main</th>' +
       '<th>Ronde duduk</th><th>% duduk</th><th>Tugas</th><th>Terakhir</th></tr></thead><tbody>' +
@@ -1046,8 +1065,9 @@ $('calc-econ').onclick = async () => {
     $('fee-suggest').innerHTML = fs + '</div>';
 
     hideTip();
-    $('econ-chart').textContent = '';
-    $('econ-chart').appendChild(tradeoffChart(d.options, c));
+    const chartHost = $('econ-chart');
+    chartHost.textContent = '';
+    chartHost.appendChild(tradeoffChart(d.options, c, chartHost.clientWidth));
 
     let html = '<table class="data"><thead><tr><th>Court</th><th>Jam</th><th>Ronde</th>' +
       '<th>Duduk</th><th>Main/org</th><th>Biaya</th><th>Untung</th><th>Margin</th><th></th></tr></thead><tbody>';

@@ -116,14 +116,27 @@ web/
   app.js                    antarmuka (module, tanpa framework)
   charts.js                 grafik SVG buatan sendiri
   combo.js                  combobox autocomplete + quick-add
-tests/                      45 tes
+  _selftest.html            halaman verifikasi visual grafik (bukan bagian app)
+tools/
+  uitest.py                 uji interaksi UI lewat DevTools Protocol
+tests/                      47 tes unit
 ```
 
 ## Tes
 
 ```bash
-python -m unittest discover -s tests
+python -m unittest discover -s tests    # 47 tes unit
+python tools/uitest.py                  # 14 uji interaksi di browser sungguhan
 ```
+
+`tools/uitest.py` menjalankan Edge/Chrome headless, menyambung ke DevTools
+Protocol, lalu benar-benar mengetik, mengklik, dan hover di halaman: tempel 26
+peserta, generate jadwal, tukar grafik ke tabel, munculkan tooltip, ketik venue
+baru sampai tersimpan ke master. Klien WebSocket-nya ditulis sendiri agar tetap
+nol dependency. Tesnya idempotent - data uji dihapus lagi di akhir.
+
+Ini bukan pelengkap: tiga bug lolos dari seluruh tes unit dan pemeriksaan statis,
+dan baru ketahuan dari menjalankan serta melihat aplikasinya sungguhan.
 
 Yang diuji adalah properti keras: tidak ada pemain di dua court sekaligus,
 aturan gender ditegakkan 100%, partner terkunci tetap terkunci, pemula tidak

@@ -131,20 +131,29 @@ Catatan penting: hijau `--good` dan merah `--bad` hanya berjarak dE 6.5 di bawah
 deuteranopia. Karena itu status TIDAK PERNAH disampaikan lewat warna saja -
 kartu `.stat` berstatus selalu membawa glif + kata (lihat `statTile` di app.js).
 
-### Verifikasi visual wajib
+### Verifikasi wajib
 
-Setelah mengubah grafik, **render dan lihat hasilnya** - pemeriksaan statis
-tidak cukup. `web/_selftest.html` merender ketiga grafik dengan data API
+Setelah mengubah UI, **jalankan dan lihat** - pemeriksaan statis tidak cukup.
+Jalankan `python tools/uitest.py`: ia mengendalikan Edge/Chrome headless lewat
+DevTools Protocol dan benar-benar mengetik, mengklik, serta hover di halaman.
+
+Untuk grafik, **render dan lihat gambarnya**. `web/_selftest.html` merender ketiga grafik dengan data API
 sungguhan dan menampilkan error JS di dalam halaman:
 
 ```
 msedge --headless=new --disable-gpu --virtual-time-budget=12000        --screenshot=out.png --window-size=1000,1560        http://127.0.0.1:8770/web/_selftest.html
 ```
 
-Pakai data sungguhan, bukan sintetis. Dua bug lolos dari data sintetis dan baru
-ketahuan dari data asli: rentang tick yang tidak mencakup nilai maksimum
-(titik tergambar di luar sumbu), dan daftar skenario biaya yang tidak memuat
-pilihan court host sendiri (titik acuannya hilang).
+Pakai data sungguhan, bukan sintetis. Tiga bug lolos dari seluruh tes unit dan
+pemeriksaan statis, lalu ketahuan hanya dari menjalankan aplikasinya:
+
+1. rentang tick tidak mencakup nilai maksimum - titik tergambar di luar sumbu
+2. daftar skenario biaya tidak memuat pilihan court host sendiri - titik
+   acuannya hilang dari grafik
+3. hapus lalu tambah lagi dengan nama sama gagal 500 (UNIQUE bentrok dengan
+   baris yang di-soft-delete)
+
+Ketiganya kelas bug yang sama: benar menurut kode, salah menurut mata.
 
 Sebelum menambah chart baru, **muat skill `dataviz` lebih dulu**. Jangan tulis
 kode chart dari nol. Petakan palet `dataviz` ke token di atas: `accent` untuk seri utama,
