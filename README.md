@@ -191,12 +191,26 @@ bagian dari program — jadi ia selamat saat aplikasi diperbarui atau dipasang
 ulang. Menu **Bantuan → Buka folder data** membuka lokasinya. Jalur ini bisa
 diarahkan lewat variabel lingkungan `PADELIN_DB`.
 
-**Pembaruan tanpa pasang ulang.** `electron-builder` menerbitkan berkas
-`.blockmap` di samping tiap installer; `electron-updater` membandingkannya
-dengan versi terpasang lalu mengunduh **blok yang berubah saja** — pembaruan
-yang cuma menyentuh kode Python dan `web/` biasanya ratusan KB, bukan installer
-utuh. Pengunduhan berjalan di latar, pemasangan saat aplikasi ditutup, dan
-**Bantuan → Periksa pembaruan** untuk memeriksa manual.
+**Pembaruan tanpa pasang ulang.** Aplikasi terpasang memeriksa rilis terbaru
+sendiri, mengunduhnya di latar belakang, dan memasangnya saat aplikasi ditutup.
+Ada juga **Bantuan → Periksa pembaruan** untuk memeriksa manual.
+
+Terbukti ujung ke ujung: 1.0.0 terpasang menemukan 1.0.1, mengunduhnya, dan
+memasangnya; lalu 1.0.1 melakukan hal yang sama ke 1.0.2 — tanpa kredensial apa
+pun karena repo rilisnya publik.
+
+`electron-builder` juga menerbitkan `.blockmap` di samping tiap installer, yang
+dipakai `electron-updater` untuk mengunduh hanya bagian yang berubah. **Jalur
+itu belum pernah terbukti di sini**: pengujian dilakukan lewat feed HTTP lokal
+yang tidak melayani permintaan multi-rentang, sehingga updater selalu mundur ke
+unduhan utuh. GitHub melayani multi-rentang, jadi di produksi jalur diferensial
+semestinya terpakai — tapi selama belum diukur, jangan menjanjikan angkanya ke
+siapa pun.
+
+Satu jebakan yang sudah ditutup: `electron-builder` membuat rilis sebagai
+**draft** secara bawaan, dan draft tidak terlihat tanpa token. Build sukses,
+unggah sukses, tapi aplikasi tidak pernah menemukan pembaruannya — gagal tanpa
+satu pun pesan error. Karena itu `releaseType: release` dipasang eksplisit.
 
 **Kode privat, installer publik.** Repo kode `satriapribadi/padelin` tetap
 privat; hasil build diunggah ke repo terpisah `satriapribadi/padelin-rilis`

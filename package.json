@@ -1,6 +1,6 @@
 {
   "name": "padelin",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "private": true,
   "description": "Padelin - penyusun jadwal meet padel, sebagai aplikasi desktop",
   "author": "Padelin",
@@ -80,7 +80,8 @@
       {
         "provider": "github",
         "owner": "satriapribadi",
-        "repo": "padelin-rilis"
+        "repo": "padelin-rilis",
+        "releaseType": "release"
       }
     ],
     "afterPack": "electron/after-pack.js"
