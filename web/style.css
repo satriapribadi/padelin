@@ -5,6 +5,11 @@
   --good:#3ec98a; --good-dim:#17402e;
   --warn:#f0a94c; --warn-dim:#4a3418;
   --bad:#f2685f; --bad-dim:#4a1f1c;
+  /* Satu langkah lebih terang dari --line. Memakai --line langsung membuat
+     thumb hampir lenyap di atas --panel, dan scrollbar tidak cuma alat geser:
+     ia juga yang memberi tahu masih ada isi di bawah. Tapi tetap di bawah
+     --dim, supaya ia tidak ikut bersaing dengan teks. */
+  --scroll:#3a4a5e;
   --radius:10px;
 }
 *{box-sizing:border-box}
@@ -13,6 +18,41 @@ body{
   font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
 }
 button,input,select,textarea{font-family:inherit;font-size:inherit}
+
+/* ---------- scrollbar ----------
+   Scrollbar bawaan datang dengan track terang dan tombol panah - di atas
+   panel gelap ia terlihat seperti potongan aplikasi lain yang nyasar, dan
+   itu bagian pertama yang membuat app ini terasa "bukan aplikasi sungguhan".
+
+   color-scheme dipasang lebih dulu sebagai dasar: ia membuat Chromium
+   menggelapkan scrollbar DAN kontrol form bawaan (dropdown, date picker,
+   caret) tanpa satu pun aturan tambahan. Kalau gaya kustom di bawah tidak
+   terpakai - browser lain, atau scrollbar overlay bawaan OS - tampilannya
+   tetap gelap, bukan kembali putih menyilaukan.
+
+   Sisanya menyesuaikan bentuk: track dibuat transparan supaya ia mengambil
+   warna panel tempatnya menempel (kartu, dropdown, dan log punya latar yang
+   berbeda-beda), thumb memakai warna garis yang sama dengan pembatas di
+   seluruh app, dan tombol panah dibuang - keduanya hanya menambah lebar dan
+   tidak pernah dipakai orang. */
+:root{color-scheme:dark}
+
+*{scrollbar-width:thin; scrollbar-color:var(--scroll) transparent}
+
+::-webkit-scrollbar{width:10px; height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-corner{background:transparent}
+/* Tombol panah dimatikan lewat dua jalur: sebagian versi Chromium tetap
+   menyisakan kotak kosong kalau hanya display:none. */
+::-webkit-scrollbar-button{display:none; width:0; height:0}
+::-webkit-scrollbar-thumb{
+  background:var(--scroll); border-radius:99px;
+  /* Border transparan menyusutkan thumb dari dalam, jadi ada jarak napas ke
+     tepi tanpa mengecilkan area yang bisa digenggam mouse. */
+  border:2px solid transparent; background-clip:padding-box;
+}
+::-webkit-scrollbar-thumb:hover{background:var(--dim)}
+::-webkit-scrollbar-thumb:active{background:var(--accent-dim)}
 
 /* ---------- kerangka ---------- */
 header{

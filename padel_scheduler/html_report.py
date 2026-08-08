@@ -50,6 +50,23 @@ body{
 }
 .sheet{max-width:900px;margin:0 auto}
 
+/* Scrollbar disamakan seperti di aplikasi, tapi dengan palet TERANG - laporan
+   ini bertema terang, jadi menyalin gaya gelap dari sana justru membuatnya
+   terlihat asing. Hanya berlaku di layar; saat dicetak scrollbar tidak ada.
+   Matriks pertemuan bisa lebih lebar dari layar sempit, dan di situlah
+   scrollbar bawaan paling terlihat mengganggu. */
+*{scrollbar-width:thin; scrollbar-color:#c3cad4 transparent}
+::-webkit-scrollbar{width:10px; height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-corner{background:transparent}
+::-webkit-scrollbar-button{display:none; width:0; height:0}
+::-webkit-scrollbar-thumb{
+  background:#c3cad4; border-radius:99px;
+  border:2px solid transparent; background-clip:padding-box;
+}
+::-webkit-scrollbar-thumb:hover{background:var(--muted)}
+::-webkit-scrollbar-thumb:active{background:var(--accent)}
+
 /* Format babak panjang ("Sesama gender 8r + Mixed 4r + ...") dulu memaksa
    masthead melar: badge-nya nowrap dan blok judul tidak boleh menyusut, jadi
    keduanya saling dorong sampai badge menembus keluar garis dan menimpa judul
