@@ -50,17 +50,28 @@ body{
 }
 .sheet{max-width:900px;margin:0 auto}
 
+/* Format babak panjang ("Sesama gender 8r + Mixed 4r + ...") dulu memaksa
+   masthead melar: badge-nya nowrap dan blok judul tidak boleh menyusut, jadi
+   keduanya saling dorong sampai badge menembus keluar garis dan menimpa judul
+   serta logo. Sekarang badge boleh turun baris (flex-wrap) dan teksnya boleh
+   membungkus, sedangkan blok judul diberi min-width:0 supaya ikut menyusut. */
 .masthead{
   border-bottom:2px solid var(--accent); padding-bottom:10px; margin-bottom:14px;
-  display:flex; justify-content:space-between; align-items:flex-end; gap:24px;
+  display:flex; flex-wrap:wrap; justify-content:space-between;
+  align-items:flex-end; gap:8px 24px;
 }
 .masthead h1{margin:0 0 3px; font-size:21px; letter-spacing:-.02em}
-.brand{display:flex; align-items:center; gap:14px}
+/* 440px kira-kira lebar logo + judul satu baris. Dijadikan basis flex supaya
+   badge yang panjang turun ke barisnya sendiri, bukan menyempitkan judul sampai
+   membelah dua baris; badge pendek tetap duduk sebaris seperti biasa. */
+.brand{display:flex; align-items:center; gap:14px; flex:1 1 440px; min-width:0}
+.brand>div{min-width:0}
 .logo{width:40px; height:40px; object-fit:contain; flex:none}
 .masthead .meta{color:var(--muted); font-size:12.5px}
 .badge{
   background:var(--accent); color:#fff; border-radius:999px;
-  padding:7px 15px; font-size:12px; font-weight:600; white-space:nowrap;
+  padding:7px 15px; font-size:12px; font-weight:600;
+  max-width:100%; text-align:right; overflow-wrap:anywhere;
 }
 
 /* 94px supaya tujuh kartu (dengan fee) muat sebaris di lebar A4; dengan 104px
@@ -225,7 +236,18 @@ def build_html(
 
     fmt = MODE_LABELS.get(cfg.mode, cfg.mode)
     if cfg.segments and any(s.label for s in cfg.segments):
-        fmt = " + ".join(f"{s.label} {s.rounds}r" for s in cfg.segments if s.rounds)
+        # Babak berlabel sama dijumlahkan rondenya, bukan disebut berulang.
+        # Babak "Sesama gender" bisa terpecah jadi banyak potongan (putra/putri,
+        # dan lebih parah lagi kalau selang-seling memecahnya per ronde), yang
+        # membuat badge berbunyi "Sesama gender 1r + Sesama gender 1r + ..."
+        # enam kali - panjangnya berlipat tanpa satu pun informasi tambahan,
+        # dan itulah yang menabrak judul. Urutan main tetap terbaca lengkap di
+        # daftar ronde di bawah; badge ini memang cuma ringkasan format.
+        totals: dict[str, int] = {}
+        for s in cfg.segments:
+            if s.rounds:
+                totals[s.label] = totals.get(s.label, 0) + s.rounds
+        fmt = " + ".join(f"{label} {rounds}r" for label, rounds in totals.items())
 
     plays = list(st.plays_per_player.values()) or [0]
     meta_bits = [b for b in (format_date_id(event_date), venue) if b]
