@@ -181,7 +181,13 @@ table.data .pick{color:var(--good);font-weight:700}
    melebihi layar - jadi tabelnya menggulir di dalam wadahnya sendiri, dan
    kolom nama dipaku supaya baris yang sedang dibaca tidak kehilangan
    identitasnya saat digulir ke kanan. */
-.mx-wrap{overflow:auto;max-height:520px;border:1px solid var(--line);border-radius:8px}
+/* Matriks duduk di kolom yang sama dengan Catatan, jadi lebarnya mengikuti
+   kartu itu - bukan melebar sendiri dan memaksa seluruh halaman menggulir.
+   Kalau isinya lebih lebar, yang menggulir cukup tabelnya, ke samping saja. */
+.mx-wrap{
+  overflow-x:auto;overflow-y:auto;max-height:520px;max-width:100%;
+  border:1px solid var(--line);border-radius:8px;
+}
 /* width:auto - kalau tabel dipaksa selebar kartu, delapan kolom angka melar
    jadi sel raksasa dan matriksnya kehilangan bentuk. */
 table.data.mx{width:auto;font-size:11.5px;border-collapse:separate;border-spacing:0}
@@ -216,6 +222,21 @@ table.data.mx td.m2{color:var(--warn);background:var(--warn-dim);font-weight:700
 .mx-chip.m0{color:var(--dim);border:1px solid var(--line)}
 .mx-chip.m1{color:var(--good);background:var(--good-dim)}
 .mx-chip.m2{color:var(--warn);background:var(--warn-dim)}
+
+/* Hapus massal di Master Data. Batang aksi hanya muncul saat ada yang
+   dipilih - tombol hapus yang selalu nongol di atas daftar itu mengundang
+   kecelakaan. */
+.bulk-bar{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  padding:8px 11px;margin-bottom:10px;border-radius:8px;
+  background:var(--panel-2);border:1px solid var(--line);
+  font-size:12px;color:var(--ink);
+}
+.bulk-bar>span{margin-right:auto;font-weight:600}
+.btn.ghost.sm.danger{color:var(--bad);border-color:var(--bad-dim)}
+.btn.ghost.sm.danger:hover{border-color:var(--bad)}
+table.data td.pick-col,table.data th.pick-col{width:28px;text-align:center;padding-right:0}
+table.data .pick-col input{cursor:pointer;accent-color:var(--accent)}
 
 .pill{border-radius:999px;padding:2px 9px;font-size:10.5px;font-weight:600;display:inline-block;margin:1px 2px}
 .pill.g{background:var(--good-dim);color:var(--good)}

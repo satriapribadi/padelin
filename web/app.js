@@ -1394,51 +1394,135 @@ async function loadMasterTables() {
   await Promise.all([renderPlayers_(), renderClubs_(), renderVenues_()]);
 }
 
+// ---------------------------------------------------------------------------
+// Pilih banyak lalu hapus sekaligus
+// ---------------------------------------------------------------------------
+// Pilihan disimpan per tabel dan BERTAHAN antar halaman: membersihkan master
+// biasanya berarti menyisir beberapa halaman, dan pilihan yang hilang tiap kali
+// ganti halaman memaksa host menghapus berulang kali per halaman.
+const dipilih = { players: new Set(), clubs: new Set(), venues: new Set() };
+
+const BULK = {
+  players: { url: '/api/players/delete', label: 'pemain', render: () => renderPlayers_() },
+  clubs: { url: '/api/clubs/delete', label: 'klub', render: () => renderClubs_() },
+  venues: { url: '/api/venues/delete', label: 'venue', render: () => renderVenues_() },
+};
+
+/** Kolom centang untuk satu baris. */
+function pickSel(key, id) {
+  const on = dipilih[key].has(id) ? ' checked' : '';
+  return `<td class="pick-col"><input type="checkbox" data-pick="${key}" `
+    + `data-id="${id}" aria-label="Pilih baris"${on}></td>`;
+}
+
+/** Batang aksi di atas tabel. Selalu ada tempatnya, isinya muncul saat ada
+ *  yang dipilih - supaya tabel tidak melompat naik-turun saat mencentang. */
+function bulkBar(key) {
+  const n = dipilih[key].size;
+  if (!n) return '';
+  return `<div class="bulk-bar"><span>${n} ${BULK[key].label} dipilih</span>`
+    + `<button class="btn ghost sm" data-bulk-clear="${key}">Batal pilih</button>`
+    + `<button class="btn ghost sm danger" data-bulk-del="${key}">Hapus ${n} terpilih</button>`
+    + '</div>';
+}
+
+function bindBulk(host, key) {
+  host.querySelectorAll('input[data-pick]').forEach((cb) => {
+    cb.onchange = () => {
+      const id = +cb.dataset.id;
+      if (cb.checked) dipilih[key].add(id); else dipilih[key].delete(id);
+      BULK[key].render();
+    };
+  });
+  const all = host.querySelector('input[data-pick-all]');
+  if (all) {
+    all.onchange = () => {
+      host.querySelectorAll('input[data-pick]').forEach((cb) => {
+        const id = +cb.dataset.id;
+        if (all.checked) dipilih[key].add(id); else dipilih[key].delete(id);
+      });
+      BULK[key].render();
+    };
+  }
+  const clr = host.querySelector('[data-bulk-clear]');
+  if (clr) clr.onclick = () => { dipilih[key].clear(); BULK[key].render(); };
+  const del = host.querySelector('[data-bulk-del]');
+  if (del) del.onclick = async () => {
+    const ids = [...dipilih[key]];
+    if (!ids.length) return;
+    if (!confirm(`Hapus ${ids.length} ${BULK[key].label} dari master? `
+                 + 'Tindakan ini tidak bisa dibatalkan.')) return;
+    try {
+      await api(BULK[key].url, { ids });
+      dipilih[key].clear();
+      await loadMaster();
+      await BULK[key].render();
+      toast(`${ids.length} ${BULK[key].label} terhapus`);
+    } catch (e) { toast(e.message); }
+  };
+}
+
+/** Header centang: tercentang kalau SEMUA baris halaman ini terpilih. */
+function pickAllHead(key, items) {
+  const semua = items.length > 0 && items.every((x) => dipilih[key].has(x.id));
+  return `<th class="pick-col"><input type="checkbox" data-pick-all="${key}" `
+    + `aria-label="Pilih semua di halaman ini"${semua ? ' checked' : ''}></th>`;
+}
+
 async function renderPlayers_() {
   const d = await loadPaged('players');
-  $('players-table').innerHTML = d.items.length
-    ? '<table class="data"><thead><tr><th>Nama</th><th>Panggilan</th>'
+  $('players-table').innerHTML = (d.items.length
+    ? bulkBar('players')
+      + '<table class="data"><thead><tr>' + pickAllHead('players', d.items)
+      + '<th>Nama</th><th>Panggilan</th>'
       + '<th class="num">Rating</th><th class="num">L/P</th><th>Level</th>'
       + '<th></th></tr></thead><tbody>' +
       d.items.map((p) =>
-        `<tr><td>${esc(p.name)}</td><td>${esc(p.nickname || '-')}</td>` +
+        `<tr>${pickSel('players', p.id)}<td>${esc(p.name)}</td><td>${esc(p.nickname || '-')}</td>` +
         `<td class="num">${p.rating}</td>` +
         `<td class="num">${p.gender === 'M' ? 'L' : p.gender === 'F' ? 'P' : '-'}</td>` +
         `<td>${esc(p.level_label || '-')}</td>` +
         `<td><button class="btn ghost sm" data-ed-pl="${p.id}">Ubah</button> ` +
         `<button class="btn ghost sm" data-del-pl="${p.id}">Hapus</button></td></tr>`
       ).join('') + '</tbody></table>'
-    : `<div class="empty">${pager.players.search ? 'Tidak ada yang cocok.' : 'Belum ada pemain. Tambahkan lewat form di atas, atau dari tab Setup klik "Simpan ke master pemain".'}</div>`;
+    : `<div class="empty">${pager.players.search ? 'Tidak ada yang cocok.' : 'Belum ada pemain. Tambahkan lewat form di atas, atau dari tab Setup klik "Simpan ke master pemain".'}</div>`);
+  bindBulk($('players-table'), 'players');
   renderPager($('players-pager'), d, (p) => { pager.players.page = p; renderPlayers_(); });
 }
 
 async function renderClubs_() {
   const d = await loadPaged('clubs');
-  $('clubs-table').innerHTML = d.items.length
-    ? '<table class="data"><thead><tr><th>Klub</th><th>Kota</th><th>Kontak</th><th></th></tr></thead><tbody>' +
+  $('clubs-table').innerHTML = (d.items.length
+    ? bulkBar('clubs')
+      + '<table class="data"><thead><tr>' + pickAllHead('clubs', d.items)
+      + '<th>Klub</th><th>Kota</th><th>Kontak</th><th></th></tr></thead><tbody>' +
       d.items.map((c) =>
-        `<tr><td>${c.logo ? `<img class="logo-mini" src="${esc(c.logo)}" alt="">` : ''}${esc(c.name)}</td>` +
+        `<tr>${pickSel('clubs', c.id)}<td>${c.logo ? `<img class="logo-mini" src="${esc(c.logo)}" alt="">` : ''}${esc(c.name)}</td>` +
         `<td>${esc(c.city || '-')}</td>` +
         `<td>${esc(c.contact || '-')}</td>` +
         `<td><button class="btn ghost sm" data-ed-cl="${c.id}">Ubah</button> ` +
         `<button class="btn ghost sm" data-del-cl="${c.id}">Hapus</button></td></tr>`
       ).join('') + '</tbody></table>'
-    : '<div class="empty">Belum ada klub.</div>';
+    : '<div class="empty">Belum ada klub.</div>');
+  bindBulk($('clubs-table'), 'clubs');
   renderPager($('clubs-pager'), d, (p) => { pager.clubs.page = p; renderClubs_(); });
 }
 
 async function renderVenues_() {
   const d = await loadPaged('venues');
-  $('venues-table').innerHTML = d.items.length
-    ? '<table class="data"><thead><tr><th>Nama</th><th class="num">Court</th>'
+  $('venues-table').innerHTML = (d.items.length
+    ? bulkBar('venues')
+      + '<table class="data"><thead><tr>' + pickAllHead('venues', d.items)
+      + '<th>Nama</th><th class="num">Court</th>'
       + '<th class="num">Harga/jam</th><th>Alamat</th><th></th></tr></thead><tbody>' +
       d.items.map((v) =>
-        `<tr><td>${esc(v.name)}</td><td class="num">${v.court_count}</td>` +
+        `<tr>${pickSel('venues', v.id)}<td>${esc(v.name)}</td><td class="num">${v.court_count}</td>` +
         `<td class="num">${rp(v.price_per_hour)}</td><td>${esc(v.address || '-')}</td>` +
         `<td><button class="btn ghost sm" data-ed-vn="${v.id}">Ubah</button> ` +
         `<button class="btn ghost sm" data-del-vn="${v.id}">Hapus</button></td></tr>`
       ).join('') + '</tbody></table>'
-    : '<div class="empty">Belum ada venue. Isi harga sewa di sini supaya panel Biaya terisi otomatis.</div>';
+    : '<div class="empty">Belum ada venue. Isi harga sewa di sini supaya panel Biaya terisi otomatis.</div>');
+  bindBulk($('venues-table'), 'venues');
   renderPager($('venues-pager'), d, (p) => { pager.venues.page = p; renderVenues_(); });
 }
 

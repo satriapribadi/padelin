@@ -331,9 +331,17 @@ def _master_routes():
 
         def make_delete(fn=deleter):
             def handler(payload: dict) -> dict:
+                # Menerima satu id atau daftar id. Hapus massal dikerjakan dalam
+                # SATU sesi: 30 baris berarti 30 perjalanan bolak-balik kalau
+                # dipecah di klien, dan kalau salah satunya gagal di tengah,
+                # host tidak punya cara tahu mana yang sudah terhapus.
+                ids = payload.get("ids")
+                if ids is None:
+                    ids = [payload["id"]]
                 with storage.session() as conn:
-                    fn(conn, int(payload["id"]))
-                return {"ok": True}
+                    for one in ids:
+                        fn(conn, int(one))
+                return {"ok": True, "deleted": len(ids)}
             return handler
 
         routes[f"/api/{entity}/save"] = make_save()
@@ -365,9 +373,13 @@ ROUTES = {
 
 
 def _delete_club(payload: dict) -> dict:
+    ids = payload.get("ids")
+    if ids is None:
+        ids = [payload["id"]]
     with storage.session() as conn:
-        storage.delete_club(conn, int(payload["id"]))
-    return {"ok": True}
+        for one in ids:
+            storage.delete_club(conn, int(one))
+    return {"ok": True, "deleted": len(ids)}
 
 
 class Handler(BaseHTTPRequestHandler):
