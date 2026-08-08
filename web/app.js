@@ -16,6 +16,11 @@ const el = (tag, cls, html) => {
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const rp = (n) => 'Rp ' + Math.round(n || 0).toLocaleString('id-ID');
+// Angka yang dipakai host sebagai AMBANG ("fee minimal", "supaya tidak nombok")
+// harus dibulatkan ke atas, bukan ke terdekat. Biaya 306.593 dibagi 8 orang =
+// 38.324,125; dibulatkan ke terdekat jadi 38.324, dan host yang menuruti angka
+// itu justru rugi Rp 1 - lalu panelnya sendiri menyebutnya "bermasalah".
+const rpUp = (n) => 'Rp ' + Math.ceil(n || 0).toLocaleString('id-ID');
 
 const HARI = ['Minggu', 'Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
 const BULAN = ['Januari', 'Februari', 'Maret', 'April', 'Mei', 'Juni', 'Juli',
@@ -483,15 +488,23 @@ function renderSetupEconomics(report) {
   const perPlayer = n ? cost / n : 0;
   const minutes = report ? report.playing_minutes_per_player : 0;
 
+  // Fee yang persis titik impas menyisakan receh: biaya 306.593 dibagi 8 tidak
+  // bulat, jadi menagih 38.325 menghasilkan "untung" Rp 7. Itu sisa pembulatan,
+  // bukan laba, dan menandainya oranye "perhatikan" membuat acara patungan yang
+  // memang disengaja terbaca seperti ada yang salah. Ambangnya tetap numerik:
+  // kelebihan di bawah Rp 1 per peserta = impas.
+  const impas = profit >= 0 && profit < n;
   // Ambang bermakna, bukan selera: rugi itu bad, margin tipis (<15%) perlu
   // diperhatikan, sisanya aman.
-  const state = profit < 0 ? 'bad' : margin < 15 ? 'warn' : 'good';
+  const state = profit < 0 ? 'bad' : impas ? 'good' : margin < 15 ? 'warn' : 'good';
 
   host.innerHTML = '<div class="stat-grid" style="margin-top:12px">'
     + statTileHTML('Biaya total', rp(cost), `${courts} court x ${hours} jam`)
     + statTileHTML('Pemasukan', rp(revenue), `${n} x ${rp(fee)}`)
-    + statTileHTML('Untung', rp(profit), `margin ${margin.toFixed(1)}%`, state)
-    + statTileHTML('Titik impas', rp(perPlayer), 'fee minimal / peserta')
+    + (impas
+      ? statTileHTML('Untung', 'Impas', `sisa pembulatan ${rp(profit)}`, 'good')
+      : statTileHTML('Untung', rp(profit), `margin ${margin.toFixed(1)}%`, state))
+    + statTileHTML('Titik impas', rpUp(perPlayer), 'fee minimal / peserta')
     + (minutes ? statTileHTML('Harga / menit main', rp(fee / minutes),
                               `${minutes} menit di lapangan`) : '')
     + '</div>';
@@ -627,7 +640,11 @@ $('generate').onclick = async () => {
         logLine(`${String(data.pct).padStart(5)}%  ${data.message}`);
       } else if (event === 'done') {
         schedule = data;
-        currentEventId = null;
+        // currentEventId TIDAK direset di sini. Dulu direset, jadi "buka dari
+        // riwayat -> ubah sedikit -> Buat jadwal -> Simpan" diam-diam membuat
+        // acara baru alih-alih memperbarui yang dibuka, dan riwayat host penuh
+        // salinan hampir kembar. Kalau memang ingin salinan, ada tombol
+        // "Simpan sebagai baru" yang menyatakan maksud itu secara eksplisit.
         setProgress(100, `Selesai dalam ${data.elapsed} detik`);
         logLine(`Selesai dalam ${data.elapsed} detik`, 'ok');
       } else if (event === 'error') {
@@ -884,17 +901,32 @@ $('open-html').onclick = () => {
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
-$('save-event').onclick = async () => {
+/** Tombol simpan harus menyebut tujuannya sebelum ditekan, bukan sesudah. */
+function renderSaveTarget() {
+  const editing = currentEventId !== null;
+  $('save-event').textContent = editing
+    ? `Simpan ke #${currentEventId}` : 'Simpan ke database';
+  $('save-event-new').style.display = editing ? '' : 'none';
+}
+
+async function saveEvent(asNew) {
   if (!schedule) return toast('Belum ada jadwal');
+  const target = asNew ? null : currentEventId;
   try {
-    const d = await api('/api/events/save', { ...buildPayload(), event_id: currentEventId });
+    const d = await api('/api/events/save', { ...buildPayload(), event_id: target });
     currentEventId = d.id;
-    $('save-msg').innerHTML = `<div class="msg ok">Tersimpan (#${d.id}).</div>`;
-    toast('Tersimpan ke database');
+    renderSaveTarget();
+    $('save-msg').innerHTML = `<div class="msg ok">${
+      target ? `Jadwal #${d.id} diperbarui.` : `Tersimpan sebagai jadwal baru (#${d.id}).`
+    }</div>`;
+    toast(target ? 'Jadwal diperbarui' : 'Tersimpan ke database');
   } catch (e) {
     $('save-msg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
   }
-};
+}
+
+$('save-event').onclick = () => saveEvent(false);
+$('save-event-new').onclick = () => saveEvent(true);
 
 async function loadEvents() {
   try {
@@ -940,6 +972,7 @@ $('events').addEventListener('click', async (e) => {
     applyRequest(d.event.request);
     schedule = d.event.schedule;
     currentEventId = +open;
+    renderSaveTarget();
     document.querySelector('.tabs button[data-view="jadwal"]').click();
     renderSchedule();
     toast('Jadwal dimuat');
@@ -966,6 +999,15 @@ function applyRequest(req) {
   $('referees').value = req.referees_per_court || 0;
   $('ballboys').value = req.ballboys_per_court || 0;
   $('seed').value = req.seed || 42;
+  // Effort ikut tersimpan tapi dulu tidak ikut dipulihkan, jadi jadwal yang
+  // dibuat dengan "Teliti" kembali sebagai "Normal". Diam-diam berbahaya:
+  // menyimpan menghasilkan jadwal ulang, dan effort yang berbeda memberi
+  // susunan berbeda walau seed-nya sama.
+  // Hanya kalau nilainya memang salah satu pilihan: menyetel <select> ke nilai
+  // asing membuatnya kosong, dan buildPayload lalu mengirim effort 0.
+  if (req.effort && [...$('effort').options].some((o) => +o.value === +req.effort)) {
+    $('effort').value = req.effort;
+  }
   $('tier-row').style.display = req.mode === 'tiered' ? '' : 'none';
   $('segments').innerHTML = '';
   $('interleave').checked = !!req.interleave_segments;
@@ -1506,7 +1548,7 @@ $('calc-econ').onclick = async () => {
       tile('Biaya total', rp(c.total_cost), `${c.courts} court x ${c.hours} jam`) +
       tile('Pemasukan', rp(c.revenue), `${c.n_players} x fee`) +
       tile('Untung', rp(c.profit), `margin ${c.margin_pct}%`, c.profit >= 0 ? 'good' : 'bad') +
-      tile('Modal / peserta', rp(c.cost_per_player), 'titik impas') +
+      tile('Modal / peserta', rpUp(c.break_even_fee), 'fee minimal / peserta') +
       tile('Main / peserta', `${c.play_minutes_per_player}`, `menit (${pct(c.rest_ratio)} duduk)`,
         c.rest_ratio > 1 / 3 ? 'warn' : 'good') +
       '</div>' +
@@ -1596,6 +1638,7 @@ async function loadClubSummary() {
 
   setupCombos();
   setupParticipantPicker();
+  renderSaveTarget();
   try { await loadMaster(); } catch (e) { /* database belum siap, abaikan */ }
   renderPlayers();
 })();
