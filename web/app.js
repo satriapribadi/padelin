@@ -672,8 +672,10 @@ $('generate').onclick = async () => {
 
 function renderSchedule() {
   if (!schedule) return;
+  playerById = new Map(schedule.players.map((p) => [p.id, p]));
   const st = schedule.stats;
   const plays = Object.values(st.plays_per_player);
+  const showGender = schedule.players.some((p) => p.gender);
 
   const grid = el('div', 'stat-grid');
   const tile = statTile;
@@ -722,14 +724,15 @@ function renderSchedule() {
       const duty = [];
       (r.roles || []).forEach((x) => {
         if (x.court !== m.court) return;
-        duty.push(`${x.role === 'wasit' ? 'W' : 'B'} ${esc(nameOf(x.player_id))}`);
+        duty.push(`${x.role === 'wasit' ? 'W' : 'B'} ${gname(x.player_id)}`);
       });
       const pool = m.pool ? `<span class="pool">${esc(m.pool)}</span>` : '';
+      const team = (t) => t.map((x) => gname(x.id)).join(' &amp; ');
       card.appendChild(el('div', 'match',
         `<span class="c">C${m.court}</span>` +
-        `<span class="tm">${esc(m.team_a.map((x) => x.name).join(' & '))}${pool}</span>` +
+        `<span class="tm">${team(m.team_a)}${pool}</span>` +
         `<span class="vs">vs</span>` +
-        `<span class="tm b">${esc(m.team_b.map((x) => x.name).join(' & '))}</span>` +
+        `<span class="tm b">${team(m.team_b)}</span>` +
         `<span class="duty">${duty.join(' · ')}</span>`));
     });
 
@@ -737,11 +740,19 @@ function renderSchedule() {
     const idle = r.byes.filter((b) => !busy.has(b.id));
     if (idle.length) {
       card.appendChild(el('div', 'resting',
-        'Istirahat: ' + esc(idle.map((b) => b.name).join(', '))));
+        'Istirahat: ' + idle.map((b) => gname(b.id)).join(', ')));
     }
     box.appendChild(card);
   });
   $('rounds').innerHTML = '';
+  // Legenda hanya muncul kalau gendernya memang terisi. Roster tanpa L/P
+  // menghasilkan nama netral semua, dan menjelaskan warna yang tidak ada di
+  // mana pun cuma bikin bingung.
+  if (showGender) {
+    $('rounds').appendChild(el('div', 'gkey',
+      '<span><b class="g-m">&#9679; Nama biru</b> laki-laki</span>'
+      + '<span><b class="g-f">&#9679; Nama pink</b> perempuan</span>'));
+  }
   $('rounds').appendChild(box);
 
   // Rekap
@@ -750,14 +761,21 @@ function renderSchedule() {
   // orangnya bertugas, jadi angkanya tidak bisa dijumlah dan menyesatkan -
   // seseorang yang 3 kali jadi wasit tetap tercatat "duduk" 3 kali itu.
   const showRoles = schedule.config.referees_per_court || schedule.config.ballboys_per_court;
+  // Kolom L/P ikut ditampilkan supaya warna nama di susunan pertandingan punya
+  // padanan berupa HURUF di halaman yang sama - warna saja tidak cukup, dan
+  // mengirim orang ke tab Peserta hanya untuk memastikan itu memutus alurnya.
   let html = '<table class="data"><thead><tr><th>Nama</th>'
+    + (showGender ? '<th class="num">L/P</th>' : '')
     + '<th class="num">Main</th>'
     + (showRoles ? '<th class="num">Wasit</th><th class="num">Ballboy</th>' : '')
     + '<th class="num">Istirahat</th></tr></thead><tbody>';
   schedule.players.slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((p) => {
     const roles = st.roles_per_player[p.id] || {};
     const idle = (st.byes_per_player[p.id] || 0) - (roles.total || 0);
-    html += `<tr><td>${esc(p.name)}</td>`
+    const gp = p.gender === 'M' ? '<span class="gp m">L</span>'
+      : p.gender === 'F' ? '<span class="gp f">P</span>' : '-';
+    html += `<tr><td>${gname(p.id)}</td>`
+      + (showGender ? `<td class="num">${gp}</td>` : '')
       + `<td class="num">${st.plays_per_player[p.id] || 0}</td>`
       + (showRoles ? `<td class="num">${roles.wasit || 0}</td>`
                      + `<td class="num">${roles.ballboy || 0}</td>` : '')
@@ -784,9 +802,21 @@ function renderSchedule() {
   renderMatrix();
 }
 
-function nameOf(id) {
-  const p = schedule.players.find((x) => x.id === id);
-  return p ? p.name : '?';
+// Peta id -> peserta untuk jadwal yang sedang ditampilkan. Dulu tiap nama
+// dicari dengan find() linear; sekarang nama dipanggil sekali per orang per
+// match, jadi roster 40 orang dengan 12 ronde x 4 court berarti ribuan
+// penelusuran hanya untuk menggambar satu tab.
+let playerById = new Map();
+
+/** Nama peserta sebagai HTML, diwarnai menurut gendernya.
+ *
+ * Yang diberi kelas hanya nama itu sendiri - pemisah "&" dan awalan tugas
+ * "W"/"B" ditulis di luar span supaya tetap netral. */
+function gname(id) {
+  const p = playerById.get(id);
+  const nm = esc(p ? p.name : '?');
+  const cls = !p ? '' : p.gender === 'M' ? 'g-m' : p.gender === 'F' ? 'g-f' : '';
+  return cls ? `<span class="${cls}">${nm}</span>` : nm;
 }
 
 // ---------------------------------------------------------------------------
@@ -844,7 +874,7 @@ function renderMatrix() {
     h += '</tr></thead><tbody>';
     orang.forEach((a) => {
       h += `<tr><th class="mx-row" title="${esc(a.name)}">`
-        + `<span class="mx-no">${nomor.get(a.id)}</span>${esc(a.name)}</th>`;
+        + `<span class="mx-no">${nomor.get(a.id)}</span>${gname(a.id)}</th>`;
       orang.forEach((b) => {
         if (a.id === b.id) { h += '<td class="num mx-self">-</td>'; return; }
         const n = peta.get(kunci(a.id, b.id)) || 0;

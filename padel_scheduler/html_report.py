@@ -40,6 +40,13 @@ CSS = """
   --ink:#12151a; --muted:#5b6472; --line:#e2e6ec; --band:#f5f7fa;
   --accent:#0d5c8c; --accent-soft:#e8f1f7; --warn:#a2560b; --warn-soft:#fdf3e7;
   --good:#1a7a4c; --good-soft:#e8f6ef;
+  /* Gender peserta. Biru untuk laki-laki, magenta-pink untuk perempuan -
+     dua warna yang sama sekali tidak dipakai untuk status, jadi tidak ada yang
+     salah membaca nama merah muda sebagai peringatan. Keduanya digelapkan
+     sampai kontras >= 6:1 di atas kertas putih supaya tetap terbaca setelah
+     dicetak, bukan pastel yang hilang di printer laser. */
+  --male:#1d5fa8; --male-soft:#eaf1fa;
+  --female:#bd2f7d; --female-soft:#fdeef6;
 }
 *{box-sizing:border-box}
 body{
@@ -111,9 +118,13 @@ h2{font-size:10px; text-transform:uppercase; letter-spacing:.09em;
   padding:4px 10px; border-radius:0 5px 5px 0;
   font-weight:700; font-size:11px; color:var(--accent);
 }
-/* Card ronde disusun grid. Jumlah kolom mengikuti lebar isi card: 1 court
-   berarti satu match per card, jadi 3 kolom masih lega; 3+ court butuh selebar
-   halaman. Tanpa ini laporan 12 ronde memakan 3 halaman. */
+/* Card ronde disusun grid, persis seperti tab Jadwal di aplikasi. Jumlah kolom
+   mengikuti lebar yang DIBUTUHKAN isi card, bukan banyaknya match: card dengan
+   4 match tidak perlu lebih LEBAR, hanya lebih TINGGI. Karena itu 3 court ke
+   atas tidak lagi jatuh ke satu kolom - satu kolom selebar A4 membuat kolom tim
+   (1fr) melar sampai kedua nama terlempar ke tepi kiri dan kanan dengan "vs"
+   terdampar di tengah, dan pembacanya harus menyeberangi ruang kosong untuk
+   satu pertandingan. */
 .rounds{display:grid; gap:7px; align-items:start}
 .rounds.cols-1{grid-template-columns:1fr}
 .rounds.cols-2{grid-template-columns:repeat(2,1fr)}
@@ -139,7 +150,7 @@ table{width:100%; border-collapse:collapse}
    Tugas ditaruh di kolom kanan sendiri - bukan di tengah - supaya blok
    "A & B vs C & D" tetap sejajar di semua baris dan mata bisa menyusuri satu
    kolom saja saat mencari lawan. */
-.m{display:grid; grid-template-columns:22px 1fr 16px 1fr 112px;
+.m{display:grid; grid-template-columns:24px 1fr 16px 1fr 104px;
   align-items:baseline; gap:0 6px;
   padding:4px 9px; border-bottom:1px solid #f0f2f5; font-size:11px}
 .m:last-of-type{border-bottom:none}
@@ -148,11 +159,12 @@ table{width:100%; border-collapse:collapse}
 .team.b{text-align:right}
 .vs{color:var(--muted); font-size:9px; font-style:italic; text-align:center}
 
-/* Card sempit (1-2 court): tugas turun ke baris sendiri di bawah matchnya. */
-.cols-2 .m,.cols-3 .m{grid-template-columns:22px 1fr 16px 1fr}
-/* Di card lebar tugas muat sebaris dengan matchnya; hanya di kolom sempit
-   ia turun ke baris sendiri. Memaksanya selalu turun membuat tiap match makan
-   dua baris dan laporan 4 court membengkak dua kali lipat. */
+/* Card sempit: tugas turun ke baris sendiri di bawah matchnya. Semua laporan
+   sekarang memakai cols-2 atau cols-3, jadi inilah bentuk yang sebenarnya
+   terpakai; bentuk lima kolom di atas tinggal cadangan kalau suatu saat ada
+   card selebar halaman lagi. Bentuknya sengaja dibiarkan sama persis dengan
+   web/style.css - laporan ini memang harus terbaca seperti tab Jadwal. */
+.cols-2 .m,.cols-3 .m{grid-template-columns:24px 1fr 16px 1fr}
 .duty{color:var(--muted); font-size:9.5px; text-align:right;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .cols-2 .duty,.cols-3 .duty{grid-column:1 / -1; white-space:normal}
@@ -161,6 +173,25 @@ table{width:100%; border-collapse:collapse}
   margin-left:5px}
 .resting{padding:3px 9px; background:#fafbfc; color:var(--muted);
   font-size:9.5px; border-top:1px solid #f0f2f5}
+
+/* Nama diwarnai per gender supaya komposisi tiap court kebaca sekali lihat -
+   court isi 4 perempuan, tim campur, dan seterusnya - tanpa harus mencocokkan
+   satu per satu ke kolom L/P di rekap. Yang diwarnai hanya NAMANYA; pemisah
+   "&" dan awalan tugas "W"/"B" tetap netral supaya barisnya tidak jadi pelangi.
+   Warna di sini bersifat tambahan, bukan satu-satunya sumber: kolom L/P di
+   rekap tetap memuat hurufnya, jadi laporan yang dicetak hitam-putih tidak
+   kehilangan informasi. */
+.g-m{color:var(--male)}
+.g-f{color:var(--female)}
+.gkey{font-size:9.5px; color:var(--muted); margin:-3px 0 6px;
+  display:flex; gap:14px; flex-wrap:wrap}
+.gkey b{font-weight:700}
+
+/* Pil L/P di rekap: hurufnya tetap dicetak, warnanya cuma mempercepat mata. */
+.gp{display:inline-block; min-width:14px; border-radius:3px; padding:0 4px;
+  font-size:9px; font-weight:700}
+.gp.m{color:var(--male); background:var(--male-soft)}
+.gp.f{color:var(--female); background:var(--female-soft)}
 
 .recap-wrap{display:grid; gap:8px; align-items:start}
 .recap-wrap.split{grid-template-columns:1fr 1fr}
@@ -285,9 +316,20 @@ def build_html(
 ) -> str:
     """Rakit laporan HTML lengkap sebagai satu dokumen mandiri."""
     names = {p.id: p.name for p in schedule.players}
+    genders = {p.id: p.gender for p in schedule.players}
     cfg = schedule.config
     st = schedule.stats
     show_roles = bool(cfg.referees_per_court or cfg.ballboys_per_court)
+    # Legenda warna hanya masuk kalau gendernya memang terisi. Roster tanpa
+    # L/P menghasilkan nama berwarna netral semua, dan legenda yang menjelaskan
+    # warna yang tidak muncul di mana pun cuma bikin bingung.
+    show_gender = any(genders.values())
+
+    def _nm(pid: int) -> str:
+        """Nama peserta, diwarnai menurut gendernya."""
+        cls = {"M": "g-m", "F": "g-f"}.get(genders.get(pid) or "")
+        return (f"<span class='{cls}'>{_e(names[pid])}</span>" if cls
+                else _e(names[pid]))
 
     fmt = MODE_LABELS.get(cfg.mode, cfg.mode)
     if cfg.segments and any(s.label for s in cfg.segments):
@@ -391,12 +433,23 @@ def build_html(
     # satu ronde tidak terbelah antar halaman - itu satu-satunya pengelompokan
     # yang dihormati mesin cetak pada tabel panjang.
     parts.append("<h2>Jadwal pertandingan</h2>")
+    if show_gender:
+        parts.append(
+            "<div class='gkey'>"
+            "<span><b class='g-m'>&#9679; Nama biru</b> laki-laki</span>"
+            "<span><b class='g-f'>&#9679; Nama pink</b> perempuan</span>"
+            "<span>Huruf L/P-nya ada di tabel rekap.</span>"
+            "</div>"
+        )
 
-    # Card tetap dipakai, tapi disusun dalam grid. Dengan 1 court tiap card
-    # hanya memuat satu match, jadi satu kolom membuang ruang horizontal dan
-    # laporan jadi berhalaman-halaman. Jumlah kolom mengikuti lebar isi card.
+    # Card tetap dipakai, tapi disusun dalam grid - sama seperti tab Jadwal di
+    # aplikasi. Jumlah kolom mengikuti lebar yang dibutuhkan isi card, BUKAN
+    # banyaknya match: 1 court berarti satu match per card sehingga 3 kolom
+    # masih lega, selebihnya 2 kolom. Dulu 3 court ke atas jatuh ke satu kolom
+    # selebar halaman, dan itu justru membatalkan pemadatannya - tiap match
+    # memakan satu baris penuh A4 dengan separuh isinya ruang kosong.
     max_matches = max((len(r.matches) for r in schedule.rounds), default=1)
-    cols = 3 if max_matches == 1 else 2 if max_matches == 2 else 1
+    cols = 3 if max_matches == 1 else 2
     parts.append(f"<div class='rounds cols-{cols}'>")
 
     current_segment = None
@@ -405,8 +458,8 @@ def build_html(
             current_segment = rnd.segment
             parts.append(f"<div class='segbar'>{_e(rnd.segment)}</div>")
 
-        refs = {r.court: names[r.player_id] for r in rnd.roles if r.role == "wasit"}
-        balls = {r.court: names[r.player_id] for r in rnd.roles if r.role == "ballboy"}
+        refs = {r.court: _nm(r.player_id) for r in rnd.roles if r.role == "wasit"}
+        balls = {r.court: _nm(r.player_id) for r in rnd.roles if r.role == "ballboy"}
 
         parts.append("<div class='round'>")
         parts.append(
@@ -418,24 +471,24 @@ def build_html(
             pool_html = f"<span class='pool'>{_e(pool)}</span>" if pool else ""
             duty_bits = []
             if m.court in refs:
-                duty_bits.append(f"W {_e(refs[m.court])}")
+                duty_bits.append(f"W {refs[m.court]}")
             if m.court in balls:
-                duty_bits.append(f"B {_e(balls[m.court])}")
+                duty_bits.append(f"B {balls[m.court]}")
             duty_html = (f"<span class='duty'>{' · '.join(duty_bits)}</span>"
                          if duty_bits else "")
             parts.append(
                 f"<div class='m'><span class='court'>C{m.court}</span>"
-                f"<span class='team'>{_e(names[m.team_a[0]])} &amp; "
-                f"{_e(names[m.team_a[1]])}{pool_html}</span>"
+                f"<span class='team'>{_nm(m.team_a[0])} &amp; "
+                f"{_nm(m.team_a[1])}{pool_html}</span>"
                 f"<span class='vs'>vs</span>"
-                f"<span class='team b'>{_e(names[m.team_b[0]])} &amp; "
-                f"{_e(names[m.team_b[1]])}</span>{duty_html}</div>"
+                f"<span class='team b'>{_nm(m.team_b[0])} &amp; "
+                f"{_nm(m.team_b[1])}</span>{duty_html}</div>"
             )
         idle = rnd.resting_only()
         if idle:
             parts.append(
                 f"<div class='resting'>Istirahat: "
-                f"{_e(', '.join(names[b] for b in idle))}</div>"
+                f"{', '.join(_nm(b) for b in idle)}</div>"
             )
         parts.append("</div>")
     parts.append("</div>")
@@ -471,11 +524,13 @@ def build_html(
             roles = st.roles_per_player.get(p.id, {})
             idle = max(0, st.byes_per_player.get(p.id, 0)
                        - int(roles.get("total", 0) or 0))
+            gp = ({"M": "<span class='gp m'>L</span>",
+                   "F": "<span class='gp f'>P</span>"}
+                  .get(p.gender or "", "-"))
             cells = [
-                f"<td>{_e(p.name)}</td>",
+                f"<td>{_nm(p.id)}</td>",
                 f"<td class='num'>{p.rating:g}</td>",
-                f"<td class='num'>"
-                f"{_e({'M': 'L', 'F': 'P'}.get(p.gender or '', '-'))}</td>",
+                f"<td class='num'>{gp}</td>",
                 f"<td class='num'>{st.plays_per_player.get(p.id, 0)}</td>",
             ]
             if show_roles:
@@ -519,7 +574,7 @@ def build_html(
             out.append("</tr></thead><tbody>")
             for a in order:
                 out.append(f"<tr><th class='nm'><span class='no'>{seat[a.id]}</span>"
-                           f"{_e(a.name)}</th>")
+                           f"{_nm(a.id)}</th>")
                 for b in order:
                     if a.id == b.id:
                         out.append("<td class='self'>&middot;</td>")

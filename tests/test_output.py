@@ -318,6 +318,54 @@ class TestExports(unittest.TestCase):
         self.assertNotIn("<script>", h)
         self.assertIn("&lt;script&gt;", h)
 
+    def test_html_never_falls_back_to_one_column(self):
+        """Banyak court tidak boleh membuat card ronde selebar halaman.
+
+        Card selebar A4 membuat kolom tim (1fr) melar sampai kedua nama
+        terlempar ke tepi kiri dan kanan dengan "vs" terdampar di tengah, dan
+        tiap match memakan satu baris penuh - persis kebalikan dari padat.
+        Jumlah kolom mengikuti lebar yang DIBUTUHKAN isi card, bukan banyaknya
+        match: card 4 match tidak perlu lebih lebar, hanya lebih tinggi.
+        """
+        for courts, n in ((1, 8), (2, 12), (3, 18), (4, 24), (6, 26)):
+            with self.subTest(courts=courts):
+                players = [Player(id=i, name=f"P{i}") for i in range(n)]
+                sch = build_schedule(players, Config(courts=courts,
+                                                     duration_minutes=120,
+                                                     effort=2000))
+                h = build_html(sch)
+                self.assertNotIn("rounds cols-1", h,
+                                 f"{courts} court jatuh ke satu kolom")
+                self.assertIn("rounds cols-3" if courts == 1 else "rounds cols-2",
+                              h)
+
+    def test_html_colours_names_by_gender(self):
+        """Warna nama harus punya padanan huruf L/P, bukan warna saja.
+
+        Laporan sering dicetak hitam-putih. Kalau gender hanya disampaikan
+        lewat warna, salinan cetaknya kehilangan informasi tanpa memberi tahu.
+        """
+        players = [Player(id=i, name=f"P{i}", gender="M" if i < 4 else "F")
+                   for i in range(8)]
+        sch = build_schedule(players, Config(courts=2, duration_minutes=60))
+        h = build_html(sch)
+
+        self.assertIn("class='g-m'", h, "nama laki-laki tidak diwarnai")
+        self.assertIn("class='g-f'", h, "nama perempuan tidak diwarnai")
+        self.assertIn("class='gp m'>L<", h, "huruf L hilang dari rekap")
+        self.assertIn("class='gp f'>P<", h, "huruf P hilang dari rekap")
+        # Dicari markupnya, bukan sekadar kata "gkey" - aturan CSS-nya selalu
+        # ikut terbit, jadi mencari namanya saja lolos tanpa legenda apa pun.
+        self.assertIn("<div class='gkey'>", h, "legenda warna tidak muncul")
+
+        # Roster tanpa gender: tidak ada warna, dan legendanya ikut hilang -
+        # menjelaskan warna yang tidak ada di mana pun cuma bikin bingung.
+        polos = [Player(id=i, name=f"P{i}") for i in range(8)]
+        h2 = build_html(build_schedule(polos, Config(courts=2,
+                                                     duration_minutes=60)))
+        self.assertNotIn("<div class='gkey'>", h2)
+        self.assertNotIn("class='g-m'", h2)
+
 
 class TestStorage(unittest.TestCase):
     def setUp(self):

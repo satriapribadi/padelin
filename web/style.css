@@ -5,6 +5,13 @@
   --good:#3ec98a; --good-dim:#17402e;
   --warn:#f0a94c; --warn-dim:#4a3418;
   --bad:#f2685f; --bad-dim:#4a1f1c;
+  /* Gender peserta. Sengaja BUKAN --accent dan bukan salah satu warna status:
+     nama tidak pernah menyandang status, jadi tidak ada yang salah membaca
+     nama merah muda sebagai peringatan. Padanannya di laporan cetak memakai
+     versi gelap dari dua warna yang sama, supaya jadwal di layar dan jadwal
+     di kertas terbaca dengan kode warna yang sama. */
+  --male:#6ab6f2; --male-dim:#1b3f5e;
+  --female:#f58fc6; --female-dim:#54203c;
   /* Satu langkah lebih terang dari --line. Memakai --line langsung membuat
      thumb hampir lenyap di atas --panel, dan scrollbar tidak cuma alat geser:
      ia juga yang memberi tahu masih ada isi di bawah. Tapi tetap di bawah
@@ -202,6 +209,23 @@ input[type=date],input[type=time]{color-scheme:dark}
 
 .pool{background:var(--accent-dim);color:#a8d4f5;border-radius:4px;padding:0 5px;font-size:9px;font-weight:600;margin-left:5px}
 .resting{padding:2px 9px;background:#141b24;color:var(--dim);font-size:10px}
+
+/* Nama diwarnai per gender supaya komposisi tiap court kebaca sekali lihat.
+   Yang diwarnai hanya NAMANYA - pemisah "&" dan awalan tugas "W"/"B" tetap
+   netral, kalau tidak barisnya jadi pelangi. Kolom L/P di tab Peserta tetap
+   memuat hurufnya, jadi warnanya mempercepat, bukan menggantikan. */
+.g-m{color:var(--male)}
+.g-f{color:var(--female)}
+.gkey{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--muted);
+  margin:0 0 8px}
+.gkey b{font-weight:700}
+
+/* Pil L/P di tabel peserta & rekap: hurufnya tetap ada, warnanya cuma
+   mempercepat mata menemukan barisnya. */
+.gp{display:inline-block;min-width:16px;border-radius:4px;padding:0 5px;
+  font-size:10px;font-weight:700}
+.gp.m{color:var(--male);background:var(--male-dim)}
+.gp.f{color:var(--female);background:var(--female-dim)}
 
 /* ---------- tabel umum ---------- */
 table.data{width:100%;border-collapse:collapse;font-size:12.5px}
