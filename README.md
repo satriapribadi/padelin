@@ -198,9 +198,26 @@ yang cuma menyentuh kode Python dan `web/` biasanya ratusan KB, bukan installer
 utuh. Pengunduhan berjalan di latar, pemasangan saat aplikasi ditutup, dan
 **Bantuan → Periksa pembaruan** untuk memeriksa manual.
 
-Yang perlu disiapkan sekali: satu tempat menaruh hasil build yang bisa diakses
-lewat HTTP. Ganti `build.publish.url` di `package.json` ke server Anda, atau
-tukar providernya ke `github`. Tanpa itu tidak ada yang bisa diperiksa.
+**Kode privat, installer publik.** Repo kode `satriapribadi/padelin` tetap
+privat; hasil build diunggah ke repo terpisah `satriapribadi/padelin-rilis`
+yang publik dan isinya **hanya installer, tanpa satu baris kode pun**.
+
+Pemisahan ini bukan kerapian belaka. `electron-updater` membaca rilis lewat API
+GitHub, dan rilis di repo privat hanya bisa dibaca dengan token — token yang
+mau tak mau ikut terdistribusi ke setiap pengguna, sehingga siapa pun yang
+memegang installer bisa membacanya lalu membuka repo privat Anda. Dengan repo
+rilis yang publik, tidak ada kredensial apa pun yang perlu ikut.
+
+Merilis:
+
+```bash
+# sekali saja: buat repo publik satriapribadi/padelin-rilis di GitHub
+export GH_TOKEN=...        # butuh izin tulis ke repo rilis itu saja
+npm run release            # build + unggah installer, latest.yml, blockmap
+```
+
+`GH_TOKEN` hanya dipakai saat mengunggah di mesin Anda — ia tidak pernah masuk
+ke aplikasi maupun ke repo.
 
 Naikkan `version` di `package.json` tiap merilis — itu yang dibandingkan.
 
