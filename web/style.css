@@ -176,6 +176,47 @@ table.data td.num,table.data th.num{text-align:center}
 table.data td.num{font-variant-numeric:tabular-nums}
 table.data .pick{color:var(--good);font-weight:700}
 
+/* Matriks pertemuan.
+   Lebarnya tumbuh kuadrat terhadap jumlah peserta - 26 orang sudah jauh
+   melebihi layar - jadi tabelnya menggulir di dalam wadahnya sendiri, dan
+   kolom nama dipaku supaya baris yang sedang dibaca tidak kehilangan
+   identitasnya saat digulir ke kanan. */
+.mx-wrap{overflow:auto;max-height:520px;border:1px solid var(--line);border-radius:8px}
+/* width:auto - kalau tabel dipaksa selebar kartu, delapan kolom angka melar
+   jadi sel raksasa dan matriksnya kehilangan bentuk. */
+table.data.mx{width:auto;font-size:11.5px;border-collapse:separate;border-spacing:0}
+table.data.mx td.num,table.data.mx th.num{min-width:30px}
+.mx-no{
+  display:inline-block;min-width:18px;margin-right:7px;text-align:right;
+  color:var(--dim);font-variant-numeric:tabular-nums;font-weight:400;
+}
+table.data.mx th,table.data.mx td{padding:5px 7px;white-space:nowrap}
+table.data.mx thead th{position:sticky;top:0;z-index:2}
+table.data.mx th.mx-row{
+  position:sticky;left:0;z-index:1;text-align:left;text-transform:none;
+  font-size:11.5px;letter-spacing:0;color:var(--ink);font-weight:600;
+  background:var(--panel-2);
+}
+table.data.mx th.mx-corner{position:sticky;left:0;top:0;z-index:3}
+table.data.mx td.mx-self{color:var(--dim);background:var(--panel)}
+table.data.mx tr:hover td{background:inherit}
+
+/* 0 belum pernah, 1 tepat sekali, 2+ berulang. Angkanya tetap tercetak, jadi
+   matriksnya terbaca penuh tanpa mengandalkan warna. */
+table.data.mx td.m0{color:var(--dim)}
+table.data.mx td.m1{color:var(--good);background:var(--good-dim)}
+table.data.mx td.m2{color:var(--warn);background:var(--warn-dim);font-weight:700}
+
+.mx-legend{display:flex;flex-wrap:wrap;gap:14px;margin-bottom:10px;font-size:11.5px;color:var(--muted)}
+.mx-legend-item{display:inline-flex;align-items:center;gap:6px}
+.mx-chip{
+  min-width:22px;text-align:center;border-radius:4px;padding:1px 5px;
+  font-size:11px;font-weight:700;font-variant-numeric:tabular-nums;
+}
+.mx-chip.m0{color:var(--dim);border:1px solid var(--line)}
+.mx-chip.m1{color:var(--good);background:var(--good-dim)}
+.mx-chip.m2{color:var(--warn);background:var(--warn-dim)}
+
 .pill{border-radius:999px;padding:2px 9px;font-size:10.5px;font-weight:600;display:inline-block;margin:1px 2px}
 .pill.g{background:var(--good-dim);color:var(--good)}
 .pill.w{background:var(--warn-dim);color:var(--warn)}

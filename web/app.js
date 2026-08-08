@@ -773,11 +773,115 @@ function renderSchedule() {
   (schedule.notes || []).forEach((n) => { notes += `<div class="issue info"><div class="d">${esc(n)}</div></div>`; });
   (schedule.violations || []).forEach((v) => { notes += `<div class="issue warning"><div class="d">${esc(v.reason)}</div></div>`; });
   $('notes').innerHTML = notes || '<div class="empty">Tidak ada catatan.</div>';
+
+  renderMatrix();
 }
 
 function nameOf(id) {
   const p = schedule.players.find((x) => x.id === id);
   return p ? p.name : '?';
+}
+
+// ---------------------------------------------------------------------------
+// Matriks pertemuan
+// ---------------------------------------------------------------------------
+
+/** Hitung berapa kali tiap pasang orang jadi partner dan jadi lawan.
+ *
+ * Dihitung dari `schedule.rounds`, bukan dari statistik server, supaya jadwal
+ * yang dibuka dari riwayat ikut terlayani - yang tersimpan di database memang
+ * susunan rondenya.
+ */
+function meetingCounts() {
+  const kunci = (a, b) => (a < b ? `${a}:${b}` : `${b}:${a}`);
+  const partner = new Map();
+  const lawan = new Map();
+  const tambah = (m, a, b) => m.set(kunci(a, b), (m.get(kunci(a, b)) || 0) + 1);
+
+  (schedule.rounds || []).forEach((r) => (r.matches || []).forEach((m) => {
+    const A = m.team_a.map((x) => x.id);
+    const B = m.team_b.map((x) => x.id);
+    tambah(partner, A[0], A[1]);
+    tambah(partner, B[0], B[1]);
+    A.forEach((x) => B.forEach((y) => tambah(lawan, x, y)));
+  }));
+  return { partner, lawan, kunci };
+}
+
+function renderMatrix() {
+  const host = $('matrix');
+  if (!schedule || !schedule.players || schedule.players.length < 2) {
+    host.innerHTML = '<div class="empty">Belum ada jadwal.</div>';
+    return;
+  }
+  const { partner, lawan, kunci } = meetingCounts();
+  const orang = schedule.players.slice().sort((a, b) => a.name.localeCompare(b.name));
+
+  // Ambang bermakna, bukan selera: 0 = belum pernah bertemu, 1 = tepat sekali
+  // (yang dikejar rotasi), 2+ = berulang. Angkanya sendiri yang menyampaikan
+  // informasi; warna cuma menguatkan, jadi tetap terbaca tanpa warna.
+  const kelas = (n) => (n === 0 ? 'm0' : n === 1 ? 'm1' : 'm2');
+
+  // Kolom diberi NOMOR, bukan nama yang dipendekkan. Nama peserta sering
+  // berbagi kata depan ("Pemain 1", "Pemain 2"; atau satu keluarga di klub
+  // yang sama), sehingga label pendek jadi identik semua dan matriksnya tidak
+  // terbaca sama sekali. Nomornya dicetak juga di depan nama tiap baris, jadi
+  // memetakan kolom ke orang tinggal membaca ke kiri.
+  const nomor = new Map(orang.map((p, i) => [p.id, i + 1]));
+
+  function tabel(peta, judul) {
+    let h = `<table class="data mx"><thead><tr><th class="mx-corner">${esc(judul)}</th>`;
+    orang.forEach((p) => {
+      h += `<th class="num mx-col" title="${esc(p.name)}">${nomor.get(p.id)}</th>`;
+    });
+    h += '</tr></thead><tbody>';
+    orang.forEach((a) => {
+      h += `<tr><th class="mx-row" title="${esc(a.name)}">`
+        + `<span class="mx-no">${nomor.get(a.id)}</span>${esc(a.name)}</th>`;
+      orang.forEach((b) => {
+        if (a.id === b.id) { h += '<td class="num mx-self">-</td>'; return; }
+        const n = peta.get(kunci(a.id, b.id)) || 0;
+        h += `<td class="num ${kelas(n)}" title="${esc(a.name)} & ${esc(b.name)}: ${n}x">${n}</td>`;
+      });
+      h += '</tr>';
+    });
+    return h + '</tbody></table>';
+  }
+
+  // Ringkasan di atas tabel: pada 26 orang, memindai 676 sel untuk mencari
+  // yang belum pernah bertemu itu pekerjaan yang seharusnya dikerjakan mesin.
+  let belumPartner = 0, ulangPartner = 0, belumLawan = 0, ulangLawan = 0;
+  for (let i = 0; i < orang.length; i++) {
+    for (let j = i + 1; j < orang.length; j++) {
+      const k = kunci(orang[i].id, orang[j].id);
+      const p = partner.get(k) || 0, l = lawan.get(k) || 0;
+      if (p === 0) belumPartner++; else if (p > 1) ulangPartner++;
+      if (l === 0) belumLawan++; else if (l > 1) ulangLawan++;
+    }
+  }
+  const total = (orang.length * (orang.length - 1)) / 2;
+
+  host.innerHTML =
+    '<div class="viz-head">'
+    + `<span>${total} pasang orang &middot; partner: ${belumPartner} belum pernah, `
+    + `${ulangPartner} berulang &middot; lawan: ${belumLawan} belum pernah, `
+    + `${ulangLawan} berulang</span>`
+    + '<button class="viz-toggle" id="mx-toggle" type="button">Lihat lawan</button>'
+    + '</div>'
+    + '<div class="mx-legend">'
+    + '<span class="mx-legend-item"><span class="mx-chip m0">0</span> belum pernah</span>'
+    + '<span class="mx-legend-item"><span class="mx-chip m1">1</span> tepat sekali</span>'
+    + '<span class="mx-legend-item"><span class="mx-chip m2">2+</span> berulang</span>'
+    + '</div>'
+    + `<div class="mx-wrap" id="mx-partner">${tabel(partner, 'Partner')}</div>`
+    + `<div class="mx-wrap" id="mx-lawan" style="display:none">${tabel(lawan, 'Lawan')}</div>`;
+
+  $('mx-toggle').onclick = () => {
+    const lihatLawan = $('mx-lawan').style.display === 'none';
+    $('mx-lawan').style.display = lihatLawan ? '' : 'none';
+    $('mx-partner').style.display = lihatLawan ? 'none' : '';
+    $('mx-toggle').textContent = lihatLawan ? 'Lihat partner' : 'Lihat lawan';
+  };
 }
 
 // ---------------------------------------------------------------------------

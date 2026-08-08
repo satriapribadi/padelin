@@ -157,6 +157,44 @@ table{width:100%; border-collapse:collapse}
 .recap td.num{font-variant-numeric:tabular-nums}
 .recap tbody tr:nth-child(even){background:#fcfdfe}
 
+/* Matriks pertemuan. Lebarnya tumbuh kuadrat terhadap jumlah peserta, jadi
+   selnya dibuat sekecil mungkin yang masih terbaca dan kolomnya diberi NOMOR,
+   bukan nama - nama peserta sering berbagi kata depan sehingga singkatannya
+   jadi kembar semua. Nomornya dicetak di depan nama tiap baris. */
+.mx{border:1px solid var(--line); border-radius:7px; overflow:hidden;
+  margin-bottom:10px}
+/* table-layout:fixed + width:100% supaya kolom MEMBAGI lebar halaman, bukan
+   menuntutnya. Dengan lebar otomatis, roster 40 orang membuat tabel melebihi
+   lebar A4 lalu terpotong diam-diam oleh overflow:hidden - di layar itu cuma
+   jelek, di kertas itu data yang hilang tanpa memberi tahu. */
+.mx table{table-layout:fixed; width:100%}
+.mx th.nm{width:84px; overflow:hidden; text-overflow:ellipsis}
+/* Roster besar: kolomnya makin sempit, jadi angkanya ikut dikecilkan supaya
+   tetap muat utuh alih-alih terpotong. */
+.mx.dense th,.mx.dense td{padding:1px 2px; font-size:7.5px}
+.mx.dense th.nm{width:70px; font-size:8px}
+.mx caption{caption-side:top; text-align:left; padding:4px 9px;
+  background:var(--band); border-bottom:1px solid var(--line);
+  font-size:10px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.06em; color:var(--muted)}
+.mx th,.mx td{padding:2px 4px; font-size:9px; text-align:center;
+  border-bottom:1px solid #f2f4f7; font-variant-numeric:tabular-nums}
+.mx th.nm{text-align:left; white-space:nowrap; font-weight:600;
+  font-size:9.5px; border-right:1px solid var(--line)}
+.mx th.nm .no{color:var(--muted); font-weight:400; margin-right:5px}
+.mx thead th{background:var(--band); color:var(--muted); font-weight:700}
+.mx tbody tr:last-child td,.mx tbody tr:last-child th{border-bottom:none}
+.mx td.self{color:#c8ced8}
+.mx td.zero{color:#aeb6c2}
+.mx td.once{color:var(--good); background:var(--good-soft); font-weight:700}
+.mx td.many{color:var(--warn); background:var(--warn-soft); font-weight:700}
+.mx-key{font-size:10px; color:var(--muted); margin-bottom:7px;
+  display:flex; gap:14px; flex-wrap:wrap}
+.mx-key b{font-weight:700; padding:0 4px; border-radius:3px}
+.mx-key .k0{color:#aeb6c2; border:1px solid var(--line)}
+.mx-key .k1{color:var(--good); background:var(--good-soft)}
+.mx-key .k2{color:var(--warn); background:var(--warn-soft)}
+
 .note{background:var(--band); border-left:3px solid var(--muted);
   padding:5px 10px; border-radius:0 5px 5px 0; margin-bottom:5px; font-size:10px}
 .note.warn{background:var(--warn-soft); border-left-color:var(--warn)}
@@ -432,6 +470,62 @@ def build_html(
             parts.append("<tr>" + "".join(cells) + "</tr>")
         parts.append("</tbody></table>")
     parts.append("</div>")
+
+    # Matriks pertemuan: siapa berpartner & melawan siapa, berapa kali.
+    # Dihitung dari susunan ronde, bukan dari statistik, supaya laporan lama
+    # yang dibuka ulang pun tetap terlayani.
+    if len(schedule.players) >= 2:
+        partner_n: dict[tuple[int, int], int] = {}
+        oppo_n: dict[tuple[int, int], int] = {}
+
+        def _bump(store, a, b):
+            key = (a, b) if a < b else (b, a)
+            store[key] = store.get(key, 0) + 1
+
+        for rnd in schedule.rounds:
+            for m in rnd.matches:
+                _bump(partner_n, *m.team_a)
+                _bump(partner_n, *m.team_b)
+                for x in m.team_a:
+                    for y in m.team_b:
+                        _bump(oppo_n, x, y)
+
+        order = sorted(schedule.players, key=lambda x: x.name.lower())
+        seat = {p.id: i + 1 for i, p in enumerate(order)}
+
+        dense = " dense" if len(order) > 24 else ""
+
+        def _matrix(store, caption):
+            out = [f"<div class='mx{dense}'><table><caption>{_e(caption)}</caption>",
+                   "<thead><tr><th class='nm'>Nama</th>"]
+            out += [f"<th>{seat[p.id]}</th>" for p in order]
+            out.append("</tr></thead><tbody>")
+            for a in order:
+                out.append(f"<tr><th class='nm'><span class='no'>{seat[a.id]}</span>"
+                           f"{_e(a.name)}</th>")
+                for b in order:
+                    if a.id == b.id:
+                        out.append("<td class='self'>&middot;</td>")
+                        continue
+                    key = (a.id, b.id) if a.id < b.id else (b.id, a.id)
+                    n = store.get(key, 0)
+                    cls = "zero" if n == 0 else "once" if n == 1 else "many"
+                    out.append(f"<td class='{cls}'>{n}</td>")
+                out.append("</tr>")
+            out.append("</tbody></table></div>")
+            return "".join(out)
+
+        parts.append("<h2>Matriks pertemuan</h2>")
+        parts.append(
+            "<div class='mx-key'>"
+            "<span><b class='k0'>0</b> belum pernah</span>"
+            "<span><b class='k1'>1</b> tepat sekali</span>"
+            "<span><b class='k2'>2+</b> berulang</span>"
+            "<span>Angka kolom = nomor di depan nama pada baris.</span>"
+            "</div>"
+        )
+        parts.append(_matrix(partner_n, "Berpartner dengan"))
+        parts.append(_matrix(oppo_n, "Melawan"))
 
     # Catatan
     if schedule.notes or schedule.violations:
