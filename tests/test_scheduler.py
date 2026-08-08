@@ -650,6 +650,54 @@ class TestMixedWithLockedPartner(unittest.TestCase):
             f"pelonggaran kunci tidak dilaporkan ke host: {sch.notes}")
 
 
+class TestLockedPairsScoring(unittest.TestCase):
+    """Pasangan yang sengaja dikunci bukan kegagalan rotasi.
+
+    Skor memotong 45 poin untuk pengulangan partner. Di format pasangan tetap
+    tiap pasangan mengulang partnernya tiap ronde - itu justru yang diminta
+    host - sehingga meet seperti itu selalu dinilai buruk (52,5/100) dan kartu
+    "Partner ulang" selalu menyala. Yang diukur metrik ini adalah rotasi yang
+    MELESET, jadi pasangan terkunci tidak ikut dihitung.
+    """
+
+    def _cfg(self):
+        return Config(courts=1, duration_minutes=120, round_minutes=10,
+                      warmup_minutes=0, mode="americano", seed=42, effort=20000,
+                      segments=[Segment("Mixed", 12, "mixed")])
+
+    def _players(self, n_locked):
+        ps = make_players(8, genders=["M"] * 4 + ["F"] * 4)
+        for i in range(n_locked):
+            ps[i].partner_id = 4 + i
+            ps[4 + i].partner_id = i
+        return ps
+
+    def test_all_locked_is_not_penalised(self):
+        sch = build_schedule(self._players(4), self._cfg())
+        self.assertEqual(
+            sch.stats.partner_repeat_pairs, 0,
+            "pasangan terkunci dihitung sebagai pengulangan yang meleset")
+        self.assertGreater(
+            sch.stats.quality_score, 80,
+            f"format pasangan tetap dinilai buruk: {sch.stats.quality_score}")
+
+    def test_free_pairs_still_counted(self):
+        """Yang dikecualikan hanya yang dikunci, bukan semua pengulangan."""
+        loose = build_schedule(self._players(0), self._cfg())
+        self.assertGreater(
+            loose.stats.partner_repeat_pairs, 0,
+            "tanpa kunci, pengulangan partner harus tetap dilaporkan")
+
+    def test_score_rises_as_more_pairs_are_locked(self):
+        """Makin banyak yang dikunci, makin sedikit rotasi yang bisa meleset."""
+        scores = [build_schedule(self._players(k), self._cfg()).stats.quality_score
+                  for k in (0, 2, 4)]
+        self.assertLess(scores[0], scores[2], f"skor tidak naik: {scores}")
+        self.assertLessEqual(
+            scores[0], scores[1] + 1e-9,
+            f"mengunci sebagian justru menurunkan skor: {scores}")
+
+
 class TestTieredMode(unittest.TestCase):
     def test_beginners_never_face_advanced(self):
         # 8 pemain kuat (rating 5) + 8 pemula (rating 1).

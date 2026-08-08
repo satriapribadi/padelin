@@ -459,13 +459,28 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     n = st.n
     ids = [p.id for p in players]
 
+    # Pasangan yang SENGAJA dikunci host. Mereka berulang tiap ronde - itu
+    # justru formatnya, bukan kegagalan rotasi. Kalau ikut dihitung, meet
+    # pasangan tetap selalu terlihat buruk: tiap pasangan menyumbang
+    # (main - 1) pengulangan, dan skornya kehilangan hampir seluruh 45 poin
+    # jatah partner. Yang diukur metrik ini adalah rotasi yang MELESET, jadi
+    # pasangan terkunci dikeluarkan dari hitungan - bukan disembunyikan:
+    # pasangannya tetap tercetak di jadwal dan di daftar peserta.
+    locked_pairs: set[tuple[int, int]] = set()
+    by_id = {p.id: p for p in players}
+    for p in players:
+        mate = p.partner_id
+        if mate is not None and by_id.get(mate) is not None \
+                and by_id[mate].partner_id == p.id:
+            locked_pairs.add((min(p.id, mate), max(p.id, mate)))
+
     partner_repeat_pairs = partner_repeat_max = 0
     oppo_repeat_pairs = oppo_repeat_max = 0
     never_met = 0
     for i, j in combinations(ids, 2):
         k = st._k(i, j)
         pcv, ocv = st.pc[k], st.oc[k]
-        if pcv > 1:
+        if pcv > 1 and (i, j) not in locked_pairs:
             partner_repeat_pairs += 1
             partner_repeat_max = max(partner_repeat_max, pcv)
         if ocv > 1:
@@ -491,16 +506,31 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
             gaps.append(abs((st.ratings[a] + st.ratings[b]) - (st.ratings[c] + st.ratings[d])))
 
     # Batas bawah teoretis pengulangan, untuk menilai jadwal secara adil.
-    min_partner_excess = sum(max(0, plays[p] - (len(ids) - 1)) for p in ids) / 2
+    # Kalau ada pasangan terkunci, orang yang masih rotasi bebas hanya bisa
+    # berpasangan sesama mereka - kolam partnernya menyusut, jadi batasnya harus
+    # dihitung dari kolam itu, bukan dari seluruh peserta. Tanpa koreksi ini
+    # meet dengan 2 pasang terkunci dan 4 orang bebas dinilai seperti gagal
+    # merotasi, padahal 4 orang memang cuma punya 3 partner yang mungkin.
+    locked_members = {p for pair in locked_pairs for p in pair}
+    free_ids = [pid for pid in ids if pid not in locked_members]
+    partner_pool = len(free_ids) if locked_pairs else len(ids)
+    min_partner_excess = sum(
+        max(0, plays[p] - max(1, partner_pool - 1))
+        for p in (free_ids if locked_pairs else ids)
+    ) / 2
     min_oppo_excess = sum(max(0, 2 * plays[p] - (len(ids) - 1)) for p in ids) / 2
     actual_partner_excess = sum(
         max(0, st.pc[st._k(i, j)] - 1) for i, j in combinations(ids, 2)
+        if (i, j) not in locked_pairs
     )
     actual_oppo_excess = sum(
         max(0, st.oc[st._k(i, j)] - 1) for i, j in combinations(ids, 2)
     )
 
-    total_partner_slots = max(1, sum(plays.values()) / 2)
+    # Slot yang sudah dipesan pasangan terkunci ikut dikeluarkan dari penyebut;
+    # kalau tidak, denda rotasi diencerkan oleh slot yang tidak pernah dirotasi.
+    locked_slots = sum(st.pc[st._k(i, j)] for i, j in locked_pairs)
+    total_partner_slots = max(1, sum(plays.values()) / 2 - locked_slots)
     total_oppo_slots = max(1, sum(plays.values()))
     p_pen = max(0.0, actual_partner_excess - min_partner_excess) / total_partner_slots
     o_pen = max(0.0, actual_oppo_excess - min_oppo_excess) / total_oppo_slots
