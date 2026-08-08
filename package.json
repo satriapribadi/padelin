@@ -3,6 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "description": "Padelin - penyusun jadwal meet padel, sebagai aplikasi desktop",
+  "author": "Padelin",
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
@@ -25,7 +26,6 @@
       "output": "dist-desktop",
       "buildResources": "electron/build"
     },
-    "// files": "Hanya yang dibutuhkan saat jalan. padel.db & roster TIDAK ikut - itu data host, bukan program.",
     "files": [
       "electron/**/*",
       "run.py",
@@ -34,7 +34,11 @@
       "!**/__pycache__",
       "!**/*.pyc"
     ],
-    "// extraResources": "Python embeddable ditaruh di resources/python. Padelin tidak memakai satu pun paket pihak ketiga, jadi ini sudah cukup - pengguna tidak perlu memasang Python.",
+    "asarUnpack": [
+      "run.py",
+      "padel_scheduler/**/*",
+      "web/**/*"
+    ],
     "extraResources": [
       {
         "from": "electron/vendor/python",
@@ -44,9 +48,9 @@
     ],
     "win": {
       "target": [{ "target": "nsis", "arch": ["x64"] }],
-      "artifactName": "${productName}-${version}-${arch}.${ext}"
+      "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "signAndEditExecutable": false
     },
-    "// nsis": "oneClick:false supaya pengguna bisa memilih folder. perMachine:false = pasang per-pengguna, tidak butuh hak admin.",
     "nsis": {
       "oneClick": false,
       "perMachine": false,
@@ -55,7 +59,6 @@
       "createStartMenuShortcut": true,
       "shortcutName": "Padelin"
     },
-    "// publish": "Tempat menaruh hasil build supaya pembaruan bisa diperiksa. Ganti url ke server Anda sendiri, atau tukar provider ke github.",
     "publish": [
       {
         "provider": "generic",

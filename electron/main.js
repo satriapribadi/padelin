@@ -63,6 +63,20 @@ function resourcesRoot() {
   return app.isPackaged ? process.resourcesPath : ROOT;
 }
 
+/** Akar berkas PYTHON. Sengaja dipisah dari resourcesRoot().
+ *
+ * Berkas aplikasi dikemas ke dalam app.asar, dan Python tidak bisa membaca isi
+ * arsip itu - `python run.py` cuma melaporkan berkasnya tidak ada, dan
+ * aplikasinya gagal jalan padahal versi dari repo baik-baik saja. Karena itu
+ * run.py, padel_scheduler/, dan web/ dikeluarkan dari asar (asarUnpack) dan
+ * tinggal sebagai berkas biasa di app.asar.unpacked.
+ */
+function pythonAppRoot() {
+  return app.isPackaged
+    ? path.join(process.resourcesPath, 'app.asar.unpacked')
+    : ROOT;
+}
+
 /** Python mana yang dipakai, berurutan dari yang paling pasti.
  *
  * Padelin tidak memakai satu pun paket pihak ketiga - seluruhnya pustaka
@@ -137,7 +151,7 @@ async function startServer() {
   const { cmd, args } = pythonCommand();
   // -u: keluaran tidak di-buffer, jadi log server terbaca saat kejadian, bukan
   // menumpuk lalu muncul sekaligus ketika prosesnya mati.
-  const appRoot = resourcesRoot();
+  const appRoot = pythonAppRoot();
   const argv = [...args, '-u', path.join(appRoot, 'run.py'),
     '--port', String(serverPort), '--host', '127.0.0.1', '--no-browser'];
 

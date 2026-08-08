@@ -67,18 +67,25 @@ async function main() {
   { stdio: 'inherit' });
   fs.unlinkSync(ZIP);
 
-  // Distribusi embeddable mengabaikan folder kerja saat mencari modul, jadi
-  // `import padel_scheduler` gagal. Berkas ._pth mengatur jalur pencarian;
-  // menambahkan '.' membuat modul aplikasi ikut terbaca.
+  // Distribusi embeddable berjalan terisolasi: folder kerja TIDAK ikut dicari,
+  // dan PYTHONPATH diabaikan. Jalur modulnya hanya diatur berkas ._pth.
+  //
+  // Yang membuat ini mudah salah: entri di ._pth relatif terhadap folder
+  // python.exe, BUKAN folder kerja. Menambahkan '.' saja terlihat masuk akal
+  // tapi cuma menunjuk balik ke folder Python itu sendiri, dan
+  // `import padel_scheduler` tetap gagal - aplikasinya jalan dari repo, lalu
+  // mati begitu dipaketkan. Jadi jalurnya ditulis relatif ke tata letak paket:
+  //
+  //   resources/python/            <- python.exe ada di sini
+  //   resources/app.asar.unpacked/ <- run.py & padel_scheduler ada di sini
   const pth = fs.readdirSync(TUJUAN).find((f) => f.endsWith('._pth'));
-  if (pth) {
-    const berkas = path.join(TUJUAN, pth);
-    let isi = fs.readFileSync(berkas, 'utf8');
-    if (!/^\.$/m.test(isi)) isi += '\n.\n';
-    isi = isi.replace(/^#\s*import site/m, 'import site');
-    fs.writeFileSync(berkas, isi);
-    console.log('Jalur modul disesuaikan di', pth);
+  if (!pth) {
+    throw new Error('Berkas ._pth tidak ditemukan; jalur modul tidak bisa diatur.');
   }
+  const nama = path.basename(pth, '._pth');
+  fs.writeFileSync(path.join(TUJUAN, pth),
+    [`${nama}.zip`, '.', '..\\app.asar.unpacked', '', 'import site', ''].join('\n'));
+  console.log('Jalur modul disesuaikan di', pth);
 
   console.log('Selesai. Ukuran bundel Python:',
     Math.round(fs.readdirSync(TUJUAN)
