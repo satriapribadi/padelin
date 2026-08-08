@@ -1,89 +1,89 @@
 {
-  "name": "padelin",
-  "version": "1.0.3",
-  "private": true,
-  "description": "Padelin - penyusun jadwal meet padel, sebagai aplikasi desktop",
-  "author": "Padelin",
-  "main": "electron/main.js",
-  "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev",
-    "fetch-python": "node electron/fetch-python.js",
-    "icon": "node electron/make-icon.js",
-    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File electron/make-shortcut.ps1",
-    "portable": "node electron/make-portable.js",
-    "dist": "npm run fetch-python && electron-builder",
-    "dist:dir": "npm run fetch-python && electron-builder --dir",
-    "release": "npm run fetch-python && electron-builder --publish always"
-  },
-  "devDependencies": {
-    "electron": "^33.0.0",
-    "electron-builder": "^25.0.0",
-    "rcedit": "^5.0.2"
-  },
-  "dependencies": {
-    "electron-updater": "^6.3.0"
-  },
-  "build": {
-    "appId": "id.padelin.app",
-    "productName": "Padelin",
-    "directories": {
-      "output": "dist-desktop",
-      "buildResources": "electron/build"
-    },
-    "files": [
-      "electron/**/*",
-      "run.py",
-      "padel_scheduler/**/*.py",
-      "web/**/*",
-      "!**/__pycache__",
-      "!**/*.pyc"
-    ],
-    "asarUnpack": [
-      "run.py",
-      "padel_scheduler/**/*",
-      "web/**/*"
-    ],
-    "extraResources": [
-      {
-        "from": "electron/vendor/python",
-        "to": "python",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ],
-      "artifactName": "${productName}-${version}-${arch}.${ext}",
-      "icon": "electron/build/icon.ico",
-      "signAndEditExecutable": false
-    },
-    "nsis": {
-      "oneClick": false,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": true,
-      "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "shortcutName": "Padelin",
-      "installerIcon": "electron/build/icon.ico",
-      "uninstallerIcon": "electron/build/icon.ico"
-    },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "satriapribadi",
-        "repo": "padelin-rilis",
-        "releaseType": "release"
-      }
-    ],
-    "afterPack": "electron/after-pack.js"
-  }
+    "name":  "padelin",
+    "version":  "1.0.6",
+    "private":  true,
+    "description":  "Padelin - penyusun jadwal meet padel, sebagai aplikasi desktop",
+    "author":  "Padelin",
+    "main":  "electron/main.js",
+    "scripts":  {
+                    "start":  "electron .",
+                    "dev":  "electron . --dev",
+                    "fetch-python":  "node electron/fetch-python.js",
+                    "icon":  "node electron/make-icon.js",
+                    "shortcut":  "powershell -NoProfile -ExecutionPolicy Bypass -File electron/make-shortcut.ps1",
+                    "portable":  "node electron/make-portable.js",
+                    "dist":  "npm run fetch-python \u0026\u0026 electron-builder",
+                    "dist:dir":  "npm run fetch-python \u0026\u0026 electron-builder --dir",
+                    "release":  "npm run fetch-python \u0026\u0026 electron-builder --publish always"
+                },
+    "devDependencies":  {
+                            "electron":  "^33.0.0",
+                            "electron-builder":  "^25.0.0",
+                            "rcedit":  "^5.0.2"
+                        },
+    "dependencies":  {
+                         "electron-updater":  "^6.3.0"
+                     },
+    "build":  {
+                  "appId":  "id.padelin.app",
+                  "productName":  "Padelin",
+                  "directories":  {
+                                      "output":  "dist-desktop",
+                                      "buildResources":  "electron/build"
+                                  },
+                  "files":  [
+                                "electron/**/*",
+                                "run.py",
+                                "padel_scheduler/**/*.py",
+                                "web/**/*",
+                                "!**/__pycache__",
+                                "!**/*.pyc"
+                            ],
+                  "asarUnpack":  [
+                                     "run.py",
+                                     "padel_scheduler/**/*",
+                                     "web/**/*"
+                                 ],
+                  "extraResources":  [
+                                         {
+                                             "from":  "electron/vendor/python",
+                                             "to":  "python",
+                                             "filter":  [
+                                                            "**/*"
+                                                        ]
+                                         }
+                                     ],
+                  "win":  {
+                              "target":  [
+                                             {
+                                                 "target":  "nsis",
+                                                 "arch":  [
+                                                              "x64"
+                                                          ]
+                                             }
+                                         ],
+                              "artifactName":  "${productName}-${version}-${arch}.${ext}",
+                              "icon":  "electron/build/icon.ico",
+                              "signAndEditExecutable":  false
+                          },
+                  "nsis":  {
+                               "oneClick":  false,
+                               "perMachine":  false,
+                               "allowToChangeInstallationDirectory":  true,
+                               "createDesktopShortcut":  true,
+                               "createStartMenuShortcut":  true,
+                               "shortcutName":  "Padelin",
+                               "installerIcon":  "electron/build/icon.ico",
+                               "uninstallerIcon":  "electron/build/icon.ico"
+                           },
+                  "publish":  [
+                                  {
+                                      "provider":  "github",
+                                      "owner":  "satriapribadi",
+                                      "repo":  "padelin-rilis",
+                                      "releaseType":  "release"
+                                  }
+                              ],
+                  "afterPack":  "electron/after-pack.js"
+              }
 }

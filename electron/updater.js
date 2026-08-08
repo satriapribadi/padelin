@@ -1,10 +1,17 @@
 // Pembaruan tanpa pasang ulang.
 //
-// electron-builder menerbitkan berkas .blockmap di samping tiap installer.
-// electron-updater membandingkan blockmap versi terpasang dengan versi baru,
-// lalu MENGUNDUH BLOK YANG BERUBAH SAJA - pembaruan yang hanya menyentuh kode
-// Python dan web/ biasanya beberapa ratus KB, bukan puluhan MB installer utuh.
-// Pemasangannya berjalan sendiri saat aplikasi ditutup.
+// Aplikasi terpasang memeriksa rilis terbaru sendiri, mengunduhnya di latar,
+// dan memasangnya saat aplikasi ditutup. Terbukti ujung ke ujung: 1.0.0 ->
+// 1.0.1 -> 1.0.2, semuanya lewat jalur ini.
+//
+// Hanya bagian yang berubah yang diunduh. Terukur pada 1.0.5 -> 1.0.6:
+// 1,44 MB terkirim, bukan 96,33 MB.
+//
+// Syaratnya installer versi sebelumnya masih ada di cache updater; cache itu
+// terisi sendiri saat pembaruan sebelumnya dipasang lewat updater. Kalau tidak
+// ada, selisihnya tetap dihitung tapi tidak bisa dipakai, dan updater mundur ke
+// unduhan utuh sambil mencatat alasannya. Karena itu pembaruan pertama sesudah
+// pemasangan manual selalu utuh - itu perilaku yang benar, bukan kegagalan.
 //
 // Yang perlu disiapkan sekali di sisi Anda: satu tempat menaruh hasil build
 // (GitHub Releases, atau folder mana pun yang bisa diakses lewat HTTP). Tanpa
@@ -17,9 +24,55 @@
 // tanda tangan, dan itu risiko yang tidak sebanding dengan hematnya.
 
 const { app, dialog, Notification } = require('electron');
+const fs = require('fs');
+const path = require('path');
 
 let updater = null;      // dimuat malas: modulnya opsional saat pengembangan
 let sedangPeriksa = false;
+
+/** Catatan pemeriksaan pembaruan ke berkas.
+ *
+ * Pemeriksaan saat start sengaja senyap - host membuka aplikasi untuk menyusun
+ * jadwal, bukan mengurus pembaruan. Tapi senyap di layar tidak boleh berarti
+ * senyap sepenuhnya: tanpa jejak, "kenapa pembaruan tidak muncul" mustahil
+ * dijawab. Itu bukan kekhawatiran teoretis - dua kegagalan nyata sudah terjadi
+ * dan keduanya tidak memunculkan apa pun: rilis yang terbit sebagai draft
+ * (tidak terlihat tanpa token), dan satu percobaan yang tidak mengirim satu
+ * permintaan pun ke server tanpa alasan yang bisa dilacak.
+ *
+ * Berkasnya ditimpa tiap kali aplikasi dibuka, jadi ia tidak tumbuh tanpa batas
+ * dan isinya selalu tentang sesi yang sedang berjalan.
+ */
+const LOG = path.join(app.getPath('userData'), 'updater.log');
+let logDimulai = false;
+
+function catat(taraf, ...pesan) {
+  const teks = pesan
+    .map((p) => (typeof p === 'string' ? p : JSON.stringify(p)))
+    .join(' ');
+  const baris = `[${new Date().toISOString()}] ${taraf} ${teks}\n`;
+  try {
+    fs.appendFileSync(LOG, logDimulai ? baris : `--- sesi baru ---\n${baris}`,
+                      { flag: logDimulai ? 'a' : 'w' });
+    logDimulai = true;
+  } catch {
+    // Gagal mencatat tidak boleh menjatuhkan aplikasi.
+  }
+}
+
+// Bentuk yang diharapkan electron-updater; debug dibuang supaya berkasnya
+// tetap terbaca manusia.
+const logger = {
+  info: (...a) => catat('INFO ', ...a),
+  warn: (...a) => catat('WARN ', ...a),
+  error: (...a) => catat('ERROR', ...a),
+  debug: () => {},
+};
+
+/** Lokasi berkas catatan, untuk ditunjukkan ke host saat pemeriksaan gagal. */
+function berkasLog() {
+  return LOG;
+}
 
 function muatUpdater() {
   if (updater !== null) return updater;
@@ -66,6 +119,9 @@ function periksaPembaruan({ diam = true } = {}) {
   if (sedangPeriksa) return;
   sedangPeriksa = true;
 
+  au.logger = logger;
+  catat('INFO ', `versi terpasang ${app.getVersion()}, memeriksa pembaruan `
+    + `(${diam ? 'otomatis' : 'diminta host'})`);
   au.autoDownload = true;
   // Jangan pasang diam-diam di tengah host menyiapkan acara; pasang saat keluar.
   au.autoInstallOnAppQuit = true;
@@ -93,13 +149,16 @@ function periksaPembaruan({ diam = true } = {}) {
 
   au.on('error', (err) => {
     sedangPeriksa = false;
-    // Saat start, kegagalan jaringan bukan urusan host - jangan ganggu.
+    catat('ERROR', 'pemeriksaan gagal:', String(err && err.stack ? err.stack : err));
+    // Saat start, kegagalan jaringan bukan urusan host - jangan ganggu layarnya.
+    // Tapi tetap tercatat di berkas, supaya bisa ditelusuri belakangan.
     if (!diam) {
       dialog.showMessageBox({
         type: 'error',
         title: 'Pembaruan gagal',
         message: 'Tidak bisa memeriksa pembaruan.',
-        detail: String(err && err.message ? err.message : err),
+        detail: `${String(err && err.message ? err.message : err)}\n\n`
+          + `Rincian tercatat di:\n${berkasLog()}`,
       });
     }
   });
@@ -123,7 +182,13 @@ function periksaPembaruan({ diam = true } = {}) {
     }
   });
 
-  au.checkForUpdates().catch(() => { sedangPeriksa = false; });
+  // Error di sini TIDAK ditelan: dulu ia dibuang diam-diam, dan akibatnya
+  // kegagalan yang tidak pernah memunculkan apa pun jadi mustahil didiagnosis.
+  au.checkForUpdates().catch((err) => {
+    sedangPeriksa = false;
+    catat('ERROR', 'checkForUpdates ditolak:',
+          String(err && err.stack ? err.stack : err));
+  });
 }
 
 module.exports = { periksaPembaruan };

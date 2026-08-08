@@ -199,13 +199,23 @@ Terbukti ujung ke ujung: 1.0.0 terpasang menemukan 1.0.1, mengunduhnya, dan
 memasangnya; lalu 1.0.1 melakukan hal yang sama ke 1.0.2 — tanpa kredensial apa
 pun karena repo rilisnya publik.
 
-`electron-builder` juga menerbitkan `.blockmap` di samping tiap installer, yang
-dipakai `electron-updater` untuk mengunduh hanya bagian yang berubah. **Jalur
-itu belum pernah terbukti di sini**: pengujian dilakukan lewat feed HTTP lokal
-yang tidak melayani permintaan multi-rentang, sehingga updater selalu mundur ke
-unduhan utuh. GitHub melayani multi-rentang, jadi di produksi jalur diferensial
-semestinya terpakai — tapi selama belum diukur, jangan menjanjikan angkanya ke
-siapa pun.
+**Hanya bagian yang berubah yang diunduh.** `electron-builder` menerbitkan
+`.blockmap` di samping tiap installer; `electron-updater` membandingkan blockmap
+versi lama dan baru, lalu meminta blok yang berbeda saja lewat satu permintaan
+multi-rentang. Terukur pada pembaruan 1.0.5 → 1.0.6:
+
+```
+diferensial : 1,44 MB terkirim   (62 blok berubah, 1 permintaan, 9 potongan)
+unduhan utuh:  96,33 MB terkirim
+```
+
+Syaratnya satu, dan gampang terlewat: installer versi sebelumnya harus masih ada
+di cache updater (`%LOCALAPPDATA%\padelin-updater\installer.exe`). Cache itu
+terisi sendiri ketika pembaruan sebelumnya dipasang lewat updater. Kalau tidak
+ada — pemasangan pertama, atau cache dibersihkan — updater menghitung
+selisihnya, gagal membukanya, lalu mundur ke unduhan utuh dan mencatatnya di
+`updater.log`. Jadi pembaruan pertama sesudah pemasangan manual memang selalu
+utuh; yang berikutnya baru hemat.
 
 Satu jebakan yang sudah ditutup: `electron-builder` membuat rilis sebagai
 **draft** secara bawaan, dan draft tidak terlihat tanpa token. Build sukses,
