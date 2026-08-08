@@ -12,6 +12,7 @@ Fungsi biaya:
          + w_b2b      * (duduk 2 ronde beruntun)
          + w_rating   * SUM |rating_tim_A - rating_tim_B|
          + w_spread   * SUM max(0, jarak_rating - ambang)^2
+         + w_repeat   * SUM 1/jarak_ronde (match yang persis sama terulang)
 
 Bentuk c*(c-1) itu disengaja: fungsinya konveks, jadi optimizer otomatis lebih
 memilih "4 orang mengulang 1x" daripada "1 orang mengulang 4x". Pengulangan yang
@@ -45,6 +46,15 @@ class Weights:
     rating: float = 0.0
     spread: float = 0.0
     spread_threshold: float = 1.5
+    # Match yang terulang PERSIS (empat orang sama, tim sama). Kadang tak
+    # terhindarkan: 4 orang cuma punya 3 susunan match, jadi ronde ke-4 mereka
+    # pasti mengulang salah satunya. Yang bisa diatur adalah JARAKNYA - "lagi,
+    # sekarang juga" terasa seperti bug, "lagi, satu jam kemudian" tidak.
+    # Biayanya 1/jarak, jadi mengulang di ronde berikutnya jauh lebih mahal
+    # daripada mengulang di ujung acara. Sengaja lebih kecil dari satu
+    # pengulangan partner (2000) supaya perannya cuma memutus seri: tidak akan
+    # ada partner unik yang dikorbankan demi menggeser jarak pengulangan.
+    repeat_gap: float = 200.0
     # Preferensi per-peserta (mis. "saya maunya court isi 4 perempuan").
     # Lunak, bukan keras: kalau tidak bisa dipenuhi, jadwal tetap jadi dan
     # pelanggarannya dilaporkan ke host apa adanya.
@@ -117,6 +127,33 @@ class Rules:
     def locked(self) -> bool:
         return bool(self.locked_partner)
 
+    def active_mate(self, p: int, r: int) -> int | None:
+        """Rekan tetap p, kalau kuncinya masih mungkin ditegakkan di ronde r.
+
+        Kunci partner berlaku lintas babak, tapi tidak setiap babak sanggup
+        menampungnya: pasangan putra-putri mustahil di babak "sesama gender",
+        pasangan sesama gender mustahil di babak "mixed", dan rekan yang tidak
+        turun di babak itu jelas tidak bisa dipasangkan.
+
+        Kalau kunci ditegakkan buta di babak seperti itu, TIDAK ADA susunan yang
+        lolos - orangnya bukan cuma kehilangan partner tetapnya, tapi hilang
+        dari babak itu sama sekali. Jadi di babak yang mustahil kuncinya
+        dilonggarkan; pelonggarannya dilaporkan ke host lewat catatan jadwal.
+        """
+        mate = self.locked_partner.get(p)
+        if mate is None:
+            return None
+        eligible = self.round_eligible[r] if r < len(self.round_eligible) else None
+        if eligible is not None and mate not in eligible:
+            return None
+        rule = self.round_rule[r] if r < len(self.round_rule) else "open"
+        gp, gm = self.gender.get(p), self.gender.get(mate)
+        if rule == "mixed" and (gp is None or gm is None or gp == gm):
+            return None
+        if rule == "same_gender" and (gp is None or gp != gm):
+            return None
+        return mate
+
     def quad_ok(self, quad: list[int], r: int) -> bool:
         a, b, c, d = quad
         eligible = self.round_eligible[r] if r < len(self.round_eligible) else None
@@ -124,17 +161,12 @@ class Rules:
             if a not in eligible or b not in eligible or c not in eligible or d not in eligible:
                 return False
 
-        lp = self.locked_partner
-        if lp:
+        if self.locked_partner:
             # Hanya pemain yang minta partner tetap yang diperiksa; peserta lain bebas.
-            if a in lp and lp[a] != b:
-                return False
-            if b in lp and lp[b] != a:
-                return False
-            if c in lp and lp[c] != d:
-                return False
-            if d in lp and lp[d] != c:
-                return False
+            for x, mate_slot in ((a, b), (b, a), (c, d), (d, c)):
+                m = self.active_mate(x, r)
+                if m is not None and m != mate_slot:
+                    return False
 
         if self.tier_of:
             t = self.tier_of
@@ -163,8 +195,8 @@ class ScheduleState:
 
     __slots__ = (
         "n", "ratings", "w", "rules", "n_rounds", "matches", "byes",
-        "pc", "oc", "bye_count", "cost_pair", "cost_bye",
-        "cost_b2b", "cost_rating", "cost_pref",
+        "pc", "oc", "bye_count", "seen_at", "cost_pair", "cost_bye",
+        "cost_b2b", "cost_rating", "cost_pref", "cost_repeat",
     )
 
     def __init__(self, n: int, ratings: list[float], w: Weights,
@@ -180,15 +212,25 @@ class ScheduleState:
         self.pc = [0] * (n * n)
         self.oc = [0] * (n * n)
         self.bye_count = [0] * n
+        # susunan match -> ronde-ronde tempat ia muncul (untuk biaya jarak ulang)
+        self.seen_at: dict[tuple, list[int]] = {}
         self.cost_pair = 0.0
         self.cost_bye = 0.0
         self.cost_b2b = 0.0
         self.cost_rating = 0.0
         self.cost_pref = 0.0
+        self.cost_repeat = 0.0
 
     # -- indeks simetris --------------------------------------------------
     def _k(self, i: int, j: int) -> int:
         return i * self.n + j if i < j else j * self.n + i
+
+    @staticmethod
+    def _match_key(quad: list[int]) -> tuple:
+        a, b, c, d = quad
+        ta = (a, b) if a < b else (b, a)
+        tb = (c, d) if c < d else (d, c)
+        return (ta, tb) if ta < tb else (tb, ta)
 
     def _pref_cost(self, quad: list[int]) -> float:
         if not self.rules.court_pref or self.w.preference == 0.0:
@@ -212,10 +254,36 @@ class ScheduleState:
                 cost += w.spread * over * over
         return cost
 
+    # -- biaya jarak pengulangan match ------------------------------------
+    def _touch_repeat(self, quad: list[int], sign: int, r: int) -> None:
+        """Biaya 1/jarak terhadap kemunculan lain dari susunan match yang sama."""
+        w = self.w.repeat_gap
+        key = self._match_key(quad)
+        seen = self.seen_at
+        if sign > 0:
+            others = seen.get(key)
+            if others:
+                if w:
+                    self.cost_repeat += w * sum(1.0 / max(1, abs(r - o))
+                                                for o in others)
+                others.append(r)
+            else:
+                seen[key] = [r]
+        else:
+            others = seen[key]
+            others.remove(r)
+            if others:
+                if w:
+                    self.cost_repeat -= w * sum(1.0 / max(1, abs(r - o))
+                                                for o in others)
+            else:
+                del seen[key]
+
     # -- tambah / hapus match --------------------------------------------
-    def _touch_match(self, quad: list[int], sign: int) -> None:
+    def _touch_match(self, quad: list[int], sign: int, r: int) -> None:
         """sign=+1 pasang match, sign=-1 lepas match. Update count + cost."""
         a, b, c, d = quad
+        self._touch_repeat(quad, sign, r)
         wp, wo = self.w.partner, self.w.opponent
         pc, oc, k = self.pc, self.oc, self._k
 
@@ -267,7 +335,7 @@ class ScheduleState:
     # -- total ------------------------------------------------------------
     def cost(self) -> float:
         return (self.cost_pair + self.cost_bye + self.cost_b2b
-                + self.cost_rating + self.cost_pref)
+                + self.cost_rating + self.cost_pref + self.cost_repeat)
 
     def round_legal(self, r: int) -> bool:
         return all(self.rules.quad_ok(q, r) for q in self.matches[r])
@@ -276,7 +344,7 @@ class ScheduleState:
     def place_round(self, r: int, quads: list[list[int]], byes: list[int]) -> None:
         for q in quads:
             self.matches[r].append(list(q))
-            self._touch_match(q, +1)
+            self._touch_match(q, +1, r)
         for p in byes:
             self._set_bye(r, p, True)
 
@@ -292,8 +360,9 @@ class ScheduleState:
         self.pc = [0] * (self.n * self.n)
         self.oc = [0] * (self.n * self.n)
         self.bye_count = [0] * self.n
+        self.seen_at = {}
         self.cost_pair = self.cost_bye = self.cost_b2b = 0.0
-        self.cost_rating = self.cost_pref = 0.0
+        self.cost_rating = self.cost_pref = self.cost_repeat = 0.0
         for r, rnd in enumerate(quads):
             self.place_round(r, rnd, sorted(byes[r]))
 
@@ -311,11 +380,11 @@ def _swap_within_match(st: ScheduleState, r: int, rng: random.Random) -> bool:
         return False
     mi = rng.randrange(len(st.matches[r]))
     quad = st.matches[r][mi]
-    st._touch_match(quad, -1)
+    st._touch_match(quad, -1, r)
     a, b, c, d = quad
     new = [a, c, b, d] if rng.random() < 0.5 else [a, d, c, b]
     st.matches[r][mi] = new
-    st._touch_match(new, +1)
+    st._touch_match(new, +1, r)
     return True
 
 
@@ -326,11 +395,11 @@ def _swap_between_matches(st: ScheduleState, r: int, rng: random.Random) -> bool
         return False
     i, j = rng.sample(range(len(ms)), 2)
     pi, pj = rng.randrange(4), rng.randrange(4)
-    st._touch_match(ms[i], -1)
-    st._touch_match(ms[j], -1)
+    st._touch_match(ms[i], -1, r)
+    st._touch_match(ms[j], -1, r)
     ms[i][pi], ms[j][pj] = ms[j][pj], ms[i][pi]
-    st._touch_match(ms[i], +1)
-    st._touch_match(ms[j], +1)
+    st._touch_match(ms[i], +1, r)
+    st._touch_match(ms[j], +1, r)
     return True
 
 
@@ -341,12 +410,12 @@ def _swap_teams_between_matches(st: ScheduleState, r: int, rng: random.Random) -
         return False
     i, j = rng.sample(range(len(ms)), 2)
     si, sj = rng.randrange(2) * 2, rng.randrange(2) * 2
-    st._touch_match(ms[i], -1)
-    st._touch_match(ms[j], -1)
+    st._touch_match(ms[i], -1, r)
+    st._touch_match(ms[j], -1, r)
     ms[i][si], ms[j][sj] = ms[j][sj], ms[i][si]
     ms[i][si + 1], ms[j][sj + 1] = ms[j][sj + 1], ms[i][si + 1]
-    st._touch_match(ms[i], +1)
-    st._touch_match(ms[j], +1)
+    st._touch_match(ms[i], +1, r)
+    st._touch_match(ms[j], +1, r)
     return True
 
 
@@ -360,9 +429,9 @@ def _swap_with_bye(st: ScheduleState, r: int, rng: random.Random) -> bool:
     quad = st.matches[r][mi]
     playing = quad[pi]
 
-    st._touch_match(quad, -1)
+    st._touch_match(quad, -1, r)
     quad[pi] = resting
-    st._touch_match(quad, +1)
+    st._touch_match(quad, +1, r)
     st._set_bye(r, resting, False)
     st._set_bye(r, playing, True)
     return True
@@ -383,14 +452,75 @@ def _swap_team_with_bye(st: ScheduleState, r: int, rng: random.Random) -> bool:
     quad = st.matches[r][mi]
     out_a, out_b = quad[slot], quad[slot + 1]
 
-    st._touch_match(quad, -1)
+    st._touch_match(quad, -1, r)
     quad[slot], quad[slot + 1] = resting, mate
-    st._touch_match(quad, +1)
+    st._touch_match(quad, +1, r)
     st._set_bye(r, resting, False)
     st._set_bye(r, mate, False)
     st._set_bye(r, out_a, True)
     st._set_bye(r, out_b, True)
     return True
+
+
+def _swap_rounds(st: ScheduleState, r: int, r2: int) -> bool:
+    """Tukar ISI dua ronde secara utuh.
+
+    Gerakan lain hanya menyentuh satu ronde, dan itu meninggalkan satu jenis
+    perbaikan di luar jangkauan: menggeser LETAK pengulangan. Susunan A-B-A-C
+    seharusnya jadi A-B-C-A supaya jaraknya jauh, tapi untuk sampai ke sana
+    ronde ke-3 dan ke-4 harus berubah bersamaan - dan keadaan antaranya
+    (A-B-C-C) lebih mahal, jadi annealing per-ronde terjebak di lembah.
+    Menukar dua ronde sekaligus melompati lembah itu dalam satu langkah.
+    """
+    if r == r2:
+        return False
+    # Salin dulu: _set_bye mengosongkan set aslinya, jadi membaca setelah
+    # pembongkaran akan mengembalikan daftar istirahat yang kosong.
+    keep_r = [q[:] for q in st.matches[r]]
+    keep_r2 = [q[:] for q in st.matches[r2]]
+    keep_br = sorted(st.byes[r])
+    keep_br2 = sorted(st.byes[r2])
+
+    for q in st.matches[r]:
+        st._touch_match(q, -1, r)
+    for q in st.matches[r2]:
+        st._touch_match(q, -1, r2)
+    for p in keep_br:
+        st._set_bye(r, p, False)
+    for p in keep_br2:
+        st._set_bye(r2, p, False)
+
+    st.matches[r], st.matches[r2] = keep_r2, keep_r
+    for q in st.matches[r]:
+        st._touch_match(q, +1, r)
+    for q in st.matches[r2]:
+        st._touch_match(q, +1, r2)
+    for p in keep_br2:
+        st._set_bye(r, p, True)
+    for p in keep_br:
+        st._set_bye(r2, p, True)
+    return True
+
+
+def swap_groups(st: ScheduleState) -> dict[int, list[int]]:
+    """Ronde -> ronde lain yang isinya boleh ditukar dengannya.
+
+    Hanya ronde dengan aturan komposisi DAN daftar pemain yang sah sama persis;
+    menukar ronde putra dengan ronde putri jelas melanggar batas keras.
+    """
+    rules = st.rules
+    buckets: dict[tuple, list[int]] = {}
+    for r in range(st.n_rounds):
+        if not st.matches[r]:
+            continue
+        rule = rules.round_rule[r] if r < len(rules.round_rule) else "open"
+        elig = (rules.round_eligible[r]
+                if r < len(rules.round_eligible) else None)
+        key = (rule, frozenset(elig) if elig is not None else None,
+               len(st.matches[r]))
+        buckets.setdefault(key, []).append(r)
+    return {r: peers for peers in buckets.values() if len(peers) > 1
+            for r in peers}
 
 
 def play_counts(st: ScheduleState) -> list[int]:
@@ -407,16 +537,16 @@ def _try_swap(st: ScheduleState, r: int, mi: int, pi: int, incoming: int):
     """Turunkan `incoming` menggantikan penghuni slot; kembalikan fungsi pembatal."""
     quad = st.matches[r][mi]
     outgoing = quad[pi]
-    st._touch_match(quad, -1)
+    st._touch_match(quad, -1, r)
     quad[pi] = incoming
-    st._touch_match(quad, +1)
+    st._touch_match(quad, +1, r)
     st._set_bye(r, incoming, False)
     st._set_bye(r, outgoing, True)
 
     def undo() -> None:
-        st._touch_match(quad, -1)
+        st._touch_match(quad, -1, r)
         quad[pi] = outgoing
-        st._touch_match(quad, +1)
+        st._touch_match(quad, +1, r)
         st._set_bye(r, outgoing, False)
         st._set_bye(r, incoming, True)
 
@@ -506,6 +636,8 @@ def anneal(
     t_end = 0.05
     locked = st.rules.locked
 
+    peers = swap_groups(st)
+
     tick = max(1, iterations // 25)
     for it in range(iterations):
         if progress is not None and it % tick == 0:
@@ -516,12 +648,24 @@ def anneal(
         r = rng.choice(rounds_with_matches)
 
         before = current
-        # Simpan kondisi ronde untuk rollback murah.
-        saved_quads = [q[:] for q in st.matches[r]]
-        saved_byes = set(st.byes[r])
-
         roll = rng.random()
-        if locked:
+
+        # Tukar ronde utuh: satu-satunya gerakan yang menyentuh dua ronde, jadi
+        # dipilih lebih dulu supaya rollback tahu apa saja yang harus disimpan.
+        r2 = None
+        if roll >= 0.92:
+            group = peers.get(r)
+            if group:
+                r2 = rng.choice([x for x in group if x != r])
+
+        touched = (r, r2) if r2 is not None else (r,)
+        # Simpan kondisi ronde untuk rollback murah.
+        saved = [([q[:] for q in st.matches[t]], set(st.byes[t]))
+                 for t in touched]
+
+        if r2 is not None:
+            moved = _swap_rounds(st, r, r2)
+        elif locked:
             # Ada peserta berpartner tetap. Gerakan tim utuh dipakai untuk mereka,
             # gerakan per-pemain tetap dipakai untuk peserta yang rotasi bebas
             # (gerakan yang memecah pasangan terkunci ditolak quad_ok).
@@ -546,7 +690,7 @@ def anneal(
             continue
 
         # Batas keras: gerakan ilegal langsung dibatalkan, tanpa masuk cost.
-        accept = st.round_legal(r)
+        accept = all(st.round_legal(t) for t in touched)
         if accept:
             current = st.cost()
             delta = current - before
@@ -557,15 +701,20 @@ def anneal(
                 best = current
                 best_snap = st.snapshot()
         else:
-            for q in st.matches[r]:
-                st._touch_match(q, -1)
-            for p in list(st.byes[r]):
-                st._set_bye(r, p, False)
-            st.matches[r] = [q[:] for q in saved_quads]
-            for q in st.matches[r]:
-                st._touch_match(q, +1)
-            for p in sorted(saved_byes):
-                st._set_bye(r, p, True)
+            # Bongkar semua ronde yang tersentuh dulu, baru pasang kembali.
+            # Biaya duduk-beruntun membaca tetangga, jadi kalau dua ronde yang
+            # bersebelahan dibongkar-pasang bergantian, hitungannya melenceng.
+            for t in touched:
+                for q in st.matches[t]:
+                    st._touch_match(q, -1, t)
+                for p in list(st.byes[t]):
+                    st._set_bye(t, p, False)
+            for t, (quads, byes) in zip(touched, saved):
+                st.matches[t] = [q[:] for q in quads]
+                for q in st.matches[t]:
+                    st._touch_match(q, +1, t)
+                for p in sorted(byes):
+                    st._set_bye(t, p, True)
             current = st.cost()
 
     if best < current - 1e-9:

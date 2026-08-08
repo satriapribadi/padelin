@@ -209,6 +209,41 @@ class TestSameGenderRule(unittest.TestCase):
             any("terulang persis sama" in nt for nt in sch.notes),
             f"pengulangan tidak dijelaskan di catatan: {sch.notes}")
 
+    def test_forced_repeat_is_pushed_far_apart(self):
+        """Pengulangan yang terpaksa harus jatuh sejauh mungkin.
+
+        Kasus nyata dari host: babak putra dapat ronde 1, 4, 7, 10 sementara
+        4 orang cuma punya 3 susunan match, jadi satu pengulangan wajib ada.
+        Optimizer menaruhnya di ronde 1 & 4 - dua ronde putra yang berurutan,
+        yang terbaca sebagai bug. Dulu memang tidak ada bedanya bagi fungsi
+        biaya: A-B-C-A dan A-A-B-C punya hitungan partner & lawan yang sama.
+        Sekarang jaraknya ikut dihitung, jadi pilihannya ronde 1 & 10.
+        """
+        players = make_players(8, genders=["M"] * 4 + ["F"] * 4)
+        for seed in range(4):
+            cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                         warmup_minutes=0, effort=15000, seed=seed,
+                         interleave_segments=True,
+                         segments=[Segment("Sesama gender", 4, "men"),
+                                   Segment("Sesama gender", 4, "women"),
+                                   Segment("Mixed", 4, "mixed")])
+            sch = build_schedule(players, cfg)
+            seen = {}
+            for rnd in sch.rounds:
+                for m in rnd.matches:
+                    key = tuple(sorted((tuple(sorted(m.team_a)),
+                                        tuple(sorted(m.team_b)))))
+                    seen.setdefault(key, []).append(rnd.index)
+            gaps = [(b - a, v) for v in seen.values() if len(v) > 1
+                    for a, b in zip(v, v[1:])]
+            self.assertTrue(gaps, f"seed {seed}: setup ini harus memaksa ulang")
+            # Ronde gender pertama & terakhir berjarak 9 (1..10 / 2..11); itu
+            # jarak maksimum yang mungkin, dan optimizer harus mencapainya.
+            worst, where = min(gaps)
+            self.assertGreaterEqual(
+                worst, 9,
+                f"seed {seed}: pengulangan terlalu berdekatan di ronde {where}")
+
 
 class TestInterleaveSegments(unittest.TestCase):
     """Babak yang memakai orang berbeda tidak boleh berjalan sebagai blok.
@@ -548,6 +583,71 @@ class TestTeamMode(unittest.TestCase):
                 for team in (m.team_a, m.team_b):
                     self.assertEqual(expected[team[0]], team[1],
                                      f"pasangan tetap terpecah: {team}")
+
+
+class TestMixedWithLockedPartner(unittest.TestCase):
+    """Format yang ditanyakan host: babak mixed, tapi partner tidak berganti.
+
+    Dulu ini diam-diam gagal. Konstruksi awal babak mixed memakai rotasi Latin
+    square yang mengabaikan kunci partner, dan annealing tidak bisa
+    memperbaikinya: gerakannya per-ronde, sedangkan ronde yang lahir melanggar
+    kunci tidak punya satu pun susunan pengganti yang legal. Hasilnya jadwal
+    yang melanggar permintaan host tanpa satu pun peringatan.
+    """
+
+    def _mixed_pairs(self):
+        players = make_players(8, genders=["M"] * 4 + ["F"] * 4)
+        for i in range(4):                      # tiap putra dikunci ke satu putri
+            players[i].partner_id = 4 + i
+            players[4 + i].partner_id = i
+        return players, {p.id: p.partner_id for p in players}
+
+    def test_partner_never_changes_during_mixed(self):
+        players, expected = self._mixed_pairs()
+        for seed in range(4):
+            cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                         warmup_minutes=0, seed=seed, effort=15000,
+                         segments=[Segment("Mixed", 6, "mixed")])
+            sch = build_schedule(players, cfg)
+            assert_structurally_valid(self, sch)
+            for rnd in sch.rounds:
+                for m in rnd.matches:
+                    for team in (m.team_a, m.team_b):
+                        self.assertEqual(
+                            expected[team[0]], team[1],
+                            f"seed {seed} ronde {rnd.index}: pasangan tetap "
+                            f"terpecah di babak mixed: {team}")
+
+    def test_locked_mixed_pair_still_plays_in_same_gender_segment(self):
+        """Kunci beda gender mustahil di babak "sesama gender".
+
+        Yang tidak boleh terjadi: kunci ditegakkan buta sampai tidak ada susunan
+        yang lolos, lalu orangnya hilang sama sekali dari babak itu. Kuncinya
+        dilonggarkan di sana, dan host diberi tahu.
+        """
+        players, expected = self._mixed_pairs()
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, seed=2, effort=15000,
+                     segments=[Segment("Sesama gender", 3, "same_gender"),
+                               Segment("Mixed", 3, "mixed")])
+        sch = build_schedule(players, cfg)
+        assert_structurally_valid(self, sch)
+
+        plays = sch.stats.plays_per_player
+        self.assertTrue(all(v > 0 for v in plays.values()),
+                        f"ada peserta yang hilang dari jadwal: {plays}")
+        # Kunci tetap ditegakkan di babak yang sanggup menampungnya.
+        for rnd in sch.rounds:
+            if rnd.segment != "Mixed":
+                continue
+            for m in rnd.matches:
+                for team in (m.team_a, m.team_b):
+                    self.assertEqual(expected[team[0]], team[1],
+                                     f"ronde {rnd.index}: kunci terpecah di mixed")
+        self.assertTrue(
+            any("partner tetap" in nt and "Sesama gender" in nt
+                for nt in sch.notes),
+            f"pelonggaran kunci tidak dilaporkan ke host: {sch.notes}")
 
 
 class TestTieredMode(unittest.TestCase):

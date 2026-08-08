@@ -232,7 +232,28 @@ def _candidate_rounds(
     if seg.rule == "mixed":
         men = [p for p in eligible if by_id[p].gender == "M"]
         women = [p for p in eligible if by_id[p].gender == "F"]
-        return mixed_pair_rounds(men, women)
+        # Pasangan putra-putri yang dikunci tetap menempel sepanjang babak;
+        # sisanya dirotasi Latin square seperti biasa. Tanpa ini konstruksi awal
+        # sudah melanggar kunci, dan annealing tidak bisa memperbaikinya:
+        # gerakannya per-ronde dan ronde yang lahir ilegal tidak punya jalan
+        # keluar yang legal.
+        fixed: list[tuple[int, int]] = []
+        free_men, free_women = [], []
+        women_set = set(women)
+        for pid in men:
+            mate = locked.get(pid)
+            if mate is not None and mate in women_set:
+                fixed.append((min(pid, mate), max(pid, mate)))
+            else:
+                free_men.append(pid)
+        paired = {p for pr in fixed for p in pr}
+        free_women = [p for p in women if p not in paired]
+        if not fixed:
+            return mixed_pair_rounds(men, women)
+        rest = mixed_pair_rounds(free_men, free_women)
+        if not rest:
+            return [sorted(fixed)]
+        return [sorted(fixed) + list(rnd) for rnd in rest]
 
     if seg.rule == "same_gender":
         men = [p for p in eligible if by_id[p].gender == "M"]
@@ -803,12 +824,45 @@ def build_schedule(players: list[Player], config: Config,
             default=n,
         )
         combos = math.comb(pool, 4) * 3 if pool >= 4 else 0
+        # Jarak terdekat antar dua kemunculan yang sama. Optimizer sengaja
+        # memaksimalkannya, jadi sebut angkanya: "terulang lagi 9 ronde
+        # kemudian" terbaca sangat berbeda dari "terulang lagi ronde depan".
+        gap = min(b - a for v in repeated.values() for a, b in zip(v, v[1:]))
         notes.append(
             f"{len(repeated)} match terulang persis sama ({detail}). "
             f"Kelompok terkecil di acara ini {pool} orang, yang hanya punya "
             f"{combos} susunan match berbeda - dengan {total_rounds} ronde, "
-            f"pengulangan seperti ini tidak selalu bisa dihindari."
+            f"pengulangan seperti ini tidak selalu bisa dihindari. "
+            f"Jaraknya sudah disebar sejauh mungkin: pengulangan terdekat "
+            f"berselang {gap} ronde."
         )
+
+    # Kunci partner berlaku lintas babak, tapi aturan komposisi bisa membuatnya
+    # mustahil: pasangan beda gender tidak punya tempat di babak "sesama
+    # gender", pasangan sesama gender tidak punya tempat di babak "mixed". Di
+    # babak seperti itu kuncinya dilonggarkan supaya orangnya tetap kebagian
+    # main - tapi host yang memintanya harus tahu, bukan menemukannya sendiri
+    # dari jadwal.
+    if locked:
+        relaxed: dict[str, set[str]] = {}
+        for r, rnd in enumerate(rounds):
+            eligible = (rules.round_eligible[r]
+                        if r < len(rules.round_eligible) else None)
+            for pid in locked:
+                # Rekan yang memang tidak turun di babak ini tidak perlu
+                # disebut - itu sudah jelas dari aturan babaknya sendiri.
+                if eligible is not None and locked[pid] not in eligible:
+                    continue
+                if rules.active_mate(pid, r) is None:
+                    label = rnd.segment or "babak ini"
+                    relaxed.setdefault(label, set()).add(local_players[pid].name)
+        for label, who in relaxed.items():
+            notes.append(
+                f"Babak '{label}': partner tetap {', '.join(sorted(who))} tidak "
+                f"bisa diberlakukan karena aturan komposisi babak itu, jadi "
+                f"mereka dirotasi biasa di sana. Partner tetapnya tetap berlaku "
+                f"di babak lain."
+            )
 
     if violations:
         affected = {v.player_name for v in violations}
@@ -816,6 +870,14 @@ def build_schedule(players: list[Player], config: Config,
             f"{len(violations)} permintaan komposisi court tidak terpenuhi "
             f"({', '.join(sorted(affected))}). Detailnya ada di daftar preferensi."
         )
+
+    # Catatan yang persis sama disatukan, urutannya dipertahankan. Beberapa
+    # catatan lahir per segmen, sedangkan satu babak bisa terpecah jadi banyak
+    # potongan - selang-seling memecah "Sesama gender 6 ronde" jadi enam
+    # potongan 1 ronde, dan host melihat peringatan yang sama enam kali. Isinya
+    # identik, jadi pengulangannya murni derau: menutupi catatan lain yang
+    # justru perlu dibaca.
+    notes = list(dict.fromkeys(notes))
 
     say(1.0, f"Selesai - kualitas {stats.quality_score}/100")
     return Schedule(players=final_players, config=resolved, rounds=rounds,
