@@ -1,0 +1,40 @@
+<!doctype html>
+<!--
+  Sumber ikon aplikasi. Dirender ke PNG beberapa ukuran lalu dikemas jadi
+  icon.ico oleh electron/make-icon.js.
+
+  Kenapa lewat HTML dan bukan langsung dari web/logo.svg: logonya memakai
+  `currentColor` supaya bisa ikut warna teks di aplikasi, jadi kalau dirender
+  sendirian ia keluar hitam di atas transparan - hilang di taskbar gelap.
+  Di sini warnanya ditetapkan dan diberi latar, memakai token yang sama dengan
+  aplikasinya (--bg dan --accent).
+-->
+<meta charset="utf-8">
+<style>
+  html, body { margin: 0; padding: 0; background: transparent; }
+  .tile {
+    width: 256px; height: 256px;
+    background: #161c24;              /* --panel, kontras di taskbar terang & gelap */
+    border-radius: 56px;              /* mengikuti bentuk ikon Windows 11 */
+    display: flex; align-items: center; justify-content: center;
+    color: #e8edf3;                   /* --ink, mewarnai stroke raket */
+  }
+  svg { width: 168px; height: 168px; display: block; }
+</style>
+<div class="tile">
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" role="img" aria-label="Padelin">
+    <rect x="6.5" y="3" width="27" height="25" rx="11.5"
+          fill="none" stroke="currentColor" stroke-width="2.4"/>
+    <path d="M13.5 27.2 L17.5 32.4 M26.5 27.2 L22.5 32.4"
+          stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/>
+    <rect x="17.8" y="31.4" width="4.4" height="6.4" rx="2.2" fill="currentColor"/>
+    <g fill="#3d9be9">
+      <circle cx="14" cy="11.5" r="1.9"/>
+      <circle cx="20" cy="11.5" r="1.9"/>
+      <circle cx="26" cy="11.5" r="1.9"/>
+      <circle cx="17" cy="17.5" r="1.9"/>
+      <circle cx="23" cy="17.5" r="1.9"/>
+      <circle cx="20" cy="23.5" r="1.9"/>
+    </g>
+  </svg>
+</div>

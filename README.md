@@ -166,8 +166,11 @@ Kode di `web/` tetap nol dependency dan tetap bisa dibuka lewat browser.
 
 ```bash
 npm install
+npm run icon       # bangun ikon aplikasi dari web/logo.svg
 npm start          # jalankan dari kode sumber
+npm run shortcut   # buat Padelin.lnk (tambah -- -Desktop untuk taruh di Desktop)
 npm run dist       # bangun installer Windows (.exe)
+npm run portable   # bangun paket portable, tanpa pemasangan
 ```
 
 **Apa yang perlu dipasang pengguna akhir: tidak ada.**
@@ -200,6 +203,24 @@ lewat HTTP. Ganti `build.publish.url` di `package.json` ke server Anda, atau
 tukar providernya ke `github`. Tanpa itu tidak ada yang bisa diperiksa.
 
 Naikkan `version` di `package.json` tiap merilis — itu yang dibandingkan.
+
+### Paket portable, tanpa pemasangan
+
+`npm run portable` menghasilkan `dist-portable/` berisi folder aplikasi dan satu
+pintasan `Padelin.lnk`. Bisa disalin ke flashdisk atau komputer lain apa adanya;
+Python sudah ikut di dalamnya, jadi tidak ada yang perlu dipasang.
+
+Bedanya dengan installer bukan cuma kepraktisan. Windows menilai executable dari
+**reputasi**, dan biner yang baru dibuat belum punya reputasi apa pun — di mesin
+dengan Smart App Control aktif, executable baru bisa ditolak mentah-mentah pada
+percobaan pertama. Paket portable sengaja tidak membuat executable baru:
+`electron.exe` dibiarkan utuh, dan nama serta ikon aplikasi dibawa oleh pintasan
+— yang bukan executable, jadi tidak kena penilaian itu.
+
+Harganya: di Task Manager prosesnya bernama `electron.exe`, bukan `Padelin.exe`.
+
+Data acara tetap di `%APPDATA%\Padelin`, bukan di dalam folder portable — jadi
+menyalin foldernya tidak ikut membawa data siapa pun.
 
 ## Tes
 

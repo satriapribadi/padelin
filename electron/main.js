@@ -58,9 +58,35 @@ function freePort() {
   });
 }
 
-/** Akar berkas aplikasi: di dalam paket terpasang isinya ada di resources. */
+/** Folder resources paket yang dibagikan, atau null kalau jalan dari repo.
+ *
+ * SENGAJA tidak memakai app.isPackaged. Electron menentukan nilai itu dari nama
+ * berkas executable-nya - kalau namanya masih electron.exe, ia dianggap "belum
+ * dipaketkan". Paket portable justru MEMBIARKAN nama itu apa adanya (biner yang
+ * diganti nama kehilangan reputasinya di Smart App Control), jadi app.isPackaged
+ * di sana bernilai false padahal jelas-jelas sudah dipaketkan.
+ *
+ * Akibatnya kalau dipercaya: aplikasi diam-diam memakai Python SISTEM alih-alih
+ * Python bundel, dan database ditulis ke dalam folder paket. Di mesin
+ * pengembang keduanya tidak terlihat salah - baru ketahuan di komputer yang
+ * belum punya Python, yaitu tepat yang menjadi alasan Python dibundel.
+ *
+ * Jadi yang diperiksa keberadaan berkasnya, bukan nama executable-nya.
+ */
+function distRoot() {
+  const rp = process.resourcesPath;
+  if (!rp) return null;
+  const tanda = [
+    path.join(rp, 'python'),
+    path.join(rp, 'app.asar.unpacked'),
+    path.join(rp, 'app', 'run.py'),
+  ];
+  return tanda.some((p) => fs.existsSync(p)) ? rp : null;
+}
+
+/** Akar berkas aplikasi: di dalam paket isinya ada di resources. */
 function resourcesRoot() {
-  return app.isPackaged ? process.resourcesPath : ROOT;
+  return distRoot() || ROOT;
 }
 
 /** Akar berkas PYTHON. Sengaja dipisah dari resourcesRoot().
@@ -72,9 +98,16 @@ function resourcesRoot() {
  * tinggal sebagai berkas biasa di app.asar.unpacked.
  */
 function pythonAppRoot() {
-  return app.isPackaged
-    ? path.join(process.resourcesPath, 'app.asar.unpacked')
-    : ROOT;
+  const dist = distRoot();
+  if (!dist) return ROOT;
+  // Dua tata letak yang sah:
+  //   resources/app.asar.unpacked  <- hasil electron-builder (asar + unpack)
+  //   resources/app                <- paket portable, berkas apa adanya
+  const kandidat = [
+    path.join(dist, 'app.asar.unpacked'),
+    path.join(dist, 'app'),
+  ];
+  return kandidat.find((p) => fs.existsSync(path.join(p, 'run.py'))) || kandidat[0];
 }
 
 /** Python mana yang dipakai, berurutan dari yang paling pasti.
@@ -112,8 +145,13 @@ function pythonCommand() {
  * atau dipasang ulang. Dijalankan dari repo, tetap padel.db di repo.
  */
 function databasePath() {
-  if (!app.isPackaged) return path.join(ROOT, 'padel.db');
-  return path.join(app.getPath('userData'), 'padel.db');
+  // Sama seperti di atas: yang menentukan tata letak berkasnya, bukan
+  // app.isPackaged. Kalau tertukar, paket portable menulis database ke DALAM
+  // foldernya sendiri - ikut tersalin saat foldernya dibagikan, membawa data
+  // acara orang lain tanpa ada yang menyadarinya.
+  return distRoot()
+    ? path.join(app.getPath('userData'), 'padel.db')
+    : path.join(ROOT, 'padel.db');
 }
 
 /** Tunggu sampai server benar-benar menjawab, bukan sekadar prosesnya hidup. */
@@ -204,6 +242,9 @@ function createWindow() {
     backgroundColor: '#0f1419',   // sama dengan --bg, supaya tidak berkedip putih
     show: false,
     title: 'Padelin',
+    // Dibutuhkan saat jalan dari kode sumber: tanpa ini taskbar memakai ikon
+    // bawaan Electron. Versi terpasang mengambilnya dari exe.
+    icon: path.join(__dirname, 'build', 'icon.ico'),
     webPreferences: {
       contextIsolation: true,
       nodeIntegration: false,

@@ -28,3 +28,8 @@ electron/vendor/
 # IDE
 .idea/
 .vscode/
+
+# Pintasan & paket portable (jalur absolut, khas tiap mesin)
+Padelin.lnk
+dist-portable/
+electron/build/icon.ico

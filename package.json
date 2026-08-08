@@ -9,6 +9,9 @@
     "start": "electron .",
     "dev": "electron . --dev",
     "fetch-python": "node electron/fetch-python.js",
+    "icon": "node electron/make-icon.js",
+    "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File electron/make-shortcut.ps1",
+    "portable": "node electron/make-portable.js",
     "dist": "npm run fetch-python && electron-builder",
     "dist:dir": "npm run fetch-python && electron-builder --dir"
   },
