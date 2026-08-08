@@ -172,13 +172,25 @@ function periksaPembaruan({ diam = true } = {}) {
       cancelId: 1,
       title: 'Pembaruan siap',
       message: `Versi ${info.version} sudah diunduh.`,
-      detail: 'Memasang sekarang akan menutup jendela yang terbuka. '
+      detail: 'Memasang sekarang menutup jendela yang terbuka, lalu Padelin '
+        + 'terbuka lagi sendiri.\n\n'
         + 'Kalau sedang menyiapkan acara, pilih "Nanti saat ditutup" - '
-        + 'pembaruannya dipasang otomatis begitu aplikasi ditutup.',
+        + 'pembaruannya dipasang begitu Padelin ditutup, dan tidak dibuka lagi '
+        + 'setelahnya.',
     });
     if (response === 0) {
       app.isQuitting = true;
-      au.quitAndInstall();
+      // (senyap, jalankan lagi setelah pasang).
+      //
+      // Bawaannya quitAndInstall() TIDAK senyap, jadi wizard installer muncul
+      // dan host harus mengklik Next beberapa kali - padahal ia sudah menekan
+      // "Pasang & mulai ulang", yang artinya "kerjakan, jangan tanya lagi".
+      //
+      // Argumen kedua dipasang eksplisit meski bawaannya sudah menjalankan
+      // ulang: dalam mode senyap, electron-updater memakai nilai yang dikirim
+      // apa adanya, bukan autoRunAppAfterInstall. Tanpa itu aplikasi terpasang
+      // tapi tidak pernah terbuka lagi, dan tombolnya jadi berbohong.
+      au.quitAndInstall(true, true);
     }
   });
 
