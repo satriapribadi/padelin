@@ -256,15 +256,27 @@ def api_schedule(payload: dict) -> dict:
 # -- database ---------------------------------------------------------------
 
 def api_event_save(payload: dict) -> dict:
-    sch = _generate(payload)
-    clock = payload.get("start_clock") or None
-    data = to_dict(sch)
-    data["text"] = to_text(sch, start_clock=clock,
-                           title=payload.get("title") or "JADWAL PADEL")
-    data["personal_text"] = to_personal_text(sch, start_clock=clock)
-    data["csv"] = to_csv(sch)
+    # Jadwal yang sedang dilihat host ikut dikirim, dan itulah yang disimpan.
+    # Dulu selalu di-generate ulang dari payload. Selama algoritmanya tidak
+    # berubah hasilnya memang sama - seed dan effort ikut tersimpan - tapi
+    # begitu optimizer diperbaiki, membuka jadwal lama lalu menyimpannya
+    # menghasilkan susunan yang BERBEDA dari yang sudah diumumkan ke peserta.
+    # Terukur saat penyebaran pengulangan match masuk: satu acara tersimpan
+    # berubah dari kualitas 88,8 ke 89,4 hanya karena disimpan ulang.
+    supplied = payload.get("schedule")
+    if isinstance(supplied, dict) and supplied.get("rounds"):
+        data = supplied
+    else:
+        sch = _generate(payload)
+        clock = payload.get("start_clock") or None
+        data = to_dict(sch)
+        data["text"] = to_text(sch, start_clock=clock,
+                               title=payload.get("title") or "JADWAL PADEL")
+        data["personal_text"] = to_personal_text(sch, start_clock=clock)
+        data["csv"] = to_csv(sch)
 
-    request = {k: v for k, v in payload.items() if k != "event_id"}
+    request = {k: v for k, v in payload.items()
+               if k not in ("event_id", "schedule")}
     with storage.session() as conn:
         eid = storage.save_event(conn, request, data,
                                  event_id=payload.get("event_id") or None)

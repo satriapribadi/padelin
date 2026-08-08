@@ -62,6 +62,8 @@ let players = [];
 let nextId = 0;
 let schedule = null;
 let currentEventId = null;
+// Sidik jari setup saat jadwal yang sekarang dibuat. null = belum ada jadwal.
+let scheduleStamp = null;
 let presets = {};
 let analyzeTimer = null;
 
@@ -640,6 +642,7 @@ $('generate').onclick = async () => {
         logLine(`${String(data.pct).padStart(5)}%  ${data.message}`);
       } else if (event === 'done') {
         schedule = data;
+        scheduleStamp = schedulingStamp();
         // currentEventId TIDAK direset di sini. Dulu direset, jadi "buka dari
         // riwayat -> ubah sedikit -> Buat jadwal -> Simpan" diam-diam membuat
         // acara baru alih-alih memperbarui yang dibuka, dan riwayat host penuh
@@ -901,6 +904,22 @@ $('open-html').onclick = () => {
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
+/** Sidik jari field yang benar-benar MEMBENTUK jadwal.
+ *
+ * Judul, venue, dan fee boleh diubah setelah generate tanpa membuat jadwalnya
+ * basi. Yang di bawah ini tidak: mengubahnya berarti jadwal di layar bukan lagi
+ * hasil dari setup yang tertulis. Karena Simpan kini menyimpan jadwal yang
+ * tampil (bukan generate ulang), ketidakcocokan itu harus dikatakan.
+ */
+function schedulingStamp() {
+  const p = buildPayload();
+  return JSON.stringify([
+    p.courts, p.duration_minutes, p.round_minutes, p.warmup_minutes, p.mode,
+    p.tier_count, p.referees_per_court, p.ballboys_per_court, p.seed, p.effort,
+    p.segments, p.interleave_segments, p.players,
+  ]);
+}
+
 /** Tombol simpan harus menyebut tujuannya sebelum ditekan, bukan sesudah. */
 function renderSaveTarget() {
   const editing = currentEventId !== null;
@@ -912,13 +931,21 @@ function renderSaveTarget() {
 async function saveEvent(asNew) {
   if (!schedule) return toast('Belum ada jadwal');
   const target = asNew ? null : currentEventId;
+  const basi = scheduleStamp !== null && scheduleStamp !== schedulingStamp();
   try {
-    const d = await api('/api/events/save', { ...buildPayload(), event_id: target });
+    // Jadwal yang tampil ikut dikirim dan itulah yang disimpan, supaya jadwal
+    // yang sudah diumumkan ke peserta tidak berubah hanya karena disimpan ulang.
+    const d = await api('/api/events/save',
+      { ...buildPayload(), event_id: target, schedule });
     currentEventId = d.id;
     renderSaveTarget();
     $('save-msg').innerHTML = `<div class="msg ok">${
       target ? `Jadwal #${d.id} diperbarui.` : `Tersimpan sebagai jadwal baru (#${d.id}).`
-    }</div>`;
+    }</div>` + (basi
+      ? '<div class="msg warn">Setup diubah setelah jadwal ini dibuat. Yang '
+        + 'tersimpan adalah jadwal yang tampil, bukan hasil setup yang baru - '
+        + 'tekan Generate kalau ingin setup barunya diterapkan.</div>'
+      : '');
     toast(target ? 'Jadwal diperbarui' : 'Tersimpan ke database');
   } catch (e) {
     $('save-msg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
@@ -972,6 +999,9 @@ $('events').addEventListener('click', async (e) => {
     applyRequest(d.event.request);
     schedule = d.event.schedule;
     currentEventId = +open;
+    // Setup baru saja diisi dari acara ini, jadi jadwal yang dimuat memang
+    // hasil dari setup yang tampil - belum basi.
+    scheduleStamp = schedulingStamp();
     renderSaveTarget();
     document.querySelector('.tabs button[data-view="jadwal"]').click();
     renderSchedule();
