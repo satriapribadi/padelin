@@ -17,7 +17,8 @@
   },
   "devDependencies": {
     "electron": "^33.0.0",
-    "electron-builder": "^25.0.0"
+    "electron-builder": "^25.0.0",
+    "rcedit": "^5.0.2"
   },
   "dependencies": {
     "electron-updater": "^6.3.0"
@@ -46,12 +47,22 @@
       {
         "from": "electron/vendor/python",
         "to": "python",
-        "filter": ["**/*"]
+        "filter": [
+          "**/*"
+        ]
       }
     ],
     "win": {
-      "target": [{ "target": "nsis", "arch": ["x64"] }],
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
       "artifactName": "${productName}-${version}-${arch}.${ext}",
+      "icon": "electron/build/icon.ico",
       "signAndEditExecutable": false
     },
     "nsis": {
@@ -60,13 +71,16 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true,
-      "shortcutName": "Padelin"
+      "shortcutName": "Padelin",
+      "installerIcon": "electron/build/icon.ico",
+      "uninstallerIcon": "electron/build/icon.ico"
     },
     "publish": [
       {
         "provider": "generic",
         "url": "https://contoh.ganti-ini.id/padelin/rilis"
       }
-    ]
+    ],
+    "afterPack": "electron/after-pack.js"
   }
 }
