@@ -30,6 +30,8 @@ import math
 import random
 from dataclasses import dataclass, field
 
+from .models import matchup_code, team_shape
+
 
 @dataclass
 class Weights:
@@ -97,6 +99,10 @@ class Rules:
     #   same_gender -> maunya court satu gender (yang mana saja)
     #   mixed_team  -> maunya partner lawan jenis
     court_pref: dict[int, str] = field(default_factory=dict)
+    # Format match yang diizinkan (kode dari models.MATCHUPS). Kosong = semua
+    # boleh. Beda dari round_rule: itu mengatur bagaimana satu tim disusun, ini
+    # mengatur tim seperti apa boleh berhadapan dengan tim seperti apa.
+    allowed_matchups: set[str] = field(default_factory=set)
 
     def pref_violations(self, quad: list[int]) -> list[tuple[int, str]]:
         """Preferensi mana saja yang dilanggar susunan court ini."""
@@ -154,7 +160,25 @@ class Rules:
             return None
         return mate
 
+    def matchup_ok(self, quad: list[int]) -> bool:
+        """Apakah format match ini termasuk yang diizinkan host.
+
+        Gender yang belum diisi membuat aturan ini tidak bisa dinilai, dan
+        dalam keadaan itu jadwal TIDAK diblokir - meet tanpa data gender harus
+        tetap bisa jalan. Aturannya menyaring yang jelas melanggar, bukan
+        menuntut data yang mungkin tidak dimiliki host.
+        """
+        if not self.allowed_matchups:
+            return True
+        a, b, c, d = quad
+        g = self.gender
+        kode = matchup_code(team_shape(g.get(a), g.get(b)),
+                            team_shape(g.get(c), g.get(d)))
+        return kode is None or kode in self.allowed_matchups
+
     def quad_ok(self, quad: list[int], r: int) -> bool:
+        if not self.matchup_ok(quad):
+            return False
         a, b, c, d = quad
         eligible = self.round_eligible[r] if r < len(self.round_eligible) else None
         if eligible is not None:

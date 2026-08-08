@@ -18,6 +18,44 @@ MODES: tuple[str, ...] = ("americano", "tiered", "mexicano", "team")
 #   mixed       -> tiap tim wajib 1 putra + 1 putri
 SEGMENT_RULES: tuple[str, ...] = ("open", "men", "women", "same_gender", "mixed")
 
+# Susunan gender satu tim: LL = dua putra, PP = dua putri, LP = campur.
+TEAM_SHAPES: tuple[str, ...] = ("LL", "LP", "PP")
+
+# Semua format match yang mungkin, dilihat dari susunan kedua tim. Kodenya
+# ditulis urut abjad ("LL-PP", bukan "PP-LL") supaya satu pertandingan hanya
+# punya satu nama - tanpa itu, melarang "LL-PP" tidak ikut melarang "PP-LL".
+MATCHUPS: tuple[str, ...] = (
+    "LL-LL",   # putra vs putra
+    "LL-LP",   # dua putra vs campur
+    "LL-PP",   # dua putra vs dua putri
+    "LP-LP",   # campur vs campur
+    "LP-PP",   # campur vs dua putri
+    "PP-PP",   # putri vs putri
+)
+
+MATCHUP_LABELS: dict[str, str] = {
+    "LL-LL": "Putra vs putra",
+    "LL-LP": "Dua putra vs campur",
+    "LL-PP": "Dua putra vs dua putri",
+    "LP-LP": "Campur vs campur",
+    "LP-PP": "Campur vs dua putri",
+    "PP-PP": "Putri vs putri",
+}
+
+
+def team_shape(g1: str | None, g2: str | None) -> str | None:
+    """Susunan gender satu tim. None kalau ada gender yang belum diisi."""
+    if g1 is None or g2 is None:
+        return None
+    return "LL" if g1 == g2 == "M" else "PP" if g1 == g2 == "F" else "LP"
+
+
+def matchup_code(shape_a: str | None, shape_b: str | None) -> str | None:
+    """Nama format match dari susunan kedua tim, urut abjad."""
+    if shape_a is None or shape_b is None:
+        return None
+    return "-".join(sorted((shape_a, shape_b)))
+
 
 @dataclass
 class Player:
@@ -147,10 +185,27 @@ class Config:
     # Kalau True, durasi per ronde dihitung otomatis dari total ronde segmen
     # agar pas dengan jam sewa.
     fit_rounds_to_duration: bool = True
+    # Format match yang boleh muncul, dilihat dari susunan gender kedua tim.
+    # Kosong/None = semua boleh (perilaku lama, dan tetap jadi default).
+    #
+    # Ini bukan aturan yang sama dengan Segment.rule. Segment mengatur SIAPA
+    # yang turun dan bagaimana satu tim disusun; ini mengatur tim seperti apa
+    # boleh berhadapan dengan tim seperti apa. Host memakainya untuk mencegah
+    # pertandingan yang timpang, mis. dua putra melawan dua putri.
+    allowed_matchups: list[str] | None = None
 
     def __post_init__(self) -> None:
         if self.courts < 1:
             raise ValueError("Jumlah court minimal 1.")
+        if self.allowed_matchups is not None:
+            tidak_dikenal = set(self.allowed_matchups) - set(MATCHUPS)
+            if tidak_dikenal:
+                raise ValueError(
+                    f"Format match tidak dikenal: {', '.join(sorted(tidak_dikenal))}")
+            if not self.allowed_matchups:
+                raise ValueError(
+                    "Minimal satu format match harus diizinkan, kalau tidak "
+                    "tidak ada satu pun susunan yang sah.")
         if self.round_minutes < 1:
             raise ValueError("Durasi per ronde minimal 1 menit.")
         if self.mode not in MODES:

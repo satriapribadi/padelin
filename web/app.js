@@ -445,6 +445,7 @@ function buildPayload() {
     effort: +$('effort').value,
     segments: getSegments(),
     interleave_segments: $('interleave').checked,
+    allowed_matchups: selectedMatchups(),
     players: players.map((p) => ({
       id: p.id, name: p.name, rating: p.rating, gender: p.gender,
       partner_id: p.partner_id, court_preference: p.court_preference,
@@ -1008,6 +1009,59 @@ $('open-html').onclick = () => {
 // ---------------------------------------------------------------------------
 // Database
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Format match yang diizinkan
+// ---------------------------------------------------------------------------
+// Daftarnya datang dari server (/api/presets) supaya tidak ada dua sumber
+// kebenaran. Semua tercentang = tanpa batasan, dan itu yang dikirim sebagai
+// null - jadi jadwal lama yang belum punya field ini tetap sama artinya.
+let matchupTypes = [];
+
+function renderMatchups(dipilih = null) {
+  const host = $('matchups');
+  if (!host || !matchupTypes.length) return;
+  const aktif = dipilih === null ? null : new Set(dipilih);
+  host.innerHTML = matchupTypes.map((m) => {
+    const on = aktif === null || aktif.has(m.code);
+    return `<label class="${on ? '' : 'off'}">`
+      + `<input type="checkbox" data-matchup="${esc(m.code)}" ${on ? 'checked' : ''}>`
+      + `<span>${esc(m.label)}</span></label>`;
+  }).join('');
+  host.querySelectorAll('input[data-matchup]').forEach((cb) => {
+    cb.onchange = () => {
+      // Nol format = tidak ada susunan yang sah sama sekali. Ditolak di sini
+      // supaya host tidak menunggu generate hanya untuk menerima error.
+      if (!host.querySelectorAll('input[data-matchup]:checked').length) {
+        cb.checked = true;
+        toast('Minimal satu format harus diizinkan');
+        return;
+      }
+      cb.closest('label').classList.toggle('off', !cb.checked);
+      renderMatchupNote();
+      scheduleAnalyze();
+    };
+  });
+  renderMatchupNote();
+}
+
+function selectedMatchups() {
+  const cb = document.querySelectorAll('#matchups input[data-matchup]');
+  if (!cb.length) return null;
+  const on = [...cb].filter((x) => x.checked).map((x) => x.dataset.matchup);
+  return on.length === cb.length ? null : on;   // semua = tanpa batasan
+}
+
+function renderMatchupNote() {
+  const el2 = $('matchup-note');
+  if (!el2) return;
+  const on = selectedMatchups();
+  el2.textContent = on === null
+    ? 'Semua format boleh — tidak ada pembatasan.'
+    : `${matchupTypes.length - on.length} format dilarang. Kalau susunan `
+      + 'peserta tidak menyisakan lawan yang sah, jadwal tetap dibuat dan '
+      + 'pelanggarannya disebut di catatan.';
+}
+
 /** Sidik jari field yang benar-benar MEMBENTUK jadwal.
  *
  * Judul, venue, dan fee boleh diubah setelah generate tanpa membuat jadwalnya
@@ -1020,7 +1074,7 @@ function schedulingStamp() {
   return JSON.stringify([
     p.courts, p.duration_minutes, p.round_minutes, p.warmup_minutes, p.mode,
     p.tier_count, p.referees_per_court, p.ballboys_per_court, p.seed, p.effort,
-    p.segments, p.interleave_segments, p.players,
+    p.segments, p.interleave_segments, p.players, p.allowed_matchups,
   ]);
 }
 
@@ -1146,6 +1200,7 @@ function applyRequest(req) {
   $('segments').innerHTML = '';
   $('interleave').checked = !!req.interleave_segments;
   (req.segments || []).forEach((s) => addSeg(s.label, s.rounds, s.rule));
+  renderMatchups(req.allowed_matchups || null);
   players = (req.players || []).map((p) => ({ ...p }));
   nextId = players.reduce((m, p) => Math.max(m, p.id + 1), 0);
   if (req.economics) {
@@ -1852,6 +1907,8 @@ async function loadClubSummary() {
     $('preset').innerHTML = Object.entries(presets)
       .map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('');
     $('preset-desc').textContent = presets.single ? presets.single.description : '';
+    matchupTypes = d.matchups || [];
+    renderMatchups();
   } catch (e) { /* biarkan default */ }
 
   setupCombos();

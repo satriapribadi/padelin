@@ -20,6 +20,7 @@ from padel_scheduler.factorization import (
     mixed_pair_rounds,
     verify_one_factorization,
 )
+from padel_scheduler.models import MATCHUPS, matchup_code, team_shape
 from padel_scheduler.scheduler import ScheduleError
 
 
@@ -648,6 +649,77 @@ class TestMixedWithLockedPartner(unittest.TestCase):
             any("partner tetap" in nt and "Sesama gender" in nt
                 for nt in sch.notes),
             f"pelonggaran kunci tidak dilaporkan ke host: {sch.notes}")
+
+
+class TestAllowedMatchups(unittest.TestCase):
+    """Host boleh melarang format match yang timpang.
+
+    Beda dari Segment.rule: itu mengatur SIAPA yang turun dan bagaimana satu
+    tim disusun. Ini mengatur tim seperti apa boleh berhadapan dengan tim
+    seperti apa - mis. melarang dua putra melawan dua putri.
+    """
+
+    def _players(self, putra=15, putri=11):
+        return make_players(putra + putri, genders=["M"] * putra + ["F"] * putri)
+
+    def _cfg(self, izin):
+        return Config(courts=4, duration_minutes=120, round_minutes=9,
+                      warmup_minutes=0, seed=77, effort=20000,
+                      allowed_matchups=izin)
+
+    def _formats(self, sch):
+        g = {p.id: p.gender for p in sch.players}
+        keluar = []
+        for rnd in sch.rounds:
+            for m in rnd.matches:
+                keluar.append(matchup_code(
+                    team_shape(g[m.team_a[0]], g[m.team_a[1]]),
+                    team_shape(g[m.team_b[0]], g[m.team_b[1]])))
+        return keluar
+
+    def test_forbidden_formats_disappear(self):
+        dilarang = {"LL-PP", "LP-PP"}
+        izin = [m for m in MATCHUPS if m not in dilarang]
+        sch = build_schedule(self._players(), self._cfg(izin))
+        assert_structurally_valid(self, sch)
+        muncul = set(self._formats(sch))
+        self.assertFalse(
+            muncul & dilarang,
+            f"format terlarang tetap muncul: {sorted(muncul & dilarang)}")
+
+    def test_only_same_shape(self):
+        """Kasus paling ketat: tim hanya melawan tim sesusunan."""
+        izin = ["LL-LL", "LP-LP", "PP-PP"]
+        sch = build_schedule(self._players(), self._cfg(izin))
+        assert_structurally_valid(self, sch)
+        self.assertTrue(
+            set(self._formats(sch)) <= set(izin),
+            f"ada format di luar izin: {sorted(set(self._formats(sch)) - set(izin))}")
+
+    def test_default_unchanged(self):
+        """Tanpa batasan, perilakunya harus persis seperti sebelum fitur ini."""
+        a = build_schedule(self._players(), self._cfg(None))
+        b = build_schedule(self._players(), self._cfg(list(MATCHUPS)))
+        self.assertEqual([[m.players() for m in r.matches] for r in a.rounds],
+                         [[m.players() for m in r.matches] for r in b.rounds],
+                         "mengizinkan semua format harus sama dengan tanpa batasan")
+
+    def test_empty_list_rejected(self):
+        """Nol format berarti tidak ada susunan yang sah sama sekali."""
+        with self.assertRaises(ValueError):
+            self._cfg([])
+
+    def test_unknown_code_rejected(self):
+        with self.assertRaises(ValueError):
+            self._cfg(["LL-LL", "XX-YY"])
+
+    def test_missing_gender_does_not_block(self):
+        """Meet tanpa data gender harus tetap bisa jalan."""
+        ps = make_players(16)          # gender None semua
+        sch = build_schedule(ps, self._cfg(["PP-PP"]))
+        assert_structurally_valid(self, sch)
+        self.assertTrue(any(r.matches for r in sch.rounds),
+                        "jadwal kosong padahal gender tidak diisi")
 
 
 class TestLockedPairsScoring(unittest.TestCase):

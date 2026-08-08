@@ -20,6 +20,7 @@ from itertools import combinations
 from .capacity import analyze, rounds_from_duration
 from .factorization import mixed_pair_rounds, subset_pair_rounds
 from .models import (
+    MATCHUP_LABELS,
     Config,
     Match,
     PairStat,
@@ -30,6 +31,8 @@ from .models import (
     Schedule,
     ScheduleStats,
     Segment,
+    matchup_code,
+    team_shape,
 )
 from .optimizer import (
     Rules,
@@ -374,7 +377,18 @@ def _group_into_matches(
         a = remaining.pop(0)
         sum_a = st.ratings[a[0]] + st.ratings[a[1]]
         best_i, best_cost = 0, None
-        for i, b in enumerate(remaining):
+        # Format match yang dilarang host disaring DI SINI, bukan diserahkan ke
+        # annealing. Ronde yang lahir melanggar batas keras tidak punya jalan
+        # keluar: tiap gerakan annealing hanya diterima kalau ronde hasilnya
+        # legal, jadi ronde yang sejak awal ilegal justru membeku di sana.
+        sah = [i for i, b in enumerate(remaining)
+               if st.rules.matchup_ok([a[0], a[1], b[0], b[1]])]
+        # Kalau tidak ada satu pun lawan yang sah, pasangan ini tetap harus
+        # ditandingkan - lebih baik satu match melanggar daripada ada peserta
+        # yang hilang dari ronde. Pelanggarannya dilaporkan ke host di catatan.
+        kandidat = sah if sah else range(len(remaining))
+        for i in kandidat:
+            b = remaining[i]
             # Biaya = berapa kali keempat kombinasi lawan ini sudah terjadi.
             cost = sum(st.oc[st._k(x, y)] for x in a for y in b) * 100.0
             if rating_weight > 0:
@@ -640,6 +654,7 @@ def build_schedule(players: list[Player], config: Config,
         tier_of=dict(tier_of) if tier_of else {},
         court_pref={p.id: p.court_preference for p in local_players
                     if p.court_preference},
+        allowed_matchups=set(config.allowed_matchups or ()),
     )
 
     # Peta ronde -> (segmen, ronde ke berapa di segmen itu). Kalau selang-seling
@@ -832,7 +847,37 @@ def build_schedule(players: list[Player], config: Config,
         segments=segments,
         interleave_segments=config.interleave_segments,
         fit_rounds_to_duration=config.fit_rounds_to_duration,
+        allowed_matchups=config.allowed_matchups,
     )
+
+    # Format match yang dilarang tapi tetap muncul. Bisa terjadi kalau susunan
+    # peserta memang tidak menyisakan lawan yang sah - mis. hanya 2 putri di
+    # antara belasan putra: mereka harus melawan seseorang. Lebih baik satu
+    # match melanggar daripada ada peserta yang hilang dari ronde, tapi host
+    # harus tahu, bukan menemukannya sendiri dari jadwal.
+    if config.allowed_matchups:
+        izin = set(config.allowed_matchups)
+        gmap = {p.id: p.gender for p in final_players}
+        langgar: dict[str, list[int]] = {}
+        for rnd in rounds:
+            for m in rnd.matches:
+                kode = matchup_code(
+                    team_shape(gmap.get(m.team_a[0]), gmap.get(m.team_a[1])),
+                    team_shape(gmap.get(m.team_b[0]), gmap.get(m.team_b[1])))
+                if kode is not None and kode not in izin:
+                    langgar.setdefault(kode, []).append(rnd.index)
+        if langgar:
+            rincian = "; ".join(
+                f"{MATCHUP_LABELS.get(k, k).lower()} di ronde "
+                f"{', '.join(str(x) for x in v[:5])}"
+                for k, v in sorted(langgar.items()))
+            notes.append(
+                f"{sum(len(v) for v in langgar.values())} match memakai format "
+                f"yang Anda larang ({rincian}). Susunan peserta tidak "
+                f"menyisakan lawan yang sah untuk mereka - jadwal tetap dibuat "
+                f"karena membiarkan mereka tanpa lawan berarti menghapus "
+                f"peserta dari ronde itu."
+            )
 
     # Match yang terulang UTUH (empat orang sama, tim sama) paling mudah dikira
     # bug oleh host. Sering kali itu batas matematis: kelompok p orang hanya

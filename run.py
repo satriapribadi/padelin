@@ -35,7 +35,7 @@ from padel_scheduler import (
 from padel_scheduler import storage
 from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_analysis
 from padel_scheduler.html_report import build_html
-from padel_scheduler.models import COURT_PREFERENCES
+from padel_scheduler.models import COURT_PREFERENCES, MATCHUP_LABELS, MATCHUPS
 from padel_scheduler.presets import PRESETS
 from padel_scheduler.report import (
     format_date_id,
@@ -135,7 +135,22 @@ def _config_from(payload: dict) -> Config:
         ballboys_per_court=max(0, min(3, int(payload.get("ballboys_per_court", 0)))),
         segments=segs,
         interleave_segments=bool(payload.get("interleave_segments", False)),
+        allowed_matchups=_matchups_from(payload),
     )
+
+
+def _matchups_from(payload: dict) -> list[str] | None:
+    """Format match yang diizinkan. None = semua boleh (perilaku bawaan).
+
+    Daftar yang memuat SELURUH format sama artinya dengan tanpa batasan, jadi
+    disederhanakan ke None - supaya jadwal lama yang tidak punya field ini dan
+    jadwal baru yang mencentang semuanya tersimpan dalam bentuk yang sama.
+    """
+    nilai = payload.get("allowed_matchups")
+    if not nilai:
+        return None
+    dipilih = [m for m in MATCHUPS if m in set(nilai)]
+    return None if len(dipilih) == len(MATCHUPS) else dipilih
 
 
 def _econ_from(payload: dict) -> Economics:
@@ -435,6 +450,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_json({
                 "presets": PRESETS,
                 "court_preferences": list(COURT_PREFERENCES),
+                # Dikirim dari server supaya daftarnya punya satu sumber
+                # kebenaran; menuliskannya lagi di JavaScript berarti dua
+                # tempat yang bisa berbeda diam-diam.
+                "matchups": [{"code": m, "label": MATCHUP_LABELS[m]}
+                             for m in MATCHUPS],
             })
         elif path == "/api/master":
             # Satu panggilan memuat master data yang dibutuhkan UI.
