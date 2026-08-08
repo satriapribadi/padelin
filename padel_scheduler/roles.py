@@ -111,6 +111,31 @@ def _rebalance(assignments, byes_per_round, max_steps: int = 4000) -> int:
             totals[pid] += 1
             per_role[role][pid] += 1
 
+    # Keadaan terbaik yang pernah dilihat, untuk dikembalikan di akhir.
+    #
+    # Gerakan lokal (1 dan 2) selalu MENURUNKAN sasaran, jadi sendirian ia pasti
+    # berhenti. Tapi rantai pemecah kebuntuan bisa MENAIKKANNYA - itu memang
+    # gunanya, keluar dari optimum lokal - dan akibatnya keduanya bisa
+    # berputar-putar. Terukur: jatah 4000 langkah habis, dan hasil yang
+    # terpakai kebetulan bukan yang terbaik yang sempat dilewati; pada 26
+    # peserta di 4 court itu berarti 3/4/5 tugas padahal 4 rata mungkin, di
+    # separuh seed yang dicoba.
+    #
+    # Jadi yang terbaik disimpan, bukan yang terakhir.
+    def nilai():
+        """Makin kecil makin rata. Selisih total didahulukan karena itu yang
+        dirasakan peserta: berapa ronde ia duduk tanpa melakukan apa-apa."""
+        t = list(totals.values()) or [0]
+        selisih_peran = max(
+            (max(c.values()) - min(c.values()) for c in per_role.values() if c),
+            default=0)
+        return (max(t) - min(t), selisih_peran,
+                sum(v * v for v in t)
+                + sum(v * v for c in per_role.values() for v in c.values()))
+
+    terbaik = nilai()
+    salinan = [list(row) for row in assignments]
+
     steps = 0
     improved = True
     while improved and steps < max_steps:
@@ -166,11 +191,91 @@ def _rebalance(assignments, byes_per_round, max_steps: int = 4000) -> int:
                     improved = True
                     steps += 1
 
+        sekarang = nilai()
+        if sekarang < terbaik:
+            terbaik = sekarang
+            salinan = [list(row) for row in assignments]
+        # Sudah serata yang mungkin - selisih 1 hanya muncul kalau jumlah tugas
+        # memang tidak habis dibagi jumlah peserta. Tidak ada gunanya melanjutkan.
+        if terbaik[0] <= 1 and terbaik[1] <= 1:
+            break
+
+        # Selisih TOTAL didahulukan. Sebelumnya rantai per-peran yang dicoba
+        # lebih dulu, dan karena ia hampir selalu menemukan sesuatu, rantai
+        # total tidak pernah kebagian giliran sampai jatah langkah habis -
+        # ketimpangan yang paling dirasakan peserta justru yang tidak pernah
+        # ditangani. Peserta merasakan "saya duduk dua ronde tanpa apa-apa",
+        # bukan "wasit saya satu lebih banyak dari ballboy".
+        if not improved:
+            improved = _chain_total(assignments, byes_per_round, totals, per_role)
+            steps += 1 if improved else 0
         if not improved:
             improved = _chain_fix(assignments, per_role)
             steps += 1 if improved else 0
 
+    if nilai() > terbaik:
+        assignments[:] = [list(row) for row in salinan]
+
     return steps
+
+
+def _chain_total(assignments, byes_per_round, totals, per_role) -> bool:
+    """Ratakan TOTAL tugas lewat perantara.
+
+    _chain_fix mengurus ketimpangan per-peran; ini mengurus ketimpangan
+    totalnya, dan keduanya tidak saling menggantikan. Terukur pada 26 peserta di
+    4 court: 13 ronde x 4 court x 2 peran = 104 tugas untuk 26 orang, yaitu
+    tepat 4 masing-masing - tapi hasilnya 3, 4, dan 5. Satu orang jadi punya dua
+    ronde menganggur sementara yang lain nol.
+
+    Pemindahan langsung sering mustahil di situ: orang yang kelebihan tugas
+    justru bertugas di SETIAP ronde ia duduk, jadi tidak pernah ada ronde tempat
+    ia bertugas sementara si kekurangan sedang menganggur. Perantara memutus
+    kebuntuan itu - hi menyerahkan tugas ke m di satu ronde, m menyerahkan tugas
+    ke lo di ronde lain. Hitungan m kembali seperti semula, hi berkurang satu,
+    lo bertambah satu.
+    """
+    pemain = list(totals)
+    if not pemain:
+        return False
+    hi = max(pemain, key=lambda p: totals[p])
+    lo = min(pemain, key=lambda p: totals[p])
+    if totals[hi] - totals[lo] < 2:
+        return False
+
+    for r1, row1 in enumerate(assignments):
+        hi_idx = next((i for i, (p, _, _) in enumerate(row1) if p == hi), None)
+        if hi_idx is None:
+            continue
+        sibuk1 = {p for p, _, _ in row1}
+        for m in byes_per_round[r1]:
+            # m harus benar-benar menganggur di r1, dan bukan hi/lo sendiri -
+            # kalau m = lo, tambahannya di r1 dibatalkan lagi di r2.
+            if m in sibuk1 or m == hi or m == lo:
+                continue
+            for r2, row2 in enumerate(assignments):
+                if r2 == r1:
+                    continue
+                m_idx = next((i for i, (p, _, _) in enumerate(row2) if p == m), None)
+                if m_idx is None:
+                    continue
+                sibuk2 = {p for p, _, _ in row2}
+                if lo in sibuk2 or lo not in byes_per_round[r2]:
+                    continue
+
+                _, peran1, court1 = row1[hi_idx]
+                row1[hi_idx] = (m, peran1, court1)
+                _, peran2, court2 = row2[m_idx]
+                row2[m_idx] = (lo, peran2, court2)
+
+                totals[hi] -= 1
+                totals[lo] += 1
+                per_role[peran1][hi] -= 1
+                per_role[peran1][m] += 1
+                per_role[peran2][m] -= 1
+                per_role[peran2][lo] += 1
+                return True
+    return False
 
 
 def _chain_fix(assignments, per_role) -> bool:

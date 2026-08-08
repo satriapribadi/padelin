@@ -695,7 +695,13 @@ function renderSchedule() {
   // lebar panel dan memaksa scroll berkali-kali lipat.
   const maxMatches = schedule.rounds.reduce(
     (t, r) => Math.max(t, r.matches.length), 1);
-  const cols = maxMatches === 1 ? 3 : maxMatches === 2 ? 2 : 1;
+  // Jumlah kolom TIDAK diturunkan lagi mengikuti banyaknya match. Card dengan
+  // 4 match tidak butuh card yang lebih LEBAR - ia hanya lebih tinggi. Dulu
+  // 3 court atau lebih jatuh ke satu kolom, dan itu membatalkan pemadatan:
+  // card selebar halaman membuat kolom tim (1fr) melar, sehingga nama kedua tim
+  // terlempar ke ujung kiri dan kanan dengan "vs" terdampar di tengah - mata
+  // harus menyeberangi ruang kosong untuk membaca satu pertandingan.
+  const cols = maxMatches === 1 ? 3 : 2;
   const box = el('div', `rounds cols-${cols}`);
 
   let seg = null;

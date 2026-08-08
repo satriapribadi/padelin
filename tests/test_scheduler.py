@@ -651,6 +651,67 @@ class TestMixedWithLockedPartner(unittest.TestCase):
             f"pelonggaran kunci tidak dilaporkan ke host: {sch.notes}")
 
 
+class TestRoleFairness(unittest.TestCase):
+    """Tugas wasit & ballboy harus serata yang dimungkinkan aritmetika.
+
+    Dilaporkan host pada 26 peserta di 4 court: 13 ronde x 4 court x 2 peran =
+    104 tugas untuk 26 orang, yaitu tepat 4 masing-masing - tapi hasilnya 3, 4,
+    dan 5. Satu orang duduk dua ronde tanpa melakukan apa-apa sementara yang
+    lain tidak pernah menganggur sama sekali.
+
+    Penyebabnya bukan algoritma pembagiannya, melainkan urutan di dalam pass
+    perataan: rantai pemecah kebuntuan untuk PERAN dicoba lebih dulu dan hampir
+    selalu menemukan sesuatu, sehingga rantai untuk TOTAL tidak pernah kebagian
+    giliran sampai jatah langkah habis.
+    """
+
+    def _tugas(self, sch):
+        return {p: (sch.stats.roles_per_player.get(p, {}) or {}).get("total", 0)
+                for p in sch.stats.plays_per_player}
+
+    def test_host_case_is_perfectly_even(self):
+        """Kasus yang dilaporkan: 104 tugas / 26 orang = tepat 4."""
+        ps = make_players(26)
+        sch = build_schedule(ps, Config(
+            courts=4, duration_minutes=120, round_minutes=9, warmup_minutes=0,
+            seed=77, effort=20000, referees_per_court=1, ballboys_per_court=1))
+        tugas = self._tugas(sch)
+        slot = sum(len(r.roles) for r in sch.rounds)
+        self.assertEqual(slot % len(ps), 0, "setup ini memang harus bisa rata sempurna")
+        self.assertEqual(
+            max(tugas.values()) - min(tugas.values()), 0,
+            f"tugas tidak rata: {sorted(set(tugas.values()))}")
+
+    def test_spread_is_always_minimal(self):
+        """Selisih 0 kalau slot habis dibagi peserta, 1 kalau tidak. Tidak boleh lebih."""
+        for n, courts, wasit, ballboy in ((26, 4, 1, 1), (20, 4, 1, 1),
+                                          (14, 3, 1, 1), (30, 5, 1, 2),
+                                          (9, 2, 1, 1)):
+            with self.subTest(peserta=n, court=courts):
+                sch = build_schedule(make_players(n), Config(
+                    courts=courts, duration_minutes=120, round_minutes=10,
+                    warmup_minutes=0, seed=5, effort=15000,
+                    referees_per_court=wasit, ballboys_per_court=ballboy))
+                tugas = self._tugas(sch)
+                slot = sum(len(r.roles) for r in sch.rounds)
+                batas = 0 if slot % n == 0 else 1
+                self.assertLessEqual(
+                    max(tugas.values()) - min(tugas.values()), batas,
+                    f"{n} peserta {courts} court: selisih tugas "
+                    f"{max(tugas.values()) - min(tugas.values())}, batasnya {batas}")
+
+    def test_idle_rest_is_shared(self):
+        """Yang diukur peserta: berapa ronde ia duduk tanpa melakukan apa pun."""
+        sch = build_schedule(make_players(26), Config(
+            courts=4, duration_minutes=120, round_minutes=9, warmup_minutes=0,
+            seed=77, effort=20000, referees_per_court=1, ballboys_per_court=1))
+        tugas = self._tugas(sch)
+        nganggur = [sch.stats.byes_per_player[p] - tugas[p] for p in tugas]
+        self.assertLessEqual(
+            max(nganggur) - min(nganggur), 1,
+            f"ronde menganggur timpang: {sorted(set(nganggur))}")
+
+
 class TestAllowedMatchups(unittest.TestCase):
     """Host boleh melarang format match yang timpang.
 
