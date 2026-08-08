@@ -125,7 +125,11 @@ def evaluate(
         profit=round(profit, 2),
         margin_pct=round(margin, 1),
         cost_per_player=round(cost_pp, 2),
-        break_even_fee=round(cost_pp, 2),
+        # Modal per peserta boleh pecahan - itu memang biaya. Tapi titik impas
+        # adalah AMBANG yang ditagihkan ke peserta, jadi dibulatkan ke atas:
+        # menagih 38.324 padahal modalnya 38.324,125 membuat host nombok.
+        # Sama semangatnya dengan fee_for_target_margin yang juga ceil.
+        break_even_fee=float(math.ceil(cost_pp)),
         cost_per_play_minute=round(cost_per_min, 2),
         labels=labels,
     )
@@ -219,7 +223,8 @@ def upgrade_analysis(
         "plus_one_court": plus,
         "extra_cost": round(extra_cost, 2),
         "extra_play_minutes_per_player": round(extra_minutes, 1),
-        "fee_bump_to_break_even": round(fee_bump, 2),
+        # Ambang lagi ("agar tidak nombok"), jadi ke atas juga.
+        "fee_bump_to_break_even": float(math.ceil(fee_bump)),
         "fee_to_keep_same_margin": round(keep_margin_fee, 2),
         "worth_it": extra_minutes >= 10 and plus.courts <= math.ceil(n_players / 4),
         "note": (

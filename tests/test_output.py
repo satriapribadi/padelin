@@ -186,14 +186,29 @@ class TestEconomics(unittest.TestCase):
         self.assertEqual(o.revenue, 26 * 85000)
         self.assertEqual(o.profit, o.revenue - o.total_cost)
 
-    def test_break_even_fee_yields_zero_profit(self):
-        econ = Economics(court_price_per_hour=250000, fee_per_player=0,
-                         other_costs=100000)
-        opts = compare(26, econ, court_options=[4], hour_options=[2.0])
-        fee = opts[0].break_even_fee
-        econ2 = Economics(250000, fee, 100000)
-        o2 = compare(26, econ2, court_options=[4], hour_options=[2.0])[0]
-        self.assertAlmostEqual(o2.profit, 0, delta=1.0)
+    def test_break_even_fee_never_leaves_host_short(self):
+        """Titik impas adalah AMBANG, jadi pembulatannya harus ke atas.
+
+        Dulu dibulatkan ke terdekat, dan host yang menagih persis angka itu bisa
+        nombok: biaya 306.593 dibagi 8 orang = 38.324,125, dibulatkan jadi
+        38.324, pemasukan kurang Rp 1 - lalu panel biayanya sendiri menandai
+        acara itu "bermasalah". Kelebihannya dibatasi: pembulatan ke rupiah
+        terdekat ke atas tidak boleh menambah lebih dari Rp 1 per peserta.
+        """
+        for n, price, other in ((26, 250000, 100000), (8, 150000, 6593),
+                                (7, 175000, 33333), (13, 120000, 1)):
+            econ = Economics(court_price_per_hour=price, fee_per_player=0,
+                             other_costs=other)
+            fee = compare(n, econ, court_options=[4], hour_options=[2.0])[0].break_even_fee
+            o2 = compare(n, Economics(price, fee, other),
+                         court_options=[4], hour_options=[2.0])[0]
+            self.assertGreaterEqual(
+                o2.profit, 0,
+                f"{n} peserta: menuruti titik impas justru rugi {o2.profit}")
+            self.assertLess(
+                o2.profit, n,
+                f"{n} peserta: titik impas kelebihan {o2.profit}, "
+                f"lebih dari Rp 1 per peserta")
 
     def test_target_margin_fee_hits_target(self):
         fee = fee_for_target_margin(26, 4, 2.0, self.econ, 30.0, round_to=0)
