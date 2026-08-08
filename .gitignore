@@ -19,6 +19,12 @@ server.log
 *.pdf
 !docs/*.pdf
 
+# Electron / desktop
+node_modules/
+dist-desktop/
+# Python embeddable yang diunduh saat build - besar dan bisa diambil ulang
+electron/vendor/
+
 # IDE
 .idea/
 .vscode/

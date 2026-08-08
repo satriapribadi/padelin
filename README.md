@@ -157,6 +157,50 @@ tools/
 tests/                      62 tes unit
 ```
 
+## Aplikasi desktop (Electron)
+
+Pembungkus opsional supaya Padelin jalan sebagai aplikasi biasa: ikon sendiri,
+jendela sendiri, tanpa membuka browser. Aplikasinya tidak berubah — Electron
+hanya menyalakan `run.py` di port kosong, menunggunya siap, lalu menampilkannya.
+Kode di `web/` tetap nol dependency dan tetap bisa dibuka lewat browser.
+
+```bash
+npm install
+npm start          # jalankan dari kode sumber
+npm run dist       # bangun installer Windows (.exe)
+```
+
+**Apa yang perlu dipasang pengguna akhir: tidak ada.**
+
+| Komponen | Ikut di installer? | Alasan |
+|---|---|---|
+| Node.js | Tidak perlu | Electron sudah membawa Node + Chromium sendiri |
+| Python | **Ya**, ~15 MB | Distribusi *embeddable* dari python.org, diambil `npm run fetch-python` |
+| Paket Python | Tidak ada | Padelin hanya memakai pustaka standar |
+
+Node.js hanya dibutuhkan di mesin yang **membangun** installer, bukan di mesin
+yang memakainya.
+
+**Database.** Dijalankan dari repo, tetap `padel.db` di folder repo. Versi
+terpasang menaruhnya di folder data pengguna (`%APPDATA%\Padelin`), karena
+folder Program Files umumnya hanya-baca dan data acara itu milik pengguna, bukan
+bagian dari program — jadi ia selamat saat aplikasi diperbarui atau dipasang
+ulang. Menu **Bantuan → Buka folder data** membuka lokasinya. Jalur ini bisa
+diarahkan lewat variabel lingkungan `PADELIN_DB`.
+
+**Pembaruan tanpa pasang ulang.** `electron-builder` menerbitkan berkas
+`.blockmap` di samping tiap installer; `electron-updater` membandingkannya
+dengan versi terpasang lalu mengunduh **blok yang berubah saja** — pembaruan
+yang cuma menyentuh kode Python dan `web/` biasanya ratusan KB, bukan installer
+utuh. Pengunduhan berjalan di latar, pemasangan saat aplikasi ditutup, dan
+**Bantuan → Periksa pembaruan** untuk memeriksa manual.
+
+Yang perlu disiapkan sekali: satu tempat menaruh hasil build yang bisa diakses
+lewat HTTP. Ganti `build.publish.url` di `package.json` ke server Anda, atau
+tukar providernya ke `github`. Tanpa itu tidak ada yang bisa diperiksa.
+
+Naikkan `version` di `package.json` tiap merilis — itu yang dibandingkan.
+
 ## Tes
 
 ```bash

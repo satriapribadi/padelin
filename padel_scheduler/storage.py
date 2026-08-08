@@ -18,12 +18,21 @@ dijawab dengan satu query, bukan dengan membongkar semua JSON.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
 DEFAULT_DB = Path(__file__).resolve().parent.parent / "padel.db"
+
+# Saat dipasang lewat installer, folder aplikasi umumnya hanya-baca (Program
+# Files), jadi database tidak boleh tinggal di sebelah kodenya - pembungkus
+# desktop mengarahkannya ke folder data milik pengguna lewat variabel ini.
+# Dijalankan langsung dari repo, perilakunya tidak berubah.
+_env_db = os.environ.get("PADELIN_DB")
+if _env_db:
+    DEFAULT_DB = Path(_env_db)
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS clubs (
@@ -118,6 +127,12 @@ def _now() -> str:
 
 def connect(db_path: Path | str = DEFAULT_DB) -> sqlite3.Connection:
     """Buka koneksi. Penelepon bertanggung jawab menutupnya - pakai session()."""
+    # Folder tujuan bisa belum ada kalau database diarahkan ke luar repo
+    # (mis. folder data pengguna pada versi desktop). sqlite3 tidak membuatnya
+    # sendiri; tanpa ini aplikasinya gagal jalan saat pertama kali dipasang.
+    parent = Path(db_path).expanduser().parent
+    if str(parent) and not parent.exists():
+        parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path))
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
