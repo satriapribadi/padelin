@@ -205,6 +205,40 @@ table{width:100%; border-collapse:collapse}
 .recap td.num{font-variant-numeric:tabular-nums}
 .recap tbody tr:nth-child(even){background:#fcfdfe}
 
+/* Susunan per ronde: satu baris per orang, satu kolom per ronde. Sama seperti
+   matriks, kolomnya MEMBAGI lebar halaman (table-layout:fixed) supaya ronde
+   ke-20 tidak terpotong diam-diam di tepi kertas.
+   Hurufnya M/W/B/R selalu tercetak - laporan ini sering dicetak hitam-putih,
+   dan warna sendirian tidak selamat melewati printer laser. */
+.tl{border:1px solid var(--line); border-radius:7px; overflow:hidden;
+  margin-bottom:10px}
+.tl table{table-layout:fixed; width:100%; border-collapse:collapse}
+.tl caption{caption-side:top; text-align:left; padding:4px 9px;
+  background:var(--band); border-bottom:1px solid var(--line);
+  font-size:10px; font-weight:700; text-transform:uppercase;
+  letter-spacing:.06em; color:var(--muted)}
+.tl caption .cap-note{font-weight:400; text-transform:none; letter-spacing:0;
+  font-size:9.5px; margin-left:8px}
+.tl th,.tl td{padding:2px 3px; font-size:9px; text-align:center;
+  border-bottom:1px solid #f2f4f7; font-variant-numeric:tabular-nums}
+.tl th.nm{width:88px; text-align:left; white-space:nowrap; overflow:hidden;
+  text-overflow:ellipsis; font-weight:600; font-size:9.5px;
+  border-right:1px solid var(--line)}
+.tl thead th{background:var(--band); color:var(--muted); font-weight:700}
+.tl tbody tr:last-child td,.tl tbody tr:last-child th{border-bottom:none}
+.tl.dense th,.tl.dense td{padding:1px 1px; font-size:7.5px}
+.tl.dense th.nm{width:74px; font-size:8px}
+.tl b{display:block; border-radius:3px; padding:1px 0; font-weight:700}
+.tl b.m{color:var(--accent); background:var(--accent-soft)}
+.tl b.w{color:var(--warn); background:var(--warn-soft)}
+.tl b.b{color:var(--good); background:var(--good-soft)}
+.tl b.r{color:var(--muted); background:#fff; box-shadow:inset 0 0 0 1px var(--line)}
+.tl td.none{color:#aeb6c2}
+.tl-key{font-size:10px; color:var(--muted); margin-bottom:7px;
+  display:flex; gap:14px; flex-wrap:wrap}
+.tl-key b{display:inline-block; padding:0 4px; border-radius:3px;
+  font-weight:700; margin-right:4px}
+
 /* Matriks pertemuan. Lebarnya tumbuh kuadrat terhadap jumlah peserta, jadi
    selnya dibuat sekecil mungkin yang masih terbaca dan kolomnya diberi NOMOR,
    bukan nama - nama peserta sering berbagi kata depan sehingga singkatannya
@@ -546,6 +580,60 @@ def build_html(
             parts.append("<tr>" + "".join(cells) + "</tr>")
         parts.append("</tbody></table>")
     parts.append("</div>")
+
+    # Susunan per ronde. Angka rekap menjawab "berapa kali", bukan "kapan":
+    # dua orang yang sama-sama main 9 dari 13 ronde punya sore yang berbeda
+    # kalau yang satu duduk beruntun di ronde 3-4-5. Urutannya cuma kelihatan
+    # kalau digambar per ronde.
+    if schedule.rounds and roster:
+        # Peran tiap orang per ronde, dibangun sekali. Urutan penulisannya
+        # penting: peran tugas menimpa "main" hanya kalau orangnya memang tidak
+        # ikut bermain, jadi tugas ditulis setelah match tapi bye ditulis
+        # terakhir dan tidak menimpa apa pun.
+        per_round: list[dict[int, str]] = []
+        for rnd in schedule.rounds:
+            slot: dict[int, str] = {}
+            for m in rnd.matches:
+                for pid in m.players():
+                    slot[pid] = "m"
+            for r in rnd.roles:
+                slot[r.player_id] = "w" if r.role == "wasit" else "b"
+            for pid in rnd.byes:
+                slot.setdefault(pid, "r")
+            per_round.append(slot)
+
+        label = {"m": "M", "w": "W", "b": "B", "r": "R"}
+        keys = [("m", "Main")]
+        if show_roles:
+            keys += [("w", "Wasit"), ("b", "Ballboy")]
+        keys.append(("r", "Istirahat"))
+        parts.append(
+            "<div class='tl-key'>"
+            + "".join(f"<span><b class='{k}'>{label[k]}</b>{_e(t)}</span>"
+                      for k, t in keys)
+            + "</div>"
+        )
+
+        # Kolom menyempit seiring banyaknya ronde; di atas 16 ronde ukuran
+        # normal sudah tidak muat di A4 portrait, jadi selnya dirapatkan.
+        dense = " dense" if len(schedule.rounds) > 16 else ""
+        parts.append(f"<div class='tl{dense}'><table>")
+        parts.append(
+            f"<caption>Susunan per ronde<span class='cap-note'>"
+            f"ronde 1 &rarr; {len(schedule.rounds)}, kiri ke kanan"
+            f"</span></caption>"
+        )
+        parts.append("<thead><tr><th class='nm'>Nama</th>")
+        parts.append("".join(f"<th>{r.index}</th>" for r in schedule.rounds))
+        parts.append("</tr></thead><tbody>")
+        for p in roster:
+            parts.append(f"<tr><th class='nm'>{_nm(p.id)}</th>")
+            for slot in per_round:
+                k = slot.get(p.id)
+                parts.append(f"<td><b class='{k}'>{label[k]}</b></td>" if k
+                             else "<td class='none'>&middot;</td>")
+            parts.append("</tr>")
+        parts.append("</tbody></table></div>")
 
     # Matriks pertemuan: siapa berpartner & melawan siapa, berapa kali.
     # Dihitung dari susunan ronde, bukan dari statistik, supaya laporan lama

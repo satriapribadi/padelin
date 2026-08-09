@@ -781,7 +781,8 @@ function renderSchedule() {
                      + `<td class="num">${roles.ballboy || 0}</td>` : '')
       + `<td class="num">${Math.max(0, idle)}</td></tr>`;
   });
-  $('recap').innerHTML = html + '</tbody></table>';
+  $('recap').innerHTML = html + '</tbody></table>'
+    + roleTimeline(schedule, showRoles);
 
   // Grafik komposisi ronde: mencari ketimpangan di antara 26 orang jauh
   // lebih cepat lewat batang daripada lewat tabel 26 baris.
@@ -817,6 +818,70 @@ function gname(id) {
   const nm = esc(p ? p.name : '?');
   const cls = !p ? '' : p.gender === 'M' ? 'g-m' : p.gender === 'F' ? 'g-f' : '';
   return cls ? `<span class="${cls}">${nm}</span>` : nm;
+}
+
+// ---------------------------------------------------------------------------
+// Susunan per ronde
+// ---------------------------------------------------------------------------
+
+/** Tabel peran tiap orang di tiap ronde: M main, W wasit, B ballboy, R istirahat.
+ *
+ * Angka rekap menjawab "berapa kali", bukan "kapan". Dua orang sama-sama main
+ * 9 dari 13 ronde bisa punya pengalaman yang jauh berbeda kalau yang satu
+ * duduk berturut-turut di ronde 3-4-5 dan yang lain duduknya tersebar - dan
+ * itu hanya kelihatan kalau urutannya digambar.
+ *
+ * Hurufnya selalu tercetak di dalam sel. Warna cuma mempercepat pemindaian;
+ * baris tetap terbaca penuh tanpanya.
+ */
+function roleTimeline(schedule, showRoles) {
+  const rounds = schedule.rounds || [];
+  if (!rounds.length) return '';
+
+  // Satu peta per ronde. Dibangun sekali di sini, bukan dicari ulang per sel:
+  // 26 orang x 13 ronde berarti 338 sel, dan tiap sel kalau ditelusuri
+  // linear harus menyisir seluruh match plus daftar tugas ronde itu.
+  const perRound = rounds.map((r) => {
+    const m = new Map();
+    (r.matches || []).forEach((mt) => {
+      mt.team_a.concat(mt.team_b).forEach((x) => m.set(x.id, 'm'));
+    });
+    (r.roles || []).forEach((x) => {
+      m.set(x.player_id, x.role === 'wasit' ? 'w' : 'b');
+    });
+    (r.byes || []).forEach((b) => { if (!m.has(b.id)) m.set(b.id, 'r'); });
+    return m;
+  });
+
+  const LABEL = { m: 'M', w: 'W', b: 'B', r: 'R' };
+  const NAMA = { m: 'main', w: 'wasit', b: 'ballboy', r: 'istirahat' };
+
+  const kunci = [['m', 'Main'], ['r', 'Istirahat']];
+  if (showRoles) kunci.splice(1, 0, ['w', 'Wasit'], ['b', 'Ballboy']);
+  let out = `<h3 class="tl-h">Susunan per ronde `
+    + `<span class="hint">ronde 1 &rarr; ${rounds.length}, kiri ke kanan</span></h3>`
+    + '<div class="mx-legend">'
+    + kunci.map(([k, t]) =>
+      `<span class="mx-legend-item"><span class="tl-c ${k}">${LABEL[k]}</span>`
+      + `${t}</span>`).join('')
+    + '</div><div class="mx-wrap"><table class="data mx tl"><thead><tr>'
+    + '<th class="mx-corner mx-row">Nama</th>'
+    + rounds.map((r) => `<th class="num">${r.index}</th>`).join('')
+    + '</tr></thead><tbody>';
+
+  schedule.players.slice().sort((a, b) => a.name.localeCompare(b.name))
+    .forEach((p) => {
+      out += `<tr><th class="mx-row">${gname(p.id)}</th>`;
+      perRound.forEach((m, i) => {
+        const k = m.get(p.id);
+        out += k
+          ? `<td class="num"><span class="tl-c ${k}" `
+            + `title="Ronde ${rounds[i].index}: ${NAMA[k]}">${LABEL[k]}</span></td>`
+          : '<td class="num tl-none">&middot;</td>';
+      });
+      out += '</tr>';
+    });
+  return out + '</tbody></table></div>';
 }
 
 // ---------------------------------------------------------------------------

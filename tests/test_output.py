@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -365,6 +366,48 @@ class TestExports(unittest.TestCase):
                                                      duration_minutes=60)))
         self.assertNotIn("<div class='gkey'>", h2)
         self.assertNotIn("class='g-m'", h2)
+
+    def test_html_round_timeline_matches_recap_numbers(self):
+        """Susunan per ronde harus menceritakan hal yang sama dengan rekap.
+
+        Tabel ini gampang menyimpang diam-diam: kalau peran tugas ditulis
+        sebelum peran main, orang yang main jadi tertimpa "W" dan barisnya
+        tetap terlihat masuk akal - hanya jumlahnya yang tidak lagi cocok
+        dengan angka di rekap.
+        """
+        sch = make_schedule(n=26, courts=4)
+        h = build_html(sch)
+        st = sch.stats
+
+        # Dicari captionnya, bukan kalimatnya: namanya juga muncul di komentar
+        # CSS, jadi mencari teks bebas lolos tanpa satu baris tabel pun.
+        marker = "<caption>Susunan per ronde"
+        self.assertIn(marker, h, "tabel per ronde tidak terbit")
+
+        # Ambil baris tabelnya saja, lalu hitung hurufnya per pemain.
+        body = h.split(marker, 1)[1].split("<tbody>", 1)[1].split("</table>", 1)[0]
+        rows = re.findall(r"<th class='nm'>(.*?)</th>(.*?)</tr>", body, re.S)
+        self.assertEqual(len(rows), len(sch.players),
+                         "ada peserta yang tidak dapat baris")
+
+        by_name = {p.name: p.id for p in sch.players}
+        for raw_name, cells in rows:
+            name = re.sub(r"<[^>]+>", "", raw_name)
+            pid = by_name[name]
+            letters = re.findall(r"<b class='(\w)'>", cells)
+            self.assertEqual(len(letters), len(sch.rounds),
+                             f"{name}: sel tidak satu per ronde")
+
+            roles = st.roles_per_player.get(pid, {})
+            idle = st.byes_per_player.get(pid, 0) - int(roles.get("total", 0) or 0)
+            self.assertEqual(letters.count("m"), st.plays_per_player.get(pid, 0),
+                             f"{name}: jumlah M tidak sama dengan kolom Main")
+            self.assertEqual(letters.count("w"), roles.get("wasit", 0),
+                             f"{name}: jumlah W tidak sama dengan kolom Wasit")
+            self.assertEqual(letters.count("b"), roles.get("ballboy", 0),
+                             f"{name}: jumlah B tidak sama dengan kolom Ballboy")
+            self.assertEqual(letters.count("r"), max(0, idle),
+                             f"{name}: jumlah R tidak sama dengan kolom Istirahat")
 
 
 class TestStorage(unittest.TestCase):
