@@ -757,6 +757,58 @@ class TestAllowedMatchups(unittest.TestCase):
             set(self._formats(sch)) <= set(izin),
             f"ada format di luar izin: {sorted(set(self._formats(sch)) - set(izin))}")
 
+    def test_only_same_shape_holds_across_seeds(self):
+        """Kasus paling ketat, diperiksa di banyak seed.
+
+        Satu seed tidak cukup. Pelanggaran format lahir dari komposisi gender
+        yang kebetulan tersisa di satu ronde, jadi ia datang dan pergi
+        mengikuti seed: versi lama lolos di seed 77 - satu-satunya yang diuji -
+        sambil menerbitkan 6 match terlarang di seed 46, yang justru dipakai
+        host sungguhan.
+
+        Akarnya, siapa yang turun dipilih hanya dari lama duduk, buta terhadap
+        bentuk timnya. Ronde yang terlanjur berisi 3 tim putra dan 1 tim putri
+        tidak punya jalan keluar: satu tim putra dan satu tim putri pasti tidak
+        kebagian lawan yang sah, dan annealing tidak bisa memperbaikinya karena
+        tiap gerakannya hanya diterima kalau rondenya legal.
+        """
+        izin = ["LL-LL", "LP-LP", "PP-PP"]
+        for seed in (42, 44, 46, 48, 50):
+            with self.subTest(seed=seed):
+                cfg = self._cfg(izin)
+                cfg.seed = seed
+                sch = build_schedule(self._players(), cfg)
+                keluar = set(self._formats(sch))
+                self.assertTrue(
+                    keluar <= set(izin),
+                    f"seed {seed}: format di luar izin "
+                    f"{sorted(keluar - set(izin))}")
+
+    def test_restriction_does_not_wreck_opponent_variety(self):
+        """Menyaring bentuk tim tidak boleh membuat lawan berulang membengkak.
+
+        Menyaring bentuk tim mempersempit pilihan lawan, jadi memilih komposisi
+        ronde HANYA dari lama duduk membuat komposisi yang sama terpakai
+        berulang-ulang - dan orang yang sama bertemu lagi. Karena itu komposisi
+        dinilai dari dua hal sekaligus, lama duduk DAN kesegaran lawan.
+
+        Ambangnya hasil pengukuran di konfigurasi tes ini (20 seed, effort
+        20000): tanpa penimbang keunikan lawan, pengulangan memuncak di 17
+        pasang; dengan penimbang, di 11. Angka 12 dipilih sebagai puncak
+        perilaku lama - cukup ketat untuk menangkap pembengkakan yang nyata,
+        cukup longgar untuk tidak menagih keberuntungan seed tertentu.
+        """
+        izin = ["LL-LL", "LP-LP", "PP-PP"]
+        for seed in (42, 46, 50):
+            with self.subTest(seed=seed):
+                cfg = self._cfg(izin)
+                cfg.seed = seed
+                sch = build_schedule(self._players(), cfg)
+                self.assertLessEqual(
+                    sch.stats.opponent_repeat_pairs, 12,
+                    f"seed {seed}: lawan berulang membengkak "
+                    f"({sch.stats.opponent_repeat_pairs} pasang)")
+
     def test_default_unchanged(self):
         """Tanpa batasan, perilakunya harus persis seperti sebelum fitur ini."""
         a = build_schedule(self._players(), self._cfg(None))

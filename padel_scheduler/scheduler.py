@@ -21,6 +21,8 @@ from .capacity import analyze, rounds_from_duration
 from .factorization import mixed_pair_rounds, subset_pair_rounds
 from .models import (
     MATCHUP_LABELS,
+    MATCHUPS,
+    TEAM_SHAPES,
     Config,
     Match,
     PairStat,
@@ -297,6 +299,142 @@ def _candidate_rounds(
 # Seleksi & pengelompokan pasangan jadi match
 # ---------------------------------------------------------------------------
 
+_SEMUA_FORMAT = frozenset(MATCHUPS)
+
+# Berapa berat pertemuan berulang dibanding satu ronde menunggu, saat memilih
+# komposisi bentuk tim satu ronde. Disetel dari pengukuran pada setup nyata
+# host (26 orang, 4 court, format dibatasi "sesama bentuk saja"): 0 berarti
+# komposisinya itu-itu terus dan lawan berulang membengkak; terlalu besar dan
+# giliran main jadi timpang karena orang yang sudah lama duduk terus dilewati.
+OPPONENT_WEIGHT = 3.0
+
+
+def _grouping_cost(picked: list[tuple[int, int]], st: ScheduleState) -> float:
+    """Perkiraan berapa banyak pertemuan berulang yang lahir dari susunan ini.
+
+    Penjodohannya greedy dan tanpa acak - ini cuma alat ukur untuk membandingkan
+    komposisi, bukan penyusun jadwal. Memakai rng di sini akan menggeser seluruh
+    urutan acak di bawahnya hanya karena ada komposisi tambahan yang dinilai.
+    """
+    sisa = list(picked)
+    total = 0.0
+    while len(sisa) >= 2:
+        a = sisa.pop(0)
+        best_i, best_c = None, None
+        for i, b in enumerate(sisa):
+            if not st.rules.matchup_ok([a[0], a[1], b[0], b[1]]):
+                continue
+            c = sum(st.oc[st._k(x, y)] for x in a for y in b)
+            if best_c is None or c < best_c:
+                best_i, best_c = i, c
+        if best_i is None:  # tidak ada lawan sah - dinilai mahal, bukan gratis
+            total += len(sisa) * 4
+            break
+        total += best_c
+        sisa.pop(best_i)
+    return total
+
+
+def _shapes_pairable(
+    counts: tuple[int, ...], allowed: frozenset[str], memo: dict
+) -> bool:
+    """Bisakah multiset bentuk tim ini dihabiskan jadi match yang sah semua?
+
+    counts sejajar dengan TEAM_SHAPES: (jumlah LL, jumlah LP, jumlah PP).
+    Pencariannya kecil - cuma tiga jenis bentuk - jadi rekursi dengan memo
+    sudah lebih dari cukup.
+    """
+    if not any(counts):
+        return True
+    if counts in memo:
+        return memo[counts]
+    # Bentuk pertama yang masih tersisa harus dapat lawan; kalau tidak ada satu
+    # pun lawan yang sah untuknya, susunan ini memang buntu.
+    i = next(k for k, c in enumerate(counts) if c)
+    ok = False
+    for j in range(len(TEAM_SHAPES)):
+        if matchup_code(TEAM_SHAPES[i], TEAM_SHAPES[j]) not in allowed:
+            continue
+        rest = list(counts)
+        rest[i] -= 1
+        if rest[j] <= 0:
+            continue
+        rest[j] -= 1
+        if _shapes_pairable(tuple(rest), allowed, memo):
+            ok = True
+            break
+    memo[counts] = ok
+    return ok
+
+
+def _select_pairs_by_shape(
+    scored: list[tuple[int, int]],
+    st: ScheduleState,
+    need: int,
+    rng: random.Random,
+) -> list[tuple[int, int]] | None:
+    """Pilih pasangan yang bentuk timnya masih bisa dipasangkan habis.
+
+    Host yang membatasi format match ("putra vs putra saja, campur vs campur
+    saja") membuat siapa yang turun dan format apa yang muncul jadi satu
+    persoalan, bukan dua. Memilih pasangan hanya berdasarkan siapa yang paling
+    lama duduk bisa menghasilkan mis. 3 tim putra dan 1 tim putri di ronde yang
+    sama - satu tim putra dan satu tim putri pasti tidak kebagian lawan yang
+    sah, dan pelanggarannya lahir di sini, bukan di annealing.
+
+    Jadi bentuk timnya dipilih bersamaan: dari semua komposisi (LL, LP, PP)
+    yang habis terpasangkan, diambil yang menurunkan orang-orang paling lama
+    duduk. Prioritas istirahatnya tidak hilang, hanya dijalankan di dalam
+    komposisi yang memang bisa dimainkan.
+
+    None kalau aturan ini tidak bisa dinilai (ada gender yang belum diisi) atau
+    tidak ada komposisi yang sah sama sekali - pemanggilnya kembali ke perilaku
+    lama, dan pelanggaran yang tersisa tetap dilaporkan ke host.
+    """
+    g = st.rules.gender
+    by_shape: dict[str, list[tuple[int, int]]] = {s: [] for s in TEAM_SHAPES}
+    for pr in scored:  # sudah urut prioritas istirahat
+        shape = team_shape(g.get(pr[0]), g.get(pr[1]))
+        if shape is None:
+            return None
+        by_shape[shape].append(pr)
+
+    allowed = frozenset(st.rules.allowed_matchups)
+    avail = [len(by_shape[s]) for s in TEAM_SHAPES]
+    memo: dict[tuple[int, ...], bool] = {}
+    best: tuple[float, float, tuple[int, ...]] | None = None
+
+    for n_ll in range(avail[0] + 1):
+        for n_lp in range(avail[1] + 1):
+            n_pp = need - n_ll - n_lp
+            if not 0 <= n_pp <= avail[2]:
+                continue
+            counts = (n_ll, n_lp, n_pp)
+            if not _shapes_pairable(counts, allowed, memo):
+                continue
+            picked = [pr for shape, k in zip(TEAM_SHAPES, counts)
+                      for pr in by_shape[shape][:k]]
+            # Dua hal ditimbang sekaligus, dan memang harus sekaligus: komposisi
+            # yang menurunkan orang paling lama duduk belum tentu komposisi yang
+            # menyisakan lawan segar. Menilai lama-duduk saja membuat ronde demi
+            # ronde memakai komposisi yang itu-itu juga, dan orang yang sama
+            # bertemu lagi - persis keluhan "lawan berulang".
+            istirahat = float(sum(st.bye_count[a] + st.bye_count[b]
+                                  for a, b in picked))
+            score = istirahat - OPPONENT_WEIGHT * _grouping_cost(picked, st)
+            # Seri diputus acak. Tanpa ini komposisi dengan LL paling sedikit
+            # selalu menang cuma karena urutan loop, dan gender yang sama terus
+            # menerus jadi yang mengalah.
+            key = (score, rng.random(), counts)
+            if best is None or key[:2] > best[:2]:
+                best = key
+
+    if best is None:
+        return None
+    return [pr for shape, k in zip(TEAM_SHAPES, best[2])
+            for pr in by_shape[shape][:k]]
+
+
 def _select_pairs(
     candidates: list[tuple[int, int]],
     st: ScheduleState,
@@ -310,6 +448,14 @@ def _select_pairs(
         candidates,
         key=lambda pr: (-(st.bye_count[pr[0]] + st.bye_count[pr[1]]), rng.random()),
     )
+    # Mengizinkan SEMUA format sama saja dengan tidak membatasi apa pun, dan
+    # keduanya wajib menghasilkan jadwal yang identik. Kalau jalur sadar-bentuk
+    # ikut jalan di situ, ia memakai rng untuk memutus seri dan jadwalnya
+    # bergeser tanpa ada satu pun batasan yang ditegakkan.
+    if st.rules.allowed_matchups and set(st.rules.allowed_matchups) != _SEMUA_FORMAT:
+        picked = _select_pairs_by_shape(scored, st, n_pairs_needed, rng)
+        if picked is not None:
+            return picked
     return scored[:n_pairs_needed]
 
 
@@ -354,6 +500,39 @@ def _allocate_courts(
     return alloc
 
 
+def _still_pairable(
+    a: tuple[int, int],
+    remaining: list[tuple[int, int]],
+    sah: list[int],
+    st: ScheduleState,
+) -> list[int]:
+    """Dari lawan yang sah untuk `a`, mana yang menyisakan sisa yang sehat.
+
+    Kosong kalau aturannya tidak bisa dinilai atau tidak ada yang memenuhi;
+    pemanggilnya lalu memakai daftar `sah` apa adanya.
+    """
+    if not st.rules.allowed_matchups or len(sah) <= 1:
+        return list(sah)
+    g = st.rules.gender
+    shapes = [team_shape(g.get(pr[0]), g.get(pr[1])) for pr in remaining]
+    if any(s is None for s in shapes):
+        return []
+    idx = {s: k for k, s in enumerate(TEAM_SHAPES)}
+    total = [0] * len(TEAM_SHAPES)
+    for s in shapes:
+        total[idx[s]] += 1
+
+    allowed = frozenset(st.rules.allowed_matchups)
+    memo: dict[tuple[int, ...], bool] = {}
+    aman = []
+    for i in sah:
+        sisa = list(total)
+        sisa[idx[shapes[i]]] -= 1
+        if _shapes_pairable(tuple(sisa), allowed, memo):
+            aman.append(i)
+    return aman
+
+
 def _group_into_matches(
     pairs: list[tuple[int, int]],
     st: ScheduleState,
@@ -383,10 +562,15 @@ def _group_into_matches(
         # legal, jadi ronde yang sejak awal ilegal justru membeku di sana.
         sah = [i for i, b in enumerate(remaining)
                if st.rules.matchup_ok([a[0], a[1], b[0], b[1]])]
+        # Lawan yang sah belum tentu lawan yang benar: mengambil lawan sah yang
+        # menyisakan bentuk tim tak terpasangkan hanya memindahkan pelanggaran
+        # ke match berikutnya. Jadi dari yang sah, disaring lagi yang MENYISAKAN
+        # sisa yang masih habis terpasangkan.
+        aman = _still_pairable(a, remaining, sah, st)
         # Kalau tidak ada satu pun lawan yang sah, pasangan ini tetap harus
         # ditandingkan - lebih baik satu match melanggar daripada ada peserta
         # yang hilang dari ronde. Pelanggarannya dilaporkan ke host di catatan.
-        kandidat = sah if sah else range(len(remaining))
+        kandidat = aman or sah or range(len(remaining))
         for i in kandidat:
             b = remaining[i]
             # Biaya = berapa kali keempat kombinasi lawan ini sudah terjadi.

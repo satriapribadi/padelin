@@ -225,6 +225,10 @@ table{width:100%; border-collapse:collapse}
   background:var(--band); border-bottom:1px solid var(--line);
   font-size:10px; font-weight:700; text-transform:uppercase;
   letter-spacing:.06em; color:var(--muted)}
+/* Kalimat penjelas angka 0: sebaris dengan judul matriks kalau muat, turun
+   sendiri kalau tidak. Sengaja tidak uppercase - ini kalimat, bukan label. */
+.mx caption .cap-note{font-weight:400; text-transform:none; letter-spacing:0;
+  font-size:9.5px; margin-left:8px}
 .mx th,.mx td{padding:2px 4px; font-size:9px; text-align:center;
   border-bottom:1px solid #f2f4f7; font-variant-numeric:tabular-nums}
 .mx th.nm{text-align:left; white-space:nowrap; font-weight:600;
@@ -567,8 +571,41 @@ def build_html(
 
         dense = " dense" if len(order) > 24 else ""
 
-        def _matrix(store, caption):
-            out = [f"<div class='mx{dense}'><table><caption>{_e(caption)}</caption>",
+        # Berapa pertemuan yang MUAT di acara ini. Satu match memberi 2 pasang
+        # partner dan 4 pasang lawan; tidak ada jadwal yang bisa melampauinya.
+        n_matches = sum(len(r.matches) for r in schedule.rounds)
+        total_pairs = len(order) * (len(order) - 1) // 2
+
+        def _ceiling(store, muat: int) -> str:
+            """Kalimat yang menjelaskan angka 0 di matriks.
+
+            Matriks penuh angka 0 terbaca seperti jadwal yang gagal, padahal
+            sebagian besar nolnya memang tidak punya tempat: 26 orang punya 325
+            pasang, sementara 13 ronde di 4 court hanya memuat 208 pertemuan.
+            Selisihnya disebut apa adanya supaya host tidak mengejar angka yang
+            memang mustahil - dan tahu persis berapa yang masih bisa dikejar.
+            """
+            sekali = sum(1 for v in store.values() if v == 1)
+            ulang = sum(1 for v in store.values() if v >= 2)
+            belum = total_pairs - sekali - ulang
+            mustahil = max(0, total_pairs - muat)
+            bit = (f"Dari {total_pairs} pasang peserta: {sekali} tepat sekali, "
+                   f"{ulang} berulang, {belum} belum pernah")
+            if mustahil:
+                # Kalau yang belum pernah PERSIS sebanyak yang mustahil, jadwal
+                # ini sudah mentok baik - dan "99 belum pernah, 99 di antaranya
+                # mustahil" adalah cara paling berbelit untuk mengatakannya.
+                sebab = (f", karena {len(schedule.rounds)} ronde di "
+                         f"{cfg.courts} court hanya memuat {muat} pertemuan")
+                bit += (f" - semuanya memang mustahil{sebab}"
+                        if belum <= mustahil
+                        else f" - {mustahil} di antaranya mustahil{sebab}")
+            return bit + "."
+
+        def _matrix(store, caption, muat):
+            out = [f"<div class='mx{dense}'><table><caption>{_e(caption)}"
+                   f"<span class='cap-note'>{_e(_ceiling(store, muat))}</span>"
+                   "</caption>",
                    "<thead><tr><th class='nm'>Nama</th>"]
             out += [f"<th>{seat[p.id]}</th>" for p in order]
             out.append("</tr></thead><tbody>")
@@ -596,8 +633,10 @@ def build_html(
             "<span>Angka kolom = nomor di depan nama pada baris.</span>"
             "</div>"
         )
-        parts.append(_matrix(partner_n, "Berpartner dengan"))
-        parts.append(_matrix(oppo_n, "Melawan"))
+        # Satu match = 2 pasang partner (tim A dan tim B) dan 4 pasang lawan
+        # (tiap orang tim A melawan tiap orang tim B).
+        parts.append(_matrix(partner_n, "Berpartner dengan", n_matches * 2))
+        parts.append(_matrix(oppo_n, "Melawan", n_matches * 4))
 
     # Catatan
     if schedule.notes or schedule.violations:

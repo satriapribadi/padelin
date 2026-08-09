@@ -898,6 +898,32 @@ function renderMatrix() {
   }
   const total = (orang.length * (orang.length - 1)) / 2;
 
+  // Berapa pertemuan yang MUAT di acara ini. Satu match memberi 2 pasang
+  // partner (tim A dan tim B) dan 4 pasang lawan (tiap orang tim A melawan
+  // tiap orang tim B); tidak ada jadwal yang bisa melampauinya.
+  //
+  // Tanpa angka ini, matriks penuh 0 terbaca seperti jadwal yang gagal -
+  // padahal 26 orang punya 325 pasang sementara 13 ronde di 4 court cuma
+  // memuat 208 pertemuan. Selisihnya disebut apa adanya supaya tidak ada yang
+  // mengejar angka yang memang mustahil.
+  const nMatch = (schedule.rounds || []).reduce(
+    (t, r) => t + (r.matches || []).length, 0);
+  const mustahil = (muat) => Math.max(0, total - muat);
+  const ceilingBits = [];
+  if (mustahil(nMatch * 2)) {
+    ceilingBits.push(`${mustahil(nMatch * 2)} pasang mustahil berpartner`);
+  }
+  if (mustahil(nMatch * 4)) {
+    ceilingBits.push(`${mustahil(nMatch * 4)} mustahil berhadapan`);
+  }
+  const ceiling = ceilingBits.length
+    ? `<div class="mx-ceiling">${schedule.rounds.length} ronde `
+      + `&times; ${schedule.config.courts} court `
+      + `= ${nMatch} match, cukup untuk ${nMatch * 2} pasang partner dan `
+      + `${nMatch * 4} pasang lawan. Jadi dari ${total} pasang, `
+      + `${ceilingBits.join(' dan ')} - berapa pun bagusnya jadwalnya.</div>`
+    : '';
+
   host.innerHTML =
     '<div class="viz-head">'
     + `<span>${total} pasang orang &middot; partner: ${belumPartner} belum pernah, `
@@ -905,6 +931,7 @@ function renderMatrix() {
     + `${ulangLawan} berulang</span>`
     + '<button class="viz-toggle" id="mx-toggle" type="button">Lihat lawan</button>'
     + '</div>'
+    + ceiling
     + '<div class="mx-legend">'
     + '<span class="mx-legend-item"><span class="mx-chip m0">0</span> belum pernah</span>'
     + '<span class="mx-legend-item"><span class="mx-chip m1">1</span> tepat sekali</span>'
@@ -952,6 +979,12 @@ function debugSnapshot() {
       + `wasit=${payload.referees_per_court} ballboy=${payload.ballboys_per_court}`,
     `seed=${payload.seed} effort=${payload.effort} `
       + `selang_seling=${payload.interleave_segments}`,
+    // Format yang diizinkan WAJIB ikut. Batasan ini menentukan siapa yang bisa
+    // turun bareng, jadi ia mengubah kerataan main dan keunikan lawan sekaligus
+    // - dan tanpa barisnya, laporan "lawan berulang" mustahil direproduksi:
+    // setup yang kelihatan identik bisa berperilaku sama sekali berbeda.
+    `format_diizinkan=[${payload.allowed_matchups === null
+      ? 'semua' : payload.allowed_matchups.join(', ') || '(tidak ada)'}]`,
     `babak=[${payload.segments.map((s) => `${s.label}:${s.rounds}:${s.rule}`)
       .join(', ') || '(satu babak)'}]`,
     `peserta=${players.length} `
