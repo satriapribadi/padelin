@@ -1344,6 +1344,74 @@ class TestCapacity(unittest.TestCase):
         self.assertEqual(rep.verdict, "error")
 
 
+class TestPemerataanGenderTimpang(unittest.TestCase):
+    """Jatah main tetap merata walau roster gendernya timpang.
+
+    Format "sesama bentuk" membuat tiap ronde memakai 0 atau 2 perempuan (kalau
+    perempuannya ganjil, PP-PP mustahil). Berapa banyak ronde campuran yang
+    dipilih menentukan jatah main tiap gender - dan pilihan itu lahir di
+    pemilihan baris 1-faktorisasi, bukan di annealing: mengubah ronde LL-LL
+    jadi LP-LP menuntut dua pemain ditukar sekaligus, sedangkan gerakan
+    annealing satu pemain dan keadaan antaranya ilegal.
+    """
+
+    SAMA = ["LL-LL", "LP-LP", "PP-PP"]
+
+    def _roster(self, pria, wanita):
+        return [
+            Player(id=i, name=f"P{i+1}", rating=float(2 + (i % 4)),
+                   gender="M" if i < pria else "F")
+            for i in range(pria + wanita)
+        ]
+
+    def test_lima_pria_tiga_wanita_main_sama_rata(self):
+        """5L/3P, 12 ronde, 1 court: semua main 6x, bukan 4-8.
+
+        Aritmetikanya: 9 ronde campuran memberi perempuan 18 slot (6 each) dan
+        laki-laki 30 slot (6 each). Sebelum diperbaiki penjadwal memakai 6
+        ronde campuran dan berakhir 4-8.
+        """
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, mode="americano", seed=77,
+                     effort=20_000, attempts=1, allowed_matchups=self.SAMA)
+        sch = build_schedule(self._roster(5, 3), cfg)
+        main = sch.stats.plays_per_player
+        self.assertEqual(sch.stats.rounds, 12)
+        self.assertEqual(
+            (min(main.values()), max(main.values())), (6, 6),
+            f"jatah main tidak merata: {main}",
+        )
+
+    def test_pemerataan_tidak_mengorbankan_keunikan_partner(self):
+        """9L/3P, 2 court: merata TANPA menambah partner berulang.
+
+        Penjaga di _balanced_rows hanya menggeser kalau spread benar-benar
+        turun, jadi kasus yang sudah rapi tidak ikut diacak.
+        """
+        cfg = Config(courts=2, duration_minutes=90, round_minutes=10,
+                     warmup_minutes=0, mode="americano", seed=77,
+                     effort=20_000, attempts=1, allowed_matchups=self.SAMA)
+        sch = build_schedule(self._roster(9, 3), cfg)
+        main = sch.stats.plays_per_player
+        self.assertEqual(max(main.values()) - min(main.values()), 0,
+                         f"jatah main tidak merata: {main}")
+        self.assertEqual(sch.stats.partner_repeat_pairs, 0)
+
+    def test_roster_seimbang_tidak_berubah(self):
+        """Roster gender seimbang sudah merata - jangan diutak-atik.
+
+        Tanpa penjaga, pemerataan yang tidak menambah apa pun tetap menggeser
+        baris dan menukar partner unik dengan nol perbaikan.
+        """
+        cfg = Config(courts=3, duration_minutes=90, round_minutes=10,
+                     warmup_minutes=0, mode="americano", seed=77,
+                     effort=20_000, attempts=1, allowed_matchups=self.SAMA)
+        sch = build_schedule(self._roster(6, 6), cfg)
+        main = sch.stats.plays_per_player
+        self.assertEqual(max(main.values()) - min(main.values()), 0,
+                         f"jatah main tidak merata: {main}")
+
+
 class TestDeterminism(unittest.TestCase):
     def test_same_seed_same_schedule(self):
         def gen():

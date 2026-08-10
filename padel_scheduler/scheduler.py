@@ -415,6 +415,185 @@ def _reachable(options: list[list[tuple[int, ...]]], target: dict[str, int]) -> 
     return True
 
 
+def _gender_slots(counts: tuple[int, ...]) -> tuple[int, int]:
+    """Slot (laki-laki, perempuan) yang diturunkan satu ronde pada komposisi ini.
+
+    counts mengikuti TEAM_SHAPES: berapa TIM berbentuk LL, LP, PP. Tim LL berisi
+    2 laki-laki, tim LP satu-satu, tim PP 2 perempuan.
+    """
+    n_ll, n_lp, n_pp = counts
+    return 2 * n_ll + n_lp, n_lp + 2 * n_pp
+
+
+def _spread_dari_slot(male_slots: int, total_slots: int,
+                      n_men: int, n_women: int) -> int | None:
+    """Selisih main terbanyak-tersedikit kalau slotnya dibagi semerata mungkin.
+
+    Inilah yang didenda bye_pen di _build_stats, jadi ini pula yang dipakai
+    untuk membandingkan calon komposisi. None kalau komposisinya mustahil
+    (mis. menuntut slot untuk gender yang pesertanya nol).
+    """
+    lo: list[int] = []
+    hi: list[int] = []
+    for slots, cnt in ((male_slots, n_men), (total_slots - male_slots, n_women)):
+        if slots < 0:
+            return None
+        if cnt == 0:
+            if slots:
+                return None
+            continue
+        base, extra = divmod(slots, cnt)
+        lo.append(base)
+        hi.append(base + (1 if extra else 0))
+    if not lo:
+        return None
+    return max(hi) - min(lo)
+
+
+# Batas jumlah keadaan yang dilacak saat menelusuri total slot yang bisa
+# dicapai. Ronde x komposisi tumbuh cepat kalau court banyak; batas ini menjaga
+# waktunya tetap terikat. Yang dibuang selalu keadaan terjauh dari ideal, jadi
+# kandidat terbaik tidak ikut hilang.
+_MAX_KEADAAN_SLOT = 4000
+
+
+def _slot_terjangkau(options: list[list[tuple[int, ...]]],
+                     rows: list[int], ideal: float) -> set[int]:
+    """Semua total slot laki-laki yang bisa dicapai urutan baris ini."""
+    sums = {0}
+    for i in rows:
+        opts = options[i]
+        if not opts:
+            return set()
+        nxt = {s + _gender_slots(o)[0] for s in sums for o in opts}
+        if len(nxt) > _MAX_KEADAAN_SLOT:
+            nxt = set(sorted(nxt, key=lambda s: abs(s - ideal))[:_MAX_KEADAAN_SLOT])
+        sums = nxt
+    return sums
+
+
+def _spread_terbaik(options: list[list[tuple[int, ...]]], rows: list[int],
+                    total_slots: int, n_men: int, n_women: int) -> int | None:
+    """Spread jatah main terbaik yang masih mungkin dari urutan baris ini."""
+    ideal = total_slots * (n_men / (n_men + n_women)) if n_men + n_women else 0.0
+    kandidat = [
+        s for s in (
+            _spread_dari_slot(v, total_slots, n_men, n_women)
+            for v in _slot_terjangkau(options, rows, ideal)
+        ) if s is not None
+    ]
+    return min(kandidat) if kandidat else None
+
+
+def _balanced_rows(options: list[list[tuple[int, ...]]], n_rounds: int,
+                   n_men: int, n_women: int, need: int) -> list[int] | None:
+    """Baris kandidat mana yang dipakai tiap ronde, supaya jatah main merata.
+
+    Tanpa ini baris 1-faktorisasi dipakai apa adanya (0,1,2,...,0,1,...) dan
+    komposisi format ikut apa adanya juga. Itu bukan detail kecil: annealing
+    TIDAK BISA memperbaikinya. Mengubah satu ronde LL-LL jadi LP-LP menuntut
+    dua pemain ditukar sekaligus, sedangkan gerakannya satu pemain dan keadaan
+    antaranya ilegal - round_legal() menolaknya. Jadi komposisi format praktis
+    ditentukan seluruhnya di sini, bukan di optimizer.
+
+    Contoh nyata: 5 laki-laki + 3 perempuan, 12 ronde, 1 court, format sesama
+    bentuk. Baris faktorisasi bergantian 6 baris yang cuma bisa LP-LP dan 6
+    yang cuma bisa LL-LL, jadi perempuan main 4x dan laki-laki 7-8x. Susunan
+    9 campuran + 3 putra membuat semuanya tepat 6x.
+
+    None kalau tidak ada susunan yang lebih baik daripada urutan apa adanya.
+    """
+    if not options or n_rounds <= 0 or n_men + n_women == 0:
+        return None
+    total_slots = n_rounds * 2 * need
+    ideal = total_slots * (n_men / (n_men + n_women))
+
+    bawaan = [i % len(options) for i in range(n_rounds)]
+    spread_bawaan = _spread_terbaik(options, bawaan, total_slots, n_men, n_women)
+
+    # Nilai slot laki-laki yang bisa diturunkan satu ronde, dan baris mana saja
+    # yang sanggup. Baris boleh dipakai berulang: dengan roster gender timpang,
+    # komposisi merata sering menuntut lebih banyak ronde campuran daripada
+    # baris campuran yang berbeda - pengulangannya tak terhindarkan, dan
+    # menolaknya justru mengunci ketimpangan.
+    baris_untuk: dict[int, list[int]] = {}
+    for i, opts in enumerate(options):
+        for o in opts:
+            baris_untuk.setdefault(_gender_slots(o)[0], []).append(i)
+    if not baris_untuk:
+        return None
+    for v in baris_untuk:
+        baris_untuk[v] = sorted(set(baris_untuk[v]))
+
+    nilai = sorted(baris_untuk)
+    # jangkau[r] = {total slot laki-laki: nilai yang dipakai di ronde ke-r}
+    jangkau: list[dict[int, int]] = [{} for _ in range(n_rounds + 1)]
+    jangkau[0][0] = -1
+    for r in range(n_rounds):
+        sisa = n_rounds - r
+        for s in jangkau[r]:
+            for v in nilai:
+                jangkau[r + 1].setdefault(s + v, v)
+        if len(jangkau[r + 1]) > _MAX_KEADAAN_SLOT:
+            # Sisa ronde masih bisa menambah antara min*sisa dan max*sisa slot,
+            # jadi yang dinilai adalah jarak ke ideal pada akhir nanti.
+            tengah = ideal - (nilai[0] + nilai[-1]) / 2 * (sisa - 1)
+            terpilih = sorted(jangkau[r + 1], key=lambda s: abs(s - tengah))
+            jangkau[r + 1] = {s: jangkau[r + 1][s] for s in terpilih[:_MAX_KEADAAN_SLOT]}
+
+    def runut(s: int) -> dict[int, int]:
+        """Berapa ronde memakai tiap nilai slot, untuk total akhir s."""
+        jml: dict[int, int] = {}
+        for r in range(n_rounds, 0, -1):
+            v = jangkau[r][s]
+            jml[v] = jml.get(v, 0) + 1
+            s -= v
+        return jml
+
+    terbaik = None
+    for s in jangkau[n_rounds]:
+        sp = _spread_dari_slot(s, total_slots, n_men, n_women)
+        if sp is None:
+            continue
+        key = (sp, abs(s - ideal))
+        if terbaik is None or key < terbaik[0]:
+            terbaik = (key, s, runut(s))
+    if terbaik is None:
+        return None
+
+    spread_baru = terbaik[0][0]
+    # Hanya menggeser kalau TERBUKTI lebih merata. Urutan apa adanya memakai
+    # baris yang berbeda-beda, jadi rotasi partnernya lebih kaya; menggesernya
+    # tanpa alasan menukar partner unik dengan pemerataan yang tidak bertambah.
+    # Kalau spread bawaan tidak bisa dinilai (ada baris tanpa komposisi sah),
+    # anggap tidak terbukti - jangan mengaku tahu.
+    if spread_bawaan is None or spread_baru >= spread_bawaan:
+        return None
+
+    jumlah = terbaik[2]
+
+    # Sebar merata sepanjang acara, bukan berblok. Runutan DP cenderung
+    # mengelompokkan ronde sejenis berurutan, dan blok "6 ronde putra" berarti
+    # para perempuan duduk enam kali beruntun - persis yang didenda b2b_pen.
+    # Posisi pecahan (k+0.5)/jumlah menyebar tiap kelompok serata mungkin.
+    urut_nilai = [
+        v for _, v in sorted(
+            ((k + 0.5) / jumlah[v], v)
+            for v in jumlah for k in range(jumlah[v])
+        )
+    ]
+
+    # Baris untuk tiap nilai, dipakai bergiliran supaya pengulangan tersebar
+    # rata alih-alih menumpuk di satu baris.
+    pakai: dict[int, int] = {}
+    hasil: list[int] = []
+    for v in urut_nilai:
+        kandidat = baris_untuk[v]
+        hasil.append(kandidat[pakai.get(v, 0) % len(kandidat)])
+        pakai[v] = pakai.get(v, 0) + 1
+    return hasil
+
+
 @dataclass
 class ShapeQuota:
     """Anggaran bentuk tim untuk SATU MEET, bukan satu ronde.
@@ -1287,6 +1466,25 @@ def _build_once(players: list[Player], config: Config,
                 cand_cache[id(seg)] = [cands[i] for i in subset]
                 quota = ShapeQuota(target, [options[i] for i in subset])
                 break
+
+    # --- Pemerataan jatah main kalau anggaran tidak terpasang ------------
+    # Anggaran di atas menuntut lawan 100% unik; begitu itu mustahil - dan pada
+    # meet yang rondenya melebihi stok 1-faktorisasi memang selalu mustahil - ia
+    # menyerah total dan komposisi format jadi apa adanya. Yang hilang bukan
+    # keunikan (itu memang tak terselamatkan) melainkan PEMERATAAN: roster
+    # dengan gender timpang bisa berakhir sebagian orang main dua kali lipat
+    # yang lain. Lapisan ini hanya mengurus pemerataan itu, tanpa menyentuh
+    # syarat keunikan yang dipakai analyze() untuk melapor ke host.
+    if quota is None and pakai_kuota:
+        seg = segments[0]
+        cands = cand_cache[id(seg)]
+        need = 2 * min(courts, n // 4)
+        memo_b: dict[tuple[int, ...], bool] = {}
+        options_b = [_round_options(stok, need, frozenset(izin), memo_b)
+                     for stok in _shape_supply(cands, rules.gender)]
+        urutan = _balanced_rows(options_b, total_rounds, n_men, n_women, need)
+        if urutan:
+            cand_cache[id(seg)] = [cands[i] for i in urutan]
 
     for r_global, (seg, i) in enumerate(plan):
         cands = cand_cache[id(seg)]
