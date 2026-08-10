@@ -1049,6 +1049,93 @@ class TestMexicanoMode(unittest.TestCase):
         )
 
 
+class TestMultiStart(unittest.TestCase):
+    """Penjadwalan diulang beberapa kali, lalu diambil yang terbaik.
+
+    Annealing berhenti di optimum lokal yang berbeda-beda tergantung lintasan
+    acaknya. Pada setup 26 orang dengan format dibatasi (24 seed, effort
+    160000), satu percobaan mencapai nol lawan berulang di 13 seed; tiga
+    percobaan di 22 seed, dengan ongkos 1.6x waktu - bukan 3x, karena mayoritas
+    berhenti di percobaan pertama.
+    """
+
+    def _players(self):
+        return make_players(26, genders=["M"] * 15 + ["F"] * 11)
+
+    def _cfg(self, attempts, seed=1):
+        return Config(courts=4, duration_minutes=120, round_minutes=9,
+                      warmup_minutes=0, seed=seed, effort=8000,
+                      attempts=attempts,
+                      allowed_matchups=["LL-LL", "LP-LP", "PP-PP"])
+
+    def test_rejects_zero_attempts(self):
+        with self.assertRaises(ValueError):
+            Config(courts=2, duration_minutes=60, attempts=0)
+
+    def test_deterministic(self):
+        """Seed yang sama harus tetap memberi jadwal yang sama persis.
+
+        Multi-start memakai seed turunan, jadi gampang tanpa sengaja menarik
+        keacakan dari luar - dan begitu itu terjadi, laporan host tidak bisa
+        direproduksi lagi.
+        """
+        a = build_schedule(self._players(), self._cfg(3))
+        b = build_schedule(self._players(), self._cfg(3))
+        self.assertEqual(
+            [[m.players() for m in r.matches] for r in a.rounds],
+            [[m.players() for m in r.matches] for r in b.rounds])
+
+    def test_reports_original_seed(self):
+        """Yang dilaporkan seed host, bukan seed turunan yang kebetulan menang.
+
+        Seluruh rangkaian percobaan ditentukan seed asli, jadi angka itulah
+        yang mengulang hasilnya - seed turunan tidak.
+        """
+        sch = build_schedule(self._players(), self._cfg(3, seed=7))
+        self.assertEqual(sch.config.seed, 7)
+        self.assertEqual(sch.config.attempts, 3)
+
+    def test_never_worse_than_single(self):
+        """Percobaan pertama identik dengan attempts=1, dan yang terbaik dipilih.
+
+        Jadi hasilnya mustahil lebih buruk - kalau pernah lebih buruk, berarti
+        pemilihannya atau seed turunannya bocor.
+        """
+        for seed in (1, 7, 21):
+            with self.subTest(seed=seed):
+                satu = build_schedule(self._players(), self._cfg(1, seed))
+                tiga = build_schedule(self._players(), self._cfg(3, seed))
+                self.assertLessEqual(
+                    (tiga.stats.partner_repeat_pairs,
+                     tiga.stats.opponent_repeat_pairs),
+                    (satu.stats.partner_repeat_pairs,
+                     satu.stats.opponent_repeat_pairs),
+                    f"seed {seed}: 3 percobaan lebih buruk daripada 1")
+
+    def test_floor_flag_is_honest(self):
+        """Tanda "sudah di batas bawah" harus cocok dengan kenyataan.
+
+        Tanda inilah yang menghentikan percobaan lebih awal, jadi kalau ia
+        menyala terlalu cepat, multi-start berhenti sebelum waktunya.
+        """
+        # 16 pemain, 4 court, 9 ronde: tiap orang main 9x dari 15 calon partner
+        # dan 7 batas lawan unik - pengulangan lawan wajib, jadi nol mustahil.
+        cfg = Config(courts=4, duration_minutes=120, round_minutes=12,
+                     mode="americano", effort=8000, attempts=1)
+        sch = build_schedule(make_players(16), cfg)
+        if sch.stats.at_theoretical_floor:
+            self.assertGreater(
+                sch.stats.opponent_repeat_pairs, 0,
+                "batas bawah di setup ini bukan nol, jadi tandanya menyesatkan")
+
+    def test_floor_reached_means_perfect_when_possible(self):
+        """Kalau nol memang mungkin, tanda batas bawah cuma boleh menyala di nol."""
+        sch = build_schedule(self._players(), self._cfg(3))
+        if sch.stats.at_theoretical_floor:
+            self.assertEqual(sch.stats.opponent_repeat_pairs, 0)
+            self.assertEqual(sch.stats.partner_repeat_pairs, 0)
+
+
 class TestPolishPairs(unittest.TestCase):
     """Sapuan deterministik yang jalan setelah perataan jumlah main.
 

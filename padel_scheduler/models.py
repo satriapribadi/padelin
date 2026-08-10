@@ -173,6 +173,16 @@ class Config:
     seed: int = 42
     # Iterasi optimasi. Lebih tinggi = lebih rapi, tapi lebih lama.
     effort: int = 30_000
+    # Berapa kali seluruh penjadwalan diulang dengan seed turunan, lalu diambil
+    # yang terbaik. Berhenti lebih awal begitu ada percobaan yang mencapai batas
+    # bawah teoretis - mencoba lagi setelah itu mustahil menolong.
+    #
+    # Annealing berhenti di optimum lokal yang berbeda-beda tergantung lintasan
+    # acaknya, dan selisihnya nyata: pada setup 26 orang dengan format dibatasi,
+    # satu percobaan mencapai nol lawan berulang di 13 dari 24 seed, sedangkan
+    # tiga percobaan di 22 dari 24. Karena mayoritas berhenti di percobaan
+    # pertama, ongkos rata-ratanya jauh di bawah 3x.
+    attempts: int = 3
     # Tugas untuk yang istirahat. 0 = nonaktif.
     referees_per_court: int = 0
     ballboys_per_court: int = 0
@@ -208,6 +218,8 @@ class Config:
                     "tidak ada satu pun susunan yang sah.")
         if self.round_minutes < 1:
             raise ValueError("Durasi per ronde minimal 1 menit.")
+        if self.attempts < 1:
+            raise ValueError("Jumlah percobaan minimal 1.")
         if self.mode not in MODES:
             raise ValueError(f"Mode tidak dikenal: {self.mode}")
 
@@ -244,6 +256,11 @@ class ScheduleStats:
     max_rating_gap: float
     # 0-100, ringkasan kualitas jadwal untuk ditampilkan ke host.
     quality_score: float
+    # Pengulangan partner & lawan sudah menyentuh batas bawah teoretisnya, jadi
+    # tidak ada jadwal lain yang bisa lebih sedikit. Dipakai multi-start untuk
+    # berhenti lebih awal, dan berguna juga untuk memberi tahu host bahwa sisa
+    # pengulangan yang ia lihat memang tak terhindarkan.
+    at_theoretical_floor: bool = False
     # id pemain -> {"total": n, "wasit": n, "ballboy": n}
     roles_per_player: dict[int, dict[str, int]] = field(default_factory=dict)
 

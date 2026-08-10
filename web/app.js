@@ -1042,7 +1042,10 @@ function debugSnapshot() {
       + `ronde=${payload.round_minutes}m pemanasan=${payload.warmup_minutes}m`,
     `mode=${payload.mode} pool_rating=${payload.tier_count} `
       + `wasit=${payload.referees_per_court} ballboy=${payload.ballboys_per_court}`,
+    // percobaan ikut dicatat: jumlahnya mengubah hasil, jadi laporan tanpa
+    // angka ini tidak bisa direproduksi.
     `seed=${payload.seed} effort=${payload.effort} `
+      + `percobaan=${payload.attempts ?? 3} `
       + `selang_seling=${payload.interleave_segments}`,
     // Format yang diizinkan WAJIB ikut. Batasan ini menentukan siapa yang bisa
     // turun bareng, jadi ia mengubah kerataan main dan keunikan lawan sekaligus

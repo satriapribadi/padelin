@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import math
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import combinations
 
 from .capacity import analyze, rounds_from_duration, shape_budget, shape_totals
@@ -993,6 +993,12 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     score = 100.0 - 45 * min(1.0, p_pen) - 30 * min(1.0, o_pen) \
         - 15 * bye_pen - 10 * b2b_pen
 
+    # Sudah menyentuh batas bawah? Kalau ya, tidak ada jadwal lain yang bisa
+    # lebih sedikit pengulangannya - mengulang penjadwalan mustahil menolong.
+    # Batasnya bisa pecahan (dibagi 2), jadi dibandingkan dengan toleransi.
+    di_batas = (actual_partner_excess <= min_partner_excess + 1e-9
+                and actual_oppo_excess <= min_oppo_excess + 1e-9)
+
     return ScheduleStats(
         rounds=n_rounds,
         players=len(ids),
@@ -1007,6 +1013,7 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
         avg_rating_gap=round(sum(gaps) / len(gaps), 2) if gaps else 0.0,
         max_rating_gap=round(max(gaps), 2) if gaps else 0.0,
         quality_score=round(max(0.0, min(100.0, score)), 1),
+        at_theoretical_floor=di_batas,
     )
 
 
@@ -1023,13 +1030,106 @@ def pair_matrix(st: ScheduleState, players: list[Player]) -> list[PairStat]:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _zero_repeats_possible(players: list[Player], config: Config) -> bool:
+    """Mungkinkah jadwal ini sama sekali tanpa pertemuan berulang?
+
+    Dua lapis. Yang umum: tiap ronde seorang pemain dapat 2 lawan, jadi lawan
+    unik mentok di (N-1)/2 ronde main. Yang kedua khusus untuk format match
+    yang dibatasi - kolam pasangan pecah per gender dan yang terkecil bisa
+    habis jauh lebih dulu, sehingga setup yang lolos hitungan umum tetap
+    mustahil.
+    """
+    segments = _resolve_segments(config)
+    total_rounds = sum(s.rounds for s in segments)
+    n = len(players)
+    if total_rounds <= 0 or n < 4:
+        return False
+    courts_used = min(config.courts, n // 4)
+    if math.ceil(total_rounds * 4 * courts_used / n) > (n - 1) // 2:
+        return False
+    men = sum(1 for p in players if p.gender == "M")
+    women = sum(1 for p in players if p.gender == "F")
+    if config.allowed_matchups and men + women == n:
+        return shape_budget(
+            men, women, total_rounds * courts_used,
+            sorted(set(config.allowed_matchups)),
+        ).feasible is not False
+    return True
+
+
+def _lebih_baik(a: Schedule, b: Schedule) -> bool:
+    """Apakah jadwal a lebih layak dipakai daripada b?
+
+    Urutannya sengaja bukan skor kualitas semata. Pengulangan partner lebih
+    dulu, lalu pengulangan lawan, baru kualitas. Peserta mengingat "kok lawan
+    dia lagi", bukan selisih 0.4 poin di angka kualitas - dan skor kualitas
+    memberi lawan cuma 30 dari 100, jadi memilih dengannya bisa membuang jadwal
+    yang lawannya bersih demi jadwal yang istirahatnya sedikit lebih rapi.
+    """
+    x, y = a.stats, b.stats
+    return ((x.partner_repeat_pairs, x.opponent_repeat_pairs, -x.quality_score)
+            < (y.partner_repeat_pairs, y.opponent_repeat_pairs, -y.quality_score))
+
+
 def build_schedule(players: list[Player], config: Config,
                    progress=None) -> Schedule:
     """Bangun jadwal lengkap. Ini fungsi yang dipanggil UI.
 
+    Penjadwalan diulang beberapa kali dengan seed turunan, lalu diambil yang
+    terbaik. Annealing berhenti di optimum lokal yang berbeda-beda tergantung
+    lintasan acaknya, dan selisihnya nyata: pada setup 26 orang dengan format
+    dibatasi, satu percobaan mencapai nol lawan berulang di 13 dari 24 seed,
+    tiga percobaan di 22 dari 24.
+
+    Berhenti lebih awal begitu ada percobaan yang menyentuh batas bawah
+    teoretis. Karena itu yang paling sering terjadi di percobaan pertama,
+    ongkos rata-ratanya jauh di bawah `attempts` kali lipat - dan setup yang
+    memang mudah tidak membayar apa pun.
+
+    Seed yang dilaporkan tetap seed asli host, bukan seed turunan yang menang:
+    seluruh rangkaian percobaan ditentukan oleh seed asli, jadi mengulang
+    dengan angka yang sama tetap menghasilkan jadwal yang sama persis.
+
     `progress(frac, pesan)` opsional: dipanggil di tiap tahap supaya host tahu
     apa yang sedang dikerjakan. Angkanya nyata, bukan animasi.
     """
+    percobaan = max(1, config.attempts)
+    # Mengulang cuma masuk akal kalau ada yang dikejar. Saat pengulangan memang
+    # wajib terjadi, tiap percobaan berhenti di sekitar batas bawah yang sama
+    # dan bedanya tinggal derau - diukur: 60 orang / 15 court / 20 ronde tetap
+    # 3 pasang berulang setelah 3 percobaan, dan waktunya naik 3.2 -> 9.8 detik.
+    # Setup seperti itu dibiarkan satu percobaan saja.
+    if percobaan > 1 and not _zero_repeats_possible(players, config):
+        percobaan = 1
+    terbaik: Schedule | None = None
+
+    for k in range(percobaan):
+        # Tiap percobaan dapat lintasan acak yang berbeda, tapi tetap turunan
+        # deterministik dari seed host.
+        cfg = config if k == 0 else replace(config, seed=config.seed + 1000 * k)
+
+        def teruskan(frac, msg, k=k):
+            if progress is not None:
+                awal = k / percobaan
+                label = msg if percobaan == 1 else f"[{k + 1}/{percobaan}] {msg}"
+                progress(awal + frac / percobaan, label)
+
+        sch = _build_once(players, cfg, teruskan if progress else None)
+        if terbaik is None or _lebih_baik(sch, terbaik):
+            terbaik = sch
+        if sch.stats.at_theoretical_floor:
+            break
+
+    terbaik.config.seed = config.seed
+    terbaik.config.attempts = config.attempts
+    if progress is not None:
+        progress(1.0, f"Selesai - kualitas {terbaik.stats.quality_score}/100")
+    return terbaik
+
+
+def _build_once(players: list[Player], config: Config,
+                progress=None) -> Schedule:
+    """Satu kali penjadwalan utuh, dari validasi sampai jadwal jadi."""
     def say(frac, msg):
         if progress is not None:
             progress(frac, msg)
@@ -1098,17 +1198,7 @@ def build_schedule(players: list[Player], config: Config,
     # 5 kali sementara pasangan lain belum pernah.
     n_men = sum(1 for p in local_players if p.gender == "M")
     n_women = sum(1 for p in local_players if p.gender == "F")
-    courts_used = min(config.courts, n // 4)
-    avg_plays = (total_rounds * 4 * courts_used / n) if n else 0.0
-    bisa_unik = math.ceil(avg_plays) <= (n - 1) // 2
-    if bisa_unik and config.allowed_matchups and n_men + n_women == n:
-        # Format yang dibatasi bisa membuatnya mustahil walau hitungan umum
-        # bilang aman - itu justru kasus yang paling sering salah dinilai.
-        bisa_unik = shape_budget(
-            n_men, n_women, total_rounds * courts_used,
-            sorted(set(config.allowed_matchups)),
-        ).feasible is not False
-    if not bisa_unik:
+    if not _zero_repeats_possible(players, config):
         weights.opponent_cap = 0.0
 
     rules = Rules(
@@ -1377,6 +1467,7 @@ def build_schedule(players: list[Player], config: Config,
         interleave_segments=config.interleave_segments,
         fit_rounds_to_duration=config.fit_rounds_to_duration,
         allowed_matchups=config.allowed_matchups,
+        attempts=config.attempts,
     )
 
     # Format match yang dilarang tapi tetap muncul. Bisa terjadi kalau susunan

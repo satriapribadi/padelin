@@ -131,6 +131,7 @@ def _config_from(payload: dict) -> Config:
         tier_count=int(payload.get("tier_count", 2)),
         seed=int(payload.get("seed", 42)),
         effort=max(1000, min(200_000, int(payload.get("effort", 30_000)))),
+        attempts=max(1, min(10, int(payload.get("attempts", 3)))),
         referees_per_court=max(0, min(2, int(payload.get("referees_per_court", 0)))),
         ballboys_per_court=max(0, min(3, int(payload.get("ballboys_per_court", 0)))),
         segments=segs,
