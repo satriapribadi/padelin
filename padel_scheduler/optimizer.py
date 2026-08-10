@@ -8,6 +8,7 @@ Fungsi biaya:
 
     cost = w_partner  * SUM pc*(pc-1)          # pengulangan partner
          + w_opponent * SUM oc*(oc-1)          # pengulangan lawan
+         + w_opp_cap  * #{pasang dengan oc>=2} # denda "pernah ketemu 2x"
          + w_bye      * SUM bye^2              # ketimpangan istirahat
          + w_b2b      * (duduk 2 ronde beruntun)
          + w_rating   * SUM |rating_tim_A - rating_tim_B|
@@ -37,6 +38,42 @@ from .models import matchup_code, team_shape
 class Weights:
     partner: float = 1000.0
     opponent: float = 120.0
+    # Denda sekali-bayar begitu sepasang orang berhadapan untuk KEDUA kalinya.
+    #
+    # Bentuk c*(c-1) saja tidak cukup untuk mengejar nol. Ia konveks, jadi
+    # justru pengulangan PERTAMA yang paling murah - bagus untuk menyebar
+    # pengulangan yang memang tak terhindarkan, buruk untuk membuang beberapa
+    # sisa terakhir. Denda ini menambal persis lubang itu: ia hanya menyala di
+    # perbatasan 1->2, jadi jadwal yang sudah mustahil nol tidak ikut terhukum
+    # berulang-ulang, sementara jadwal yang tinggal sedikit lagi jadi punya
+    # dorongan kuat untuk menutupnya. Padanan "batas 1x" yang aman untuk
+    # pencarian lokal: hard constraint akan membekukan annealing, karena
+    # keadaan awalnya memang sudah melanggar - tiap gerakan akan ditolak dan
+    # pencarian tidak pernah bergerak sama sekali.
+    #
+    # 900 dari pengukuran pada setup 26 orang / 4 court / format sesama-bentuk.
+    #
+    #   effort 30000 (default), 10 seed : 4.4 -> 2.0 pasang berulang,
+    #                                     duduk-beruntun 18.6 -> 18.2,
+    #                                     kualitas 92.20 -> 92.71
+    #   effort 160000,          24 seed : 1.17 -> 0.71 rata-rata, TERBURUK
+    #                                     3 -> 1, dan seluruh 24 seed mendarat
+    #                                     di <=1 (sebelumnya cuma 17 dari 24),
+    #                                     duduk-beruntun 16.8 -> 17.3,
+    #                                     kualitas 93.37 -> 93.22
+    #
+    # Yang paling berharga bukan rata-ratanya melainkan sebarannya: simpangan
+    # baku 0.87 -> 0.46. Host tidak menjalankan 24 seed lalu memilih yang
+    # terbaik - ia menjalankan sekali. Menghapus ekor "3 pasang berulang" jauh
+    # lebih berarti daripada menurunkan rata-rata. Ongkosnya, duduk-beruntun
+    # +0.5 dari simpangan baku 2.6, masih di dalam derau.
+    #
+    # Kenapa menaikkan `opponent` saja tidak dipilih: pada 450 ia menekan
+    # pengulangan serupa, tapi ikut merusak jadwal yang pengulangannya SUDAH
+    # nol (26 orang format bebas: duduk-beruntun 16.2 -> 19.2), karena
+    # gradiennya bekerja di semua keadaan. Denda ini padam sendiri begitu tidak
+    # ada pasangan yang berulang.
+    opponent_cap: float = 900.0
     # Kerataan jumlah main mengalahkan variasi lawan, dan itu disengaja.
     # Peserta membayar fee yang sama; kehilangan satu ronde main itu kerugian
     # nyata, sedangkan sekali bertemu lawan yang sama hampir tak terasa. Dengan
@@ -321,15 +358,20 @@ class ScheduleState:
                 pc[idx] = cur - 1
                 self.cost_pair -= wp * 2 * (cur - 1)
 
+        wcap = self.w.opponent_cap
         for (i, j) in ((a, c), (a, d), (b, c), (b, d)):
             idx = k(i, j)
             cur = oc[idx]
             if sign > 0:
                 self.cost_pair += wo * 2 * cur
+                if cur == 1:                        # baru saja jadi berulang
+                    self.cost_pair += wcap
                 oc[idx] = cur + 1
             else:
                 oc[idx] = cur - 1
                 self.cost_pair -= wo * 2 * (cur - 1)
+                if cur == 2:                        # kembali jadi sekali saja
+                    self.cost_pair -= wcap
 
         self.cost_rating += sign * self._rating_cost(quad)
         self.cost_pref += sign * self._pref_cost(quad)
@@ -575,6 +617,110 @@ def _try_swap(st: ScheduleState, r: int, mi: int, pi: int, incoming: int):
         st._set_bye(r, incoming, True)
 
     return undo
+
+
+def _try_reorder(st: ScheduleState, r: int, mi: int, varian: int):
+    """Susun ulang tim dalam satu match; kembalikan fungsi pembatal.
+
+    Keempat orangnya tetap, cuma pembagian timnya yang berubah - jadi jumlah
+    main, siapa yang duduk, dan duduk-beruntun semuanya tidak tersentuh. Yang
+    berubah hanya siapa berpartner dengan siapa dan siapa melawan siapa.
+    """
+    quad = st.matches[r][mi]
+    lama = list(quad)
+    a, b, c, d = lama
+    baru = [a, c, b, d] if varian == 1 else [a, d, c, b]
+    st._touch_match(quad, -1, r)
+    quad[:] = baru
+    st._touch_match(quad, +1, r)
+
+    def undo() -> None:
+        st._touch_match(quad, -1, r)
+        quad[:] = lama
+        st._touch_match(quad, +1, r)
+
+    return undo
+
+
+def _try_cross(st: ScheduleState, r: int, i: int, pi: int, j: int, pj: int):
+    """Tukar dua pemain yang sama-sama main, antar match di ronde yang sama."""
+    ms = st.matches[r]
+    st._touch_match(ms[i], -1, r)
+    st._touch_match(ms[j], -1, r)
+    ms[i][pi], ms[j][pj] = ms[j][pj], ms[i][pi]
+    st._touch_match(ms[i], +1, r)
+    st._touch_match(ms[j], +1, r)
+
+    def undo() -> None:
+        st._touch_match(ms[i], -1, r)
+        st._touch_match(ms[j], -1, r)
+        ms[i][pi], ms[j][pj] = ms[j][pj], ms[i][pi]
+        st._touch_match(ms[i], +1, r)
+        st._touch_match(ms[j], +1, r)
+
+    return undo
+
+
+def polish_pairs(st: ScheduleState, max_steps: int = 200) -> int:
+    """Sapu deterministik terakhir: buang pengulangan yang masih bisa dibuang.
+
+    Kenapa masih ada yang tersisa padahal annealing baru saja jalan 160.000
+    iterasi? Karena keadaan akhir BUKAN optimum lokal annealing. Annealing
+    memulihkan keadaan terbaiknya, lalu rebalance_plays() menukar-nukar lagi
+    demi meratakan jumlah main - dan pertukaran itu bisa melahirkan pertemuan
+    berulang baru yang tidak pernah dinilai siapa pun sesudahnya.
+
+    Sapuan ini memakai dua gerakan yang sama sekali tidak menyentuh jumlah
+    main maupun siapa yang duduk, jadi ia tidak bisa merusak kerataan yang baru
+    saja dijamin rebalance_plays(): menyusun ulang tim di dalam satu match, dan
+    menukar dua pemain yang sama-sama main. Yang diterima hanya gerakan yang
+    menurunkan biaya total secara tegas, jadi tidak ada komponen mana pun -
+    rating, preferensi, jarak pengulangan - yang digadaikan diam-diam.
+
+    Bedanya dengan annealing: menyeluruh dan deterministik. Annealing menjajal
+    tetangga secara acak dan berhenti saat suhunya habis; di sini setiap
+    kemungkinan diperiksa sampai satu sapuan penuh tidak menemukan apa pun.
+
+    Perbaikan diterapkan begitu ditemukan, bukan dikumpulkan dulu lalu dipilih
+    yang terbaik. Memilih yang terbaik menuntut satu sapuan penuh per satu
+    pertukaran, dan pada meet besar (60 orang, 15 court, 20 ronde) itu sendiri
+    menghabiskan 9 detik - lebih lama daripada seluruh sisa penjadwalan.
+    """
+    swaps = 0
+    for _ in range(max_steps):
+        moved = 0
+        for r in range(st.n_rounds):
+            ms = st.matches[r]
+            for mi in range(len(ms)):
+                for varian in (1, 2):
+                    before = st.cost()
+                    undo = _try_reorder(st, r, mi, varian)
+                    if st.rules.quad_ok(ms[mi], r) and st.cost() < before - 1e-9:
+                        moved += 1
+                        break                       # susunan ini sudah dipakai
+                    undo()
+            for i in range(len(ms)):
+                for j in range(i + 1, len(ms)):
+                    sudah = False
+                    for pi in range(4):
+                        for pj in range(4):
+                            before = st.cost()
+                            undo = _try_cross(st, r, i, pi, j, pj)
+                            if (st.rules.quad_ok(ms[i], r)
+                                    and st.rules.quad_ok(ms[j], r)
+                                    and st.cost() < before - 1e-9):
+                                moved += 1
+                                sudah = True
+                                break
+                            undo()
+                        if sudah:
+                            break
+
+        swaps += moved
+        if not moved:
+            break
+
+    return swaps
 
 
 def rebalance_plays(st: ScheduleState, max_steps: int = 500) -> int:

@@ -15,9 +15,10 @@ from __future__ import annotations
 
 import math
 import random
+from dataclasses import dataclass, field
 from itertools import combinations
 
-from .capacity import analyze, rounds_from_duration
+from .capacity import analyze, rounds_from_duration, shape_budget, shape_totals
 from .factorization import mixed_pair_rounds, subset_pair_rounds
 from .models import (
     MATCHUP_LABELS,
@@ -42,6 +43,7 @@ from .optimizer import (
     Weights,
     anneal,
     play_counts,
+    polish_pairs,
     rebalance_plays,
 )
 from .roles import assign_roles, coverage_note
@@ -309,6 +311,161 @@ _SEMUA_FORMAT = frozenset(MATCHUPS)
 OPPONENT_WEIGHT = 3.0
 
 
+def _shape_supply(
+    cands: list[list[tuple[int, int]]], gender: dict[int, str | None]
+) -> list[dict[str, int]]:
+    """Berapa pasangan tiap bentuk yang tersedia di tiap ronde kandidat."""
+    out = []
+    for row in cands:
+        c = {s: 0 for s in TEAM_SHAPES}
+        for a, b in row:
+            s = team_shape(gender.get(a), gender.get(b))
+            if s is not None:
+                c[s] += 1
+        out.append(c)
+    return out
+
+
+def _round_options(
+    stok: dict[str, int], need: int, allowed: frozenset[str], memo: dict
+) -> list[tuple[int, ...]]:
+    """Komposisi bentuk tim yang benar-benar bisa dipakai satu ronde.
+
+    Bukan sekadar "ada stoknya": komposisinya juga harus habis terpasangkan.
+    Dengan format sesama-bentuk saja itu berarti tiap bentuk harus genap - satu
+    tim LL yang tersisa tidak punya lawan sah. Batas inilah yang membuat ronde
+    dengan 7 pasangan campur cuma bisa menurunkan 6, dan tanpa
+    memperhitungkannya anggaran yang disusun akan tampak terjangkau padahal
+    tidak.
+    """
+    out = []
+    for n_ll in range(min(stok["LL"], need) + 1):
+        for n_lp in range(min(stok["LP"], need - n_ll) + 1):
+            n_pp = need - n_ll - n_lp
+            if not 0 <= n_pp <= stok["PP"]:
+                continue
+            counts = (n_ll, n_lp, n_pp)
+            if _shapes_pairable(counts, allowed, memo):
+                out.append(counts)
+    return out
+
+
+def _supply_caps(
+    options: list[list[tuple[int, ...]]], n_rounds: int
+) -> dict[str, int]:
+    """Paling banyak berapa tim tiap bentuk yang bisa diturunkan seluruh meet.
+
+    Yang dijumlah hanya n_rounds ronde termurah hati untuk bentuk itu, karena
+    memang cuma sebanyak itu ronde yang akan dipakai. Menjumlah seluruh ronde
+    kandidat melahirkan batas yang jauh terlalu longgar - dan batas longgar
+    itulah yang membuat anggaran menuntut lebih dari yang ada.
+    """
+    return {
+        s: sum(sorted(
+            (max((o[k] for o in opts), default=0) for opts in options),
+            reverse=True,
+        )[:n_rounds])
+        for k, s in enumerate(TEAM_SHAPES)
+    }
+
+
+def _pick_candidate_rounds(
+    options: list[list[tuple[int, ...]]], target: dict[str, int], n_rounds: int
+) -> list[int]:
+    """Ronde kandidat yang paling sanggup memenuhi anggaran bentuk tim.
+
+    Rotasi partner memakai n_rounds dari sekian ronde 1-faktorisasi, dan SEMUA
+    pilihan sama sahnya untuk keunikan partner - tiap ronde faktorisasi berisi
+    pasangan yang belum pernah dipakai. Yang berbeda cuma bentuk timnya. Ronde
+    yang kaya pasangan campur memang ada, tapi kalau yang diambil selalu
+    n_rounds yang pertama, yang terpakai adalah apa adanya - dan anggaran yang
+    menuntut banyak tim campur jadi tak terjangkau sejak awal.
+    """
+    ideal = [target.get(s, 0) / max(1, n_rounds) for s in TEAM_SHAPES]
+    urut = sorted(
+        range(len(options)),
+        # Sebanyak apa jatah per-ronde bisa ditutup ronde ini, pada komposisi
+        # terbaiknya. Indeks jadi pemutus seri supaya tetap deterministik.
+        key=lambda r: (
+            -max((sum(min(o[k], ideal[k]) for k in range(3)) for o in options[r]),
+                 default=0.0),
+            r,
+        ),
+    )
+    return sorted(urut[:n_rounds])
+
+
+def _reachable(options: list[list[tuple[int, ...]]], target: dict[str, int]) -> bool:
+    """Bisakah anggaran ini benar-benar diambil dari ronde-ronde tersebut?
+
+    Tiap ronde menurunkan satu komposisi utuh, jadi jatah tiap bentuk tidak
+    bebas sendiri-sendiri. Syarat Hall-nya: untuk tiap gabungan bentuk, yang
+    diminta tidak boleh melebihi yang sanggup disediakan. Tiga bentuk berarti
+    cuma tujuh gabungan, jadi diperiksa semuanya, bukan diperkirakan.
+    """
+    for k in range(1, len(TEAM_SHAPES) + 1):
+        for subset in combinations(range(len(TEAM_SHAPES)), k):
+            minta = sum(target.get(TEAM_SHAPES[i], 0) for i in subset)
+            bisa = sum(
+                max((sum(o[i] for i in subset) for o in opts), default=0)
+                for opts in options
+            )
+            if minta > bisa:
+                return False
+    return True
+
+
+@dataclass
+class ShapeQuota:
+    """Anggaran bentuk tim untuk SATU MEET, bukan satu ronde.
+
+    Tanpa ini komposisi format lahir dari keputusan lokal tiap ronde, dan
+    totalnya melenceng. Melencengnya bukan soal rapi-tidak rapi: kalau jatah
+    PP-PP terpakai lebih banyak dari yang disanggupi kolam pasangan perempuan,
+    lawan 100% unik jadi mustahil secara aritmetika - dan tidak ada iterasi
+    annealing yang bisa memperbaikinya, karena tidak ada satu pun gerakan yang
+    bisa memindahkan komposisi (menukar satu pemain selalu melahirkan bentuk
+    tim ilegal, jadi selalu ditolak).
+
+    Targetnya dihitung capacity.shape_budget() dan sudah dijamin muat. Selama
+    tidak ada bentuk yang kelebihan jatah, totalnya pasti mendarat tepat di
+    target: jumlah sisa selalu sama dengan jumlah tim yang belum disusun, jadi
+    sisa yang tak pernah negatif hanya bisa habis merata.
+    """
+
+    target: dict[str, int]
+    # Komposisi yang mungkin di tiap ronde terpilih, urut ronde. Dipakai untuk
+    # melihat ke depan.
+    options: list[list[tuple[int, ...]]] = field(default_factory=list)
+    used: dict[str, int] = field(default_factory=lambda: {s: 0 for s in TEAM_SHAPES})
+    idx: int = 0
+
+    def sisa(self, shape: str) -> int:
+        return self.target.get(shape, 0) - self.used.get(shape, 0)
+
+    def kelebihan(self, counts: tuple[int, ...]) -> int:
+        """Berapa tim yang melewati jatah kalau komposisi ini dipakai."""
+        return sum(max(0, c - self.sisa(s)) for s, c in zip(TEAM_SHAPES, counts))
+
+    def aman(self, counts: tuple[int, ...]) -> bool:
+        """Masih bisakah sisa jatah diambil ronde-ronde berikutnya?
+
+        Tidak melewati jatah saja tidak cukup. Ronde ini bisa mengambil bentuk
+        yang masih ada jatahnya, tapi menyisakan kebutuhan yang tak satu pun
+        ronde berikutnya sanggup sediakan - dan begitu itu terjadi, tidak ada
+        cara menebusnya: komposisi beku setelah konstruksi.
+        """
+        if self.kelebihan(counts):
+            return False
+        sisa = {s: self.sisa(s) - c for s, c in zip(TEAM_SHAPES, counts)}
+        return _reachable(self.options[self.idx + 1:], sisa)
+
+    def pakai(self, counts: tuple[int, ...]) -> None:
+        for s, c in zip(TEAM_SHAPES, counts):
+            self.used[s] = self.used.get(s, 0) + c
+        self.idx += 1
+
+
 def _grouping_cost(picked: list[tuple[int, int]], st: ScheduleState) -> float:
     """Perkiraan berapa banyak pertemuan berulang yang lahir dari susunan ini.
 
@@ -372,6 +529,7 @@ def _select_pairs_by_shape(
     st: ScheduleState,
     need: int,
     rng: random.Random,
+    quota: ShapeQuota | None = None,
 ) -> list[tuple[int, int]] | None:
     """Pilih pasangan yang bentuk timnya masih bisa dipasangkan habis.
 
@@ -402,7 +560,7 @@ def _select_pairs_by_shape(
     allowed = frozenset(st.rules.allowed_matchups)
     avail = [len(by_shape[s]) for s in TEAM_SHAPES]
     memo: dict[tuple[int, ...], bool] = {}
-    best: tuple[float, float, tuple[int, ...]] | None = None
+    best: tuple[tuple[int, int], float, float, tuple[int, ...]] | None = None
 
     for n_ll in range(avail[0] + 1):
         for n_lp in range(avail[1] + 1):
@@ -422,16 +580,32 @@ def _select_pairs_by_shape(
             istirahat = float(sum(st.bye_count[a] + st.bye_count[b]
                                   for a, b in picked))
             score = istirahat - OPPONENT_WEIGHT * _grouping_cost(picked, st)
+            # Jatah bentuk tim mendahului skor, dan bukan sebagai bobot
+            # melainkan sebagai urutan: komposisi yang menjaga jatah selalu
+            # menang atas yang merusaknya, berapa pun selisih skornya. Merusak
+            # jatah tidak membuat jadwal sedikit lebih jelek - ia membuat lawan
+            # unik mustahil untuk sisa meet.
+            #
+            # Dua tingkat, bukan satu. Tingkat pertama "aman": jatah utuh DAN
+            # sisanya masih bisa diambil ronde berikutnya. Tingkat kedua cuma
+            # dipakai kalau tidak ada yang aman - kelebihan sekecil mungkin,
+            # supaya susunan peserta yang memang tidak menyediakan bentuk yang
+            # dibutuhkan tetap dapat jadwal alih-alih ditolak mentah.
+            aman = (1, 0) if quota is None else (
+                int(quota.aman(counts)), -quota.kelebihan(counts))
             # Seri diputus acak. Tanpa ini komposisi dengan LL paling sedikit
             # selalu menang cuma karena urutan loop, dan gender yang sama terus
             # menerus jadi yang mengalah.
-            key = (score, rng.random(), counts)
-            if best is None or key[:2] > best[:2]:
+            key = (aman, score, rng.random(), counts)
+            if best is None or key[:3] > best[:3]:
                 best = key
 
     if best is None:
         return None
-    return [pr for shape, k in zip(TEAM_SHAPES, best[2])
+    counts = best[3]
+    if quota:
+        quota.pakai(counts)
+    return [pr for shape, k in zip(TEAM_SHAPES, counts)
             for pr in by_shape[shape][:k]]
 
 
@@ -440,9 +614,20 @@ def _select_pairs(
     st: ScheduleState,
     n_pairs_needed: int,
     rng: random.Random,
+    quota: ShapeQuota | None = None,
 ) -> list[tuple[int, int]]:
     """Pilih pasangan yang turun, prioritas ke yang paling sering istirahat."""
     if n_pairs_needed >= len(candidates):
+        # Tidak ada yang bisa dipilih, tapi jatahnya tetap terpakai - kalau
+        # tidak dicatat, ronde-ronde berikutnya mengira masih punya sisa.
+        if quota is not None:
+            g = st.rules.gender
+            counts = tuple(
+                sum(1 for pr in candidates
+                    if team_shape(g.get(pr[0]), g.get(pr[1])) == s)
+                for s in TEAM_SHAPES
+            )
+            quota.pakai(counts)
         return list(candidates)
     scored = sorted(
         candidates,
@@ -453,7 +638,7 @@ def _select_pairs(
     # ikut jalan di situ, ia memakai rng untuk memutus seri dan jadwalnya
     # bergeser tanpa ada satu pun batasan yang ditegakkan.
     if st.rules.allowed_matchups and set(st.rules.allowed_matchups) != _SEMUA_FORMAT:
-        picked = _select_pairs_by_shape(scored, st, n_pairs_needed, rng)
+        picked = _select_pairs_by_shape(scored, st, n_pairs_needed, rng, quota)
         if picked is not None:
             return picked
     return scored[:n_pairs_needed]
@@ -594,6 +779,7 @@ def _build_round(
     rng: random.Random,
     rating_weight: float,
     group_of: dict[int, str] | None = None,
+    quota: ShapeQuota | None = None,
 ) -> list[list[int]]:
     """Rakit satu ronde: pilih siapa turun, lalu tentukan siapa lawan siapa.
 
@@ -630,7 +816,7 @@ def _build_round(
         return quads
 
     if tier_of is None:
-        chosen = _select_pairs(row, st, min(courts, len(row) // 2) * 2, rng)
+        chosen = _select_pairs(row, st, min(courts, len(row) // 2) * 2, rng, quota)
         return _group_into_matches(chosen, st, rng, rating_weight)
 
     # Mode tiered: court dijatah per pool, dan pool tidak pernah bercampur.
@@ -832,6 +1018,33 @@ def build_schedule(players: list[Player], config: Config,
             locked[p.id] = p.partner_id
 
     weights = Weights.for_mode(config.mode)
+
+    # Denda "pernah ketemu 2x" hanya masuk akal kalau nol pengulangan memang
+    # bisa dicapai. Kalau tidak, ia justru merusak: begitu sebuah pasangan
+    # terlanjur berulang, memperdalamnya jadi lebih murah daripada membuat
+    # pasangan baru ikut berulang, sehingga pengulangan MENUMPUK di sedikit
+    # orang alih-alih tersebar. Padahal saat pengulangan tak terhindarkan,
+    # tersebar rata itulah satu-satunya yang bisa diperbaiki - dan itu tugas
+    # bentuk konveks c*(c-1), yang bekerja paling baik tanpa denda ini.
+    #
+    # Contohnya 8 orang di 2 court: tiap orang main tiap ronde, lawan unik
+    # mentok di 3 ronde. Dengan denda menyala, satu pasangan bisa berhadapan
+    # 5 kali sementara pasangan lain belum pernah.
+    n_men = sum(1 for p in local_players if p.gender == "M")
+    n_women = sum(1 for p in local_players if p.gender == "F")
+    courts_used = min(config.courts, n // 4)
+    avg_plays = (total_rounds * 4 * courts_used / n) if n else 0.0
+    bisa_unik = math.ceil(avg_plays) <= (n - 1) // 2
+    if bisa_unik and config.allowed_matchups and n_men + n_women == n:
+        # Format yang dibatasi bisa membuatnya mustahil walau hitungan umum
+        # bilang aman - itu justru kasus yang paling sering salah dinilai.
+        bisa_unik = shape_budget(
+            n_men, n_women, total_rounds * courts_used,
+            sorted(set(config.allowed_matchups)),
+        ).feasible is not False
+    if not bisa_unik:
+        weights.opponent_cap = 0.0
+
     rules = Rules(
         gender={p.id: p.gender for p in local_players},
         locked_partner=locked,
@@ -855,6 +1068,26 @@ def build_schedule(players: list[Player], config: Config,
     notes: list[str] = []
     courts = config.courts
 
+    # Anggaran bentuk tim hanya berlaku kalau seluruh meet memakai satu kolam
+    # peserta dengan satu aturan. Babak putra/putri, pool rating, dan partner
+    # terkunci masing-masing memecah kolamnya sendiri; modelnya tidak berlaku
+    # di situ dan lebih baik tidak dipakai daripada dipakai dengan andaian yang
+    # salah.
+    izin = set(config.allowed_matchups or ())
+    pakai_kuota = (
+        bool(izin)
+        and izin != _SEMUA_FORMAT
+        and tier_of is None
+        and not locked
+        and len(segments) == 1
+        and segments[0].rule == "open"
+        and all(p.gender in ("M", "F") for p in local_players)
+    )
+    # Kalau rondenya melebihi stok 1-faktorisasi, rotasi partner mengulang dari
+    # awal dan partner berulang sudah tak terhindarkan. Anggaran bentuk tim
+    # tidak menolong di situ - jatahnya pasti terlampaui - jadi tidak dipasang.
+    quota: ShapeQuota | None = None
+
     # --- Konstruksi awal, mengikuti urutan ronde ------------------------
     say(0.04, f"Menyusun pasangan untuk {n} peserta")
     cand_cache: dict[int, list] = {}
@@ -867,6 +1100,37 @@ def build_schedule(players: list[Player], config: Config,
                 f"Tidak bisa membentuk pasangan untuk segmen '{seg.label or 'Main'}'."
             )
         cand_cache[id(seg)] = cands
+
+    # --- Anggaran bentuk tim se-meet ------------------------------------
+    if pakai_kuota and total_rounds <= len(cand_cache[id(segments[0])]):
+        seg = segments[0]
+        cands = cand_cache[id(seg)]
+        need = 2 * min(courts, n // 4)
+        R = total_rounds
+
+        memo: dict[tuple[int, ...], bool] = {}
+        options = [_round_options(stok, need, frozenset(izin), memo)
+                   for stok in _shape_supply(cands, rules.gender)]
+
+        # Dua putaran: batas pertama dihitung dari semua ronde kandidat
+        # (optimistis, tiap bentuk seolah boleh memilih rondenya sendiri),
+        # lalu diperketat memakai ronde yang benar-benar terpilih. Kalau
+        # setelah itu masih tak terjangkau, lebih baik tanpa anggaran daripada
+        # dengan anggaran palsu yang dilesetkan tiap ronde.
+        subset = list(range(len(options)))
+        for _ in range(2):
+            budget = shape_budget(
+                n_men, n_women, R * (need // 2), sorted(izin),
+                _supply_caps([options[i] for i in subset], R),
+            )
+            if not (budget.feasible and budget.target):
+                break
+            target = shape_totals(budget.target)
+            subset = _pick_candidate_rounds(options, target, R)
+            if _reachable([options[i] for i in subset], target):
+                cand_cache[id(seg)] = [cands[i] for i in subset]
+                quota = ShapeQuota(target, [options[i] for i in subset])
+                break
 
     for r_global, (seg, i) in enumerate(plan):
         cands = cand_cache[id(seg)]
@@ -883,7 +1147,7 @@ def build_schedule(players: list[Player], config: Config,
         group_of = ({p.id: (p.gender or "?") for p in local_players}
                     if seg.rule == "same_gender" else None)
         quads = _build_round(row, st, courts, tier_of, rng, weights.rating,
-                             group_of=group_of)
+                             group_of=group_of, quota=quota)
         if not quads:
             raise ScheduleError(
                 f"Segmen '{seg.label or 'Main'}' tidak bisa mengisi court "
@@ -915,8 +1179,14 @@ def build_schedule(players: list[Player], config: Config,
     say(0.84, "Meratakan jumlah main")
     swaps = rebalance_plays(st)
     plays_now = sorted(play_counts(st))
-    say(0.88, f"Perataan: {swaps} pertukaran, jumlah main "
+    say(0.86, f"Perataan: {swaps} pertukaran, jumlah main "
               f"{plays_now[0]}-{plays_now[-1]} ronde")
+
+    # Perataan barusan menukar-nukar pemain tanpa ada yang menilai ulang
+    # pertemuannya, jadi ia bisa melahirkan pengulangan baru. Sapuan ini
+    # membersihkannya tanpa menyentuh jumlah main.
+    say(0.88, "Merapikan sisa pertemuan berulang")
+    polish_pairs(st)
 
     # --- Rakit hasil -----------------------------------------------------
     pref_labels = {
@@ -998,6 +1268,12 @@ def build_schedule(players: list[Player], config: Config,
     stats.byes_per_player = {inv[k]: v for k, v in stats.byes_per_player.items()}
     stats.roles_per_player = {inv[k]: v for k, v in role_summary.items()}
 
+    # Sama seperti di run.py: model bentuk hanya berlaku kalau gender lengkap
+    # dan seluruh ronde memakai kolam peserta yang sama.
+    nilai_bentuk = (
+        n_men + n_women == n and all(s.rule == "open" for s in segments)
+    )
+
     cap = analyze(
         n_players=n,
         courts=config.courts,
@@ -1005,6 +1281,9 @@ def build_schedule(players: list[Player], config: Config,
         round_minutes=round_minutes,
         warmup_minutes=config.warmup_minutes,
         rounds_override=total_rounds,
+        men=n_men if nilai_bentuk else None,
+        women=n_women if nilai_bentuk else None,
+        allowed_matchups=config.allowed_matchups,
     )
     for issue in cap.sorted_issues():
         if issue.severity in ("error", "warning"):

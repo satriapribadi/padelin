@@ -15,12 +15,19 @@ import unittest
 from itertools import combinations
 
 from padel_scheduler import Config, Player, Segment, build_schedule
-from padel_scheduler.capacity import analyze
+from padel_scheduler.capacity import analyze, shape_budget, shape_totals
 from padel_scheduler.factorization import (
     mixed_pair_rounds,
     verify_one_factorization,
 )
 from padel_scheduler.models import MATCHUPS, matchup_code, team_shape
+from padel_scheduler.optimizer import (
+    Rules,
+    ScheduleState,
+    Weights,
+    play_counts,
+    polish_pairs,
+)
 from padel_scheduler.scheduler import ScheduleError
 
 
@@ -792,11 +799,12 @@ class TestAllowedMatchups(unittest.TestCase):
         berulang-ulang - dan orang yang sama bertemu lagi. Karena itu komposisi
         dinilai dari dua hal sekaligus, lama duduk DAN kesegaran lawan.
 
-        Ambangnya hasil pengukuran di konfigurasi tes ini (20 seed, effort
-        20000): tanpa penimbang keunikan lawan, pengulangan memuncak di 17
-        pasang; dengan penimbang, di 11. Angka 12 dipilih sebagai puncak
-        perilaku lama - cukup ketat untuk menangkap pembengkakan yang nyata,
-        cukup longgar untuk tidak menagih keberuntungan seed tertentu.
+        Ambangnya hasil pengukuran di konfigurasi tes ini (effort 20000).
+        Tanpa penimbang keunikan lawan, pengulangan memuncak di 17 pasang;
+        dengan penimbang, di 11. Setelah anggaran komposisi format dan denda
+        "pernah ketemu 2x" masuk, puncaknya turun ke 5 dari 8 seed. Ambang 7
+        memberi ruang seed yang kurang beruntung tanpa membiarkan pembengkakan
+        lama lolos lagi.
         """
         izin = ["LL-LL", "LP-LP", "PP-PP"]
         for seed in (42, 46, 50):
@@ -805,9 +813,95 @@ class TestAllowedMatchups(unittest.TestCase):
                 cfg.seed = seed
                 sch = build_schedule(self._players(), cfg)
                 self.assertLessEqual(
-                    sch.stats.opponent_repeat_pairs, 12,
+                    sch.stats.opponent_repeat_pairs, 7,
                     f"seed {seed}: lawan berulang membengkak "
                     f"({sch.stats.opponent_repeat_pairs} pasang)")
+
+    def test_unavoidable_repeats_stay_spread(self):
+        """Kalau nol mustahil, pengulangan harus TERSEBAR, bukan menumpuk.
+
+        14 putra / 6 putri dengan format sesama-bentuk: cuma ada 15 pasangan
+        putri-putri, jauh dari cukup, jadi pengulangan pasti terjadi. Di
+        keadaan seperti ini denda "pernah ketemu 2x" justru merugikan -
+        memperdalam pasangan yang sudah berulang jadi lebih murah daripada
+        membuat pasangan baru ikut berulang - sehingga ia harus padam sendiri.
+
+        Yang diuji bukan jumlahnya (memang banyak), tapi tidak adanya satu
+        pasangan yang dipaksa bertemu jauh lebih sering daripada yang lain.
+        """
+        cfg = self._cfg(["LL-LL", "LP-LP", "PP-PP"])
+        cfg.round_minutes = 12
+        sch = build_schedule(self._players(14, 6), cfg)
+        assert_structurally_valid(self, sch)
+        self.assertLessEqual(
+            sch.stats.opponent_repeat_max, 3,
+            f"pengulangan menumpuk di satu pasangan "
+            f"({sch.stats.opponent_repeat_max}x)")
+
+    def _pair_demand(self, sch):
+        """Berapa pasangan tiap jenis yang dihabiskan jadwal ini sebagai LAWAN.
+
+        Inilah yang menentukan mungkin-tidaknya lawan 100% unik: dua orang
+        hanya bisa berhadapan sekali kalau pasangannya tidak diminta lebih
+        banyak dari yang ada.
+        """
+        g = {p.id: p.gender for p in sch.players}
+        pakai = {"LL": 0, "LP": 0, "PP": 0}
+        for rnd in sch.rounds:
+            for m in rnd.matches:
+                for x in m.team_a:
+                    for y in m.team_b:
+                        pakai[team_shape(g[x], g[y])] += 1
+        return pakai
+
+    def test_composition_stays_within_pair_supply(self):
+        """Komposisi format tidak boleh menuntut lebih dari kolam pasangan.
+
+        Ini invarian yang sebenarnya, bukan sekadar "lawan berulangnya sedikit".
+        Dengan 11 putri hanya ada C(11,2) = 55 pasangan putri-putri; tiap match
+        putri vs putri menghabiskan 4 sekaligus. Komposisi yang menuntut 56
+        membuat lawan unik mustahil secara aritmetika sebelum optimizer mulai
+        bekerja, dan tidak ada effort yang bisa menebusnya.
+
+        Dulu komposisi dipilih per ronde tanpa anggaran se-meet dan mendarat di
+        14/32/6 - kebutuhan pasangan putri-putri 56 dari 55 yang ada.
+        """
+        putra, putri = 15, 11
+        stok = {
+            "LL": putra * (putra - 1) // 2,
+            "LP": putra * putri,
+            "PP": putri * (putri - 1) // 2,
+        }
+        for seed in (42, 46, 50, 77):
+            with self.subTest(seed=seed):
+                cfg = self._cfg(["LL-LL", "LP-LP", "PP-PP"])
+                cfg.seed = seed
+                sch = build_schedule(self._players(putra, putri), cfg)
+                pakai = self._pair_demand(sch)
+                for jenis, n in pakai.items():
+                    self.assertLessEqual(
+                        n, stok[jenis],
+                        f"seed {seed}: butuh {n} pasangan {jenis} padahal cuma "
+                        f"ada {stok[jenis]} - lawan unik jadi mustahil")
+
+    def test_restriction_keeps_plays_even(self):
+        """Membatasi format tidak boleh membuat jumlah main timpang.
+
+        Komposisi format menentukan berapa slot putra dan berapa slot putri
+        yang dipakai seluruh meet. Kalau totalnya tidak cocok dengan roster,
+        sebagian orang pasti main lebih sering - dan rebalance_plays tidak bisa
+        menambalnya, karena menukar putra dengan putri melahirkan bentuk tim
+        yang ilegal dan langsung ditolak.
+        """
+        for seed in (42, 46, 50, 77):
+            with self.subTest(seed=seed):
+                cfg = self._cfg(["LL-LL", "LP-LP", "PP-PP"])
+                cfg.seed = seed
+                sch = build_schedule(self._players(), cfg)
+                main = sch.stats.plays_per_player.values()
+                self.assertLessEqual(
+                    max(main) - min(main), 1,
+                    f"seed {seed}: jumlah main timpang {sorted(set(main))}")
 
     def test_default_unchanged(self):
         """Tanpa batasan, perilakunya harus persis seperti sebelum fitur ini."""
@@ -915,6 +1009,172 @@ class TestMexicanoMode(unittest.TestCase):
             sch.stats.avg_rating_gap, 1.5,
             f"selisih rating antar tim terlalu besar: {sch.stats.avg_rating_gap}",
         )
+
+
+class TestPolishPairs(unittest.TestCase):
+    """Sapuan deterministik yang jalan setelah perataan jumlah main.
+
+    Perataan menukar pemain demi menyamakan jumlah main tanpa ada yang menilai
+    ulang pertemuannya, jadi ia bisa melahirkan pengulangan baru di keadaan
+    akhir - keadaan yang sudah tidak dilihat annealing lagi.
+    """
+
+    def test_removes_avoidable_repeats(self):
+        """Partner yang terulang padahal cuma perlu ditukar susunannya."""
+        st = ScheduleState(8, [3.0] * 8, Weights(), 2, Rules())
+        st.place_round(0, [[0, 1, 2, 3], [4, 5, 6, 7]], [])
+        st.place_round(1, [[0, 1, 4, 5], [2, 3, 6, 7]], [])
+        sebelum = st.cost()
+        self.assertGreater(polish_pairs(st), 0, "ada perbaikan yang terlewat")
+        self.assertLess(st.cost(), sebelum)
+
+    def test_does_not_disturb_rest_rotation(self):
+        """Gerakannya tidak boleh menyentuh siapa yang duduk atau berapa main.
+
+        Ini yang membuatnya aman dijalankan SETELAH rebalance_plays: kerataan
+        yang baru saja dijamin tidak mungkin tergerus di sini.
+        """
+        st = ScheduleState(10, [3.0] * 10, Weights(), 3, Rules())
+        st.place_round(0, [[0, 1, 2, 3], [4, 5, 6, 7]], [8, 9])
+        st.place_round(1, [[0, 1, 4, 5], [2, 3, 8, 9]], [6, 7])
+        st.place_round(2, [[0, 1, 6, 7], [2, 3, 4, 5]], [8, 9])
+        byes = [set(b) for b in st.byes]
+        plays = sorted(play_counts(st))
+        polish_pairs(st)
+        self.assertEqual([set(b) for b in st.byes], byes)
+        self.assertEqual(sorted(play_counts(st)), plays)
+
+    def test_stops_when_nothing_left(self):
+        st = ScheduleState(8, [3.0] * 8, Weights(), 2, Rules())
+        st.place_round(0, [[0, 1, 2, 3], [4, 5, 6, 7]], [])
+        st.place_round(1, [[0, 4, 2, 6], [1, 5, 3, 7]], [])
+        polish_pairs(st)
+        self.assertEqual(polish_pairs(st), 0, "sapuan kedua harus tidak berbuah")
+
+
+class TestOpponentCap(unittest.TestCase):
+    """Denda sekali-bayar saat sepasang orang berhadapan untuk kedua kalinya.
+
+    Bentuk c*(c-1) sendirian konveks, jadi pengulangan PERTAMA justru yang
+    paling murah - bagus untuk menyebar pengulangan yang tak terhindarkan,
+    buruk untuk mengejar nol.
+    """
+
+    def _weights(self):
+        return Weights(partner=0.0, opponent=0.0, opponent_cap=400.0,
+                       bye=0.0, b2b_bye=0.0, repeat_gap=0.0, preference=0.0)
+
+    def test_charged_once_on_second_meeting(self):
+        st = ScheduleState(8, [3.0] * 8, self._weights(), 2, Rules())
+        st.place_round(0, [[0, 1, 2, 3], [4, 5, 6, 7]], [])
+        self.assertEqual(st.cost(), 0.0, "pertemuan pertama tidak didenda")
+        st.place_round(1, [[0, 1, 2, 3], [4, 5, 6, 7]], [])
+        # 4 pasang lawan per match x 2 match, semuanya jadi 2x.
+        self.assertAlmostEqual(st.cost(), 8 * 400.0)
+
+    def test_not_charged_again_on_third_meeting(self):
+        """Dendanya di perbatasan 1->2, bukan tiap tambahan.
+
+        Kalau ia menagih tiap kali, jadwal yang memang mustahil nol akan
+        terhukum berulang-ulang dan penyebaran pengulangan jadi kacau.
+        """
+        st = ScheduleState(8, [3.0] * 8, self._weights(), 3, Rules())
+        st.place_round(0, [[0, 1, 2, 3], [4, 5, 6, 7]], [])
+        st.place_round(1, [[0, 1, 2, 3], [4, 5, 6, 7]], [])
+        dua_kali = st.cost()
+        st.place_round(2, [[0, 1, 2, 3], [4, 5, 6, 7]], [])
+        self.assertAlmostEqual(st.cost(), dua_kali)
+
+    def test_incremental_bookkeeping_matches_recount(self):
+        """Biaya inkremental O(1) harus sama dengan hitungan dari nol.
+
+        Pembukuan delta gampang meleset di perbatasan naik/turun, dan
+        melesetnya tidak kelihatan - annealing cuma jadi mengoptimasi angka
+        yang salah.
+        """
+        st = ScheduleState(10, [3.0] * 10, Weights(opponent_cap=400.0),
+                           3, Rules())
+        st.place_round(0, [[0, 1, 2, 3], [4, 5, 6, 7]], [8, 9])
+        st.place_round(1, [[0, 1, 4, 5], [2, 3, 8, 9]], [6, 7])
+        st.place_round(2, [[0, 1, 6, 7], [2, 3, 4, 5]], [8, 9])
+        polish_pairs(st)
+        w = st.w
+        ulang = 0.0
+        for i in range(st.n):
+            for j in range(i + 1, st.n):
+                k = i * st.n + j
+                pc, oc = st.pc[k], st.oc[k]
+                ulang += w.partner * pc * (pc - 1) + w.opponent * oc * (oc - 1)
+                if oc >= 2:
+                    ulang += w.opponent_cap
+        self.assertAlmostEqual(st.cost_pair, ulang)
+
+
+class TestShapeBudget(unittest.TestCase):
+    """Kelayakan lawan unik yang sadar gender dan sadar format.
+
+    Batas umum (N-1)//2 mengandaikan satu kolam pasangan: siapa pun boleh
+    melawan siapa pun. Begitu format dibatasi, kolamnya pecah tiga dan yang
+    terkecil yang menentukan - kadang mustahil justru di setup yang menurut
+    batas umum aman.
+    """
+
+    SAMA = ["LL-LL", "LP-LP", "PP-PP"]
+
+    def test_feasible_window_for_real_roster(self):
+        """15 putra / 11 putri, 52 match: layak, tapi jendelanya sempit."""
+        b = shape_budget(15, 11, 52, self.SAMA)
+        self.assertTrue(b.feasible)
+        self.assertIsNotNone(b.target)
+        self.assertEqual(sum(b.target.values()), 52)
+        # Slot gender harus habis persis, kalau tidak jumlah main jadi timpang.
+        tim = shape_totals(b.target)
+        self.assertEqual(2 * tim["LL"] + tim["LP"], 15 * 8)
+        self.assertEqual(2 * tim["PP"] + tim["LP"], 11 * 8)
+
+    def test_impossible_when_women_too_few(self):
+        """Setup yang batas umumnya bilang aman, tapi sebenarnya mustahil."""
+        rep = analyze(20, courts=4, duration_minutes=120, round_minutes=12,
+                      warmup_minutes=0, men=14, women=6,
+                      allowed_matchups=self.SAMA)
+        # Batas gender-blind meloloskannya: 8 ronde main <= (20-1)//2 = 9.
+        self.assertEqual(rep.max_unique_opponent_rounds, 9)
+        self.assertFalse(rep.shape_feasible)
+        self.assertFalse(rep.opponent_unique_feasible)
+        self.assertEqual(rep.shape_binding, "PP")
+        self.assertGreater(rep.shape_shortfall, 0)
+        self.assertTrue(
+            any("mustahil" in i.title.lower() for i in rep.issues),
+            "host harus diberi tahu, bukan menemukannya sendiri dari jadwal")
+
+    def test_loosening_formats_rescues_it(self):
+        """Roster yang sama jadi layak begitu formatnya tidak dibatasi."""
+        self.assertFalse(shape_budget(14, 6, 40, self.SAMA).feasible)
+        self.assertTrue(shape_budget(14, 6, 40, None).feasible)
+
+    def test_not_assessed_without_gender(self):
+        """Tanpa data gender jangan mengaku tahu - dan jangan mengubah apa pun."""
+        rep = analyze(26, courts=4, duration_minutes=120, round_minutes=12)
+        self.assertIsNone(rep.shape_feasible)
+        self.assertTrue(rep.opponent_unique_feasible)
+
+    def test_cap_limits_the_target(self):
+        """Muat di atas kertas tidak sama dengan terjangkau.
+
+        Target yang menuntut lebih banyak tim campur daripada yang sanggup
+        disediakan rotasi partner lebih buruk daripada tidak punya target:
+        penjadwalnya melesetinya tiap ronde lalu tidak bisa menebusnya.
+        """
+        bebas = shape_budget(15, 11, 52, self.SAMA)
+        sempit = shape_budget(15, 11, 52, self.SAMA,
+                              cap={"LL": 60, "LP": 80, "PP": 20})
+        self.assertTrue(sempit.feasible)
+        self.assertLessEqual(shape_totals(sempit.target)["LP"], 80)
+        self.assertGreater(shape_totals(bebas.target)["LP"], 0)
+
+    def test_shape_totals_counts_both_teams(self):
+        self.assertEqual(shape_totals({"LL-LL": 3}), {"LL": 6, "LP": 0, "PP": 0})
+        self.assertEqual(shape_totals({"LL-LP": 2}), {"LL": 2, "LP": 2, "PP": 0})
 
 
 class TestCapacity(unittest.TestCase):
