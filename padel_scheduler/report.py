@@ -107,6 +107,13 @@ def to_text(schedule: Schedule, start_clock: str | None = None,
     plays = list(st.plays_per_player.values())
     if plays:
         out.append(f"Main per orang: {min(plays)}-{max(plays)} ronde")
+    # Tunggu terpanjang disebut bersama batasnya. Tanpa batasnya angkanya
+    # menyesatkan: "menunggu 2 ronde" terbaca buruk padahal pada 10 peserta di
+    # 1 court itu yang terbaik yang mungkin.
+    out.append(
+        f"Tunggu terpanjang: {st.longest_wait} ronde "
+        f"(paling pendek yang mungkin {st.wait_floor})"
+    )
     return "\n".join(out).rstrip() + "\n"
 
 

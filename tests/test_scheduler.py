@@ -11,6 +11,7 @@ yang tidak boleh dilanggar apa pun setup-nya:
 
 from __future__ import annotations
 
+import math
 import unittest
 from collections import Counter
 from itertools import combinations
@@ -1410,6 +1411,185 @@ class TestPemerataanGenderTimpang(unittest.TestCase):
         main = sch.stats.plays_per_player
         self.assertEqual(max(main.values()) - min(main.values()), 0,
                          f"jatah main tidak merata: {main}")
+
+
+def hitung_giliran(schedule):
+    """Metrik giliran, dihitung ulang dari jadwal - bukan dibaca dari stats.
+
+    Uji yang membaca stats hanya memeriksa bahwa penjadwal setuju dengan
+    dirinya sendiri. Yang harus dijaga adalah jadwalnya, jadi angkanya
+    dihitung ulang dari isi ronde.
+    """
+    ids = [p.id for p in schedule.players]
+    n_ronde = len(schedule.rounds)
+    sudah = {p: 0 for p in ids}
+    sejak = {p: 0 for p in ids}
+    main = {p: 0 for p in ids}
+    pertama: dict[int, int] = {}
+    terlewat = 0
+    tunggu = 0
+    for rnd in schedule.rounds:
+        turun = {p for m in rnd.matches for p in m.players()}
+        if turun:
+            duduk = [sudah[p] for p in ids if p not in turun]
+            if duduk:
+                terlewat += sum(1 for p in turun if sudah[p] > min(duduk))
+        for p in turun:
+            sudah[p] += 1
+            main[p] += 1
+            pertama.setdefault(p, rnd.index)
+        for p in ids:
+            if p in turun:
+                sejak[p] = rnd.index
+            else:
+                tunggu = max(tunggu, rnd.index - sejak[p])
+    batas = max(
+        (math.ceil((n_ronde - main[p]) / (main[p] + 1)) if n_ronde > main[p] else 0)
+        for p in ids
+    )
+    return {
+        "terlewat": terlewat,
+        "tunggu": tunggu,
+        "batas_tunggu": batas,
+        "main_pertama_terakhir": (max(pertama.values())
+                                  if len(pertama) == len(ids) else n_ronde),
+    }
+
+
+class TestGiliranBerurutan(unittest.TestCase):
+    """Peserta yang belum main mendapat giliran lebih dulu.
+
+    Ini properti yang berbeda dari "jumlah main merata", dan yang kedua tidak
+    menyiratkan yang pertama. Jadwal bisa berakhir 6-6 untuk semua orang
+    sementara satu peserta baru turun di ronde 4 dan peserta lain sudah dua kali
+    di ronde 3; totalnya dibalas di ronde-ronde terakhir. Yang dirasakan peserta
+    adalah urutannya, bukan rekapnya.
+
+    Batas bawahnya nyata dan bukan kelemahan algoritma: dengan 4 slot per court
+    per ronde, peserta yang main m dari R ronde punya R-m ronde duduk untuk
+    dibagi ke paling banyak m+1 sela, jadi rentetan terpanjang tidak bisa lebih
+    pendek dari ceil((R-m)/(m+1)). Uji-uji di bawah membandingkan dengan batas
+    itu, bukan dengan nol.
+    """
+
+    SAMA = ["LL-LL", "LP-LP", "PP-PP"]
+
+    def _roster(self, pria, wanita):
+        return [
+            Player(id=i, name=f"P{i+1}", rating=float(2 + (i % 4)),
+                   gender="M" if i < pria else "F")
+            for i in range(pria + wanita)
+        ]
+
+    def test_kasus_host_10_orang_1_court(self):
+        """6L/4P, 1 court, 15 ronde: kasus yang dilaporkan host.
+
+        Sebelum diperbaiki: peserta terakhir baru turun di ronde 5, tunggu
+        terpanjang 4 ronde, dan 13 kali antrean diserobot - sementara jumlah
+        mainnya 6-6 sehingga tidak ada satu pun angka lama yang menunjukkannya.
+        """
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=30_000, attempts=3, allowed_matchups=self.SAMA)
+        sch = build_schedule(self._roster(6, 4), cfg)
+        g = hitung_giliran(sch)
+        main = sch.stats.plays_per_player
+
+        # Jumlah main tetap rata - pemerataan tidak boleh jadi korban.
+        self.assertEqual(max(main.values()) - min(main.values()), 0,
+                         f"jatah main tidak merata lagi: {main}")
+        self.assertEqual(sch.stats.partner_repeat_pairs, 0,
+                         "partner unik tidak boleh jadi korban")
+        # Tunggu terpanjang mendekati batasnya. 9 ronde duduk di 7 sela berarti
+        # rentetan 2 memang tak terhindarkan; jadwal lama sampai 5, sekarang 3.
+        # Sisa satu rentetan berlebih itu tidak bisa dibuang tanpa melahirkan
+        # lawan berulang baru, dan di situ keunikan yang menang.
+        self.assertLessEqual(
+            g["tunggu"], g["batas_tunggu"] + 1,
+            f"tunggu terpanjang jauh di atas batas yang tak terhindarkan: {g}")
+        # Antrean masih bisa terserobot, tapi tidak sesering dulu (16 kali).
+        # Sisanya lahir dari rotasi partner: baris kombinasi ronde itu kadang
+        # hanya memasangkan yang paling lama menunggu dengan yang baru main.
+        self.assertLessEqual(g["terlewat"], 10,
+                             f"antrean terlalu sering diserobot: {g}")
+
+    def test_stats_setuju_dengan_jadwal(self):
+        """Angka yang dilaporkan ke host harus angka jadwalnya, bukan tebakan."""
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=20_000, attempts=1, allowed_matchups=self.SAMA)
+        sch = build_schedule(self._roster(6, 4), cfg)
+        g = hitung_giliran(sch)
+        self.assertEqual(sch.stats.turn_skips, g["terlewat"])
+        self.assertEqual(sch.stats.longest_wait, g["tunggu"])
+        self.assertEqual(sch.stats.wait_floor, g["batas_tunggu"])
+        self.assertEqual(sch.stats.last_first_play, g["main_pertama_terakhir"])
+
+    def test_semua_turun_di_putaran_pertama(self):
+        """14 orang, 2 court (8 slot): tidak ada yang menunggu sampai ronde 3.
+
+        Dua ronde sudah menyediakan 16 slot untuk 14 orang, jadi menahan
+        seseorang sampai ronde 3 berarti ada yang main dua kali lebih dulu.
+        """
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, mode="americano", seed=5,
+                     effort=20_000, attempts=1)
+        sch = build_schedule(make_players(14), cfg)
+        g = hitung_giliran(sch)
+        self.assertLessEqual(
+            g["main_pertama_terakhir"], 2,
+            f"ada peserta yang belum turun setelah dua ronde: {g}")
+
+    def test_giliran_rapi_lintas_roster(self):
+        """Tunggu terpanjang tidak boleh jauh di atas batasnya, apa pun rosternya.
+
+        Yang diperiksa selisih terhadap batas, bukan angka mutlak: 20 orang di 1
+        court memang harus menunggu lebih lama daripada 8 orang di 2 court, dan
+        menuntut angka yang sama untuk keduanya cuma akan menghasilkan uji yang
+        menguji jumlah court.
+        """
+        kasus = [
+            (8, 0, 1), (10, 0, 1), (12, 0, 2), (16, 0, 2),
+            (20, 0, 1), (9, 0, 2), (11, 0, 1),
+        ]
+        for pria, wanita, court in kasus:
+            with self.subTest(pemain=pria + wanita, court=court):
+                cfg = Config(courts=court, duration_minutes=120,
+                             round_minutes=10, warmup_minutes=0,
+                             mode="americano", seed=13, effort=20_000,
+                             attempts=1)
+                sch = build_schedule(make_players(pria + wanita), cfg)
+                g = hitung_giliran(sch)
+                # +2 dari batas, bukan +1: pada beberapa roster satu rentetan
+                # berlebih memang tidak bisa dibuang tanpa melahirkan lawan
+                # berulang, dan keunikan yang menang. Yang dijaga di sini adalah
+                # ekornya - jadwal lama sampai menunggu 9 ronde dari batas 4.
+                self.assertLessEqual(
+                    g["tunggu"], g["batas_tunggu"] + 2,
+                    f"{pria + wanita} orang / {court} court: tunggu "
+                    f"{g['tunggu']} vs batas {g['batas_tunggu']} - {g}")
+
+    def test_biaya_tunggu_konveks_memilih_yang_terpecah(self):
+        """Satu rentetan panjang harus dinilai lebih mahal dari dua yang pendek.
+
+        Ini yang membedakan biaya baru dari b2b_bye: b2b_bye linear, jadi
+        3+3 dan 5+1 dinilai sama dan optimizer tidak punya alasan memilih.
+        """
+        w = Weights()
+        rules = Rules()
+
+        def biaya(duduk_di):
+            st = ScheduleState(4, [3.0] * 4, w, 7, rules)
+            for r in range(7):
+                st._set_bye(r, 0, r in duduk_di)
+            return st.cost_wait
+
+        satu_panjang = biaya({0, 1, 2, 3, 4})          # satu rentetan 5
+        dua_pendek = biaya({0, 1, 2, 4, 5, 6})         # rentetan 3 lalu 3
+        self.assertGreater(
+            satu_panjang, dua_pendek,
+            "rentetan 5 harus lebih mahal daripada 3+3, kalau tidak optimizer "
+            "tidak punya dorongan memecahnya")
 
 
 class TestDeterminism(unittest.TestCase):

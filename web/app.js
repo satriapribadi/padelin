@@ -687,8 +687,25 @@ function renderSchedule() {
     st.partner_repeat_pairs ? 'warn' : 'good'));
   grid.appendChild(tile('Lawan ulang', st.opponent_repeat_pairs, 'pasang',
     st.opponent_repeat_pairs ? 'warn' : 'good'));
-  grid.appendChild(tile('Duduk beruntun', st.back_to_back_byes, 'kejadian',
-    st.back_to_back_byes ? 'warn' : 'good'));
+  // Duduk beruntun tanpa status warna. Angkanya berguna, tapi ambang "lebih
+  // dari nol berarti buruk" tidak: dengan 1 court dan 10 peserta, jadwal
+  // terbaik yang mungkin pun punya puluhan kejadian duduk beruntun, jadi
+  // kartunya akan selalu kuning dan berhenti memberi tahu apa pun.
+  grid.appendChild(tile('Duduk beruntun', st.back_to_back_byes, 'kejadian'));
+  // Dua kartu di bawah ini punya ambang numerik yang sungguhan.
+  //
+  // Tunggu terpanjang dibandingkan dengan batas yang memang tak terhindarkan:
+  // peserta yang main m dari R ronde punya R-m ronde duduk untuk dibagi ke
+  // paling banyak m+1 sela. Sama dengan batas = sudah sebaik yang mungkin.
+  if (st.longest_wait !== undefined) {
+    grid.appendChild(tile('Tunggu terpanjang', st.longest_wait,
+      `batas ${st.wait_floor} ronde`,
+      st.longest_wait <= st.wait_floor ? 'good' : 'warn'));
+    // Giliran terlewat: berapa kali seseorang turun lagi padahal ada peserta
+    // lain yang sedang duduk dan belum kebagian putaran yang sama.
+    grid.appendChild(tile('Giliran terlewat', st.turn_skips, 'kali',
+      st.turn_skips ? 'warn' : 'good'));
+  }
   $('sched-stats').innerHTML = '';
   $('sched-stats').appendChild(grid);
 
@@ -1077,7 +1094,10 @@ function debugSnapshot() {
         + `lawan_ulang=${st.opponent_repeat_pairs} `
         + `duduk_beruntun=${st.back_to_back_byes}`,
       `  main_per_orang=${Math.min(...Object.values(st.plays_per_player))}-`
-        + `${Math.max(...Object.values(st.plays_per_player))}`);
+        + `${Math.max(...Object.values(st.plays_per_player))}`,
+      `  giliran_terlewat=${st.turn_skips} `
+        + `tunggu_terpanjang=${st.longest_wait} (batas ${st.wait_floor}) `
+        + `main_pertama_terakhir=R${st.last_first_play}`);
     lines.push('', 'jadwal:');
     schedule.rounds.forEach((r) => {
       r.matches.forEach((m) => {
