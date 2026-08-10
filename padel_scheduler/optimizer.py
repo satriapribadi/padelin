@@ -661,6 +661,104 @@ def _try_cross(st: ScheduleState, r: int, i: int, pi: int, j: int, pj: int):
     return undo
 
 
+def _repeating_players(st: ScheduleState) -> set[int]:
+    """Siapa saja yang terlibat pertemuan berulang.
+
+    Cuma mereka yang perlu digeser, dan itu biasanya segelintir orang - jadi
+    pencarian gerakan berpasangan yang mahal bisa dipersempit ke mereka saja
+    alih-alih menjajal seluruh jadwal.
+    """
+    out: set[int] = set()
+    n = st.n
+    for i in range(n):
+        base = i * n
+        for j in range(i + 1, n):
+            if st.pc[base + j] > 1 or st.oc[base + j] > 1:
+                out.add(i)
+                out.add(j)
+    return out
+
+
+def _paired_bye_swaps(st: ScheduleState, max_steps: int = 60) -> int:
+    """Tukar dengan yang istirahat, lalu tukar balik di ronde lain.
+
+    Ada pengulangan yang tidak bisa dibuang oleh gerakan mana pun di dalam satu
+    ronde: satu-satunya lawan segar yang tersisa buat seseorang sedang duduk di
+    ronde itu. Menariknya turun berarti menukar dengan yang istirahat, dan itu
+    menggeser jumlah main - persis yang baru saja diratakan rebalance_plays().
+
+    Jadi gerakannya dipasangkan. `keluar` turun di r1 digantikan `masuk`, lalu
+    di ronde r2 - tempat `masuk` main dan `keluar` kebetulan duduk - keduanya
+    ditukar balik. Bersihnya: keduanya cuma bertukar ronde. Jumlah main
+    keduanya, dan semua orang lain, sama persis seperti sebelumnya.
+
+    Yang bergeser cuma LETAK istirahatnya, jadi duduk-beruntun bisa memburuk -
+    itu sudah terhitung di biaya total, dan gerakan hanya diterima kalau biaya
+    totalnya tetap turun.
+    """
+    swaps = 0
+    for _ in range(max_steps):
+        panas = _repeating_players(st)
+        if not panas:
+            break
+        dapat = False
+        for r1 in range(st.n_rounds):
+            if dapat:
+                break
+            duduk1 = sorted(st.byes[r1])
+            if not duduk1:
+                continue
+            elig1 = (st.rules.round_eligible[r1]
+                     if r1 < len(st.rules.round_eligible) else None)
+            for mi in range(len(st.matches[r1])):
+                if dapat:
+                    break
+                for pi in range(4):
+                    keluar = st.matches[r1][mi][pi]
+                    if keluar not in panas:
+                        continue
+                    for masuk in duduk1:
+                        if elig1 is not None and masuk not in elig1:
+                            continue
+                        before = st.cost()
+                        undo1 = _try_swap(st, r1, mi, pi, masuk)
+                        if not st.rules.quad_ok(st.matches[r1][mi], r1):
+                            undo1()
+                            continue
+                        if _balas(st, r1, keluar, masuk, before):
+                            swaps += 1
+                            dapat = True
+                            break
+                        undo1()
+                    if dapat:
+                        break
+        if not dapat:
+            break
+    return swaps
+
+
+def _balas(st: ScheduleState, r1: int, keluar: int, masuk: int,
+           before: float) -> bool:
+    """Cari ronde yang bisa membalas pertukaran di r1 supaya jumlah main utuh."""
+    for r2 in range(st.n_rounds):
+        if r2 == r1 or masuk in st.byes[r2] or keluar not in st.byes[r2]:
+            continue
+        elig2 = (st.rules.round_eligible[r2]
+                 if r2 < len(st.rules.round_eligible) else None)
+        if elig2 is not None and keluar not in elig2:
+            continue
+        for mj, quad in enumerate(st.matches[r2]):
+            if masuk not in quad:
+                continue
+            undo2 = _try_swap(st, r2, mj, quad.index(masuk), keluar)
+            if (st.rules.quad_ok(st.matches[r2][mj], r2)
+                    and st.cost() < before - 1e-9):
+                return True
+            undo2()
+            break
+    return False
+
+
 def polish_pairs(st: ScheduleState, max_steps: int = 200) -> int:
     """Sapu deterministik terakhir: buang pengulangan yang masih bisa dibuang.
 
@@ -685,7 +783,26 @@ def polish_pairs(st: ScheduleState, max_steps: int = 200) -> int:
     yang terbaik. Memilih yang terbaik menuntut satu sapuan penuh per satu
     pertukaran, dan pada meet besar (60 orang, 15 court, 20 ronde) itu sendiri
     menghabiskan 9 detik - lebih lama daripada seluruh sisa penjadwalan.
+
+    Dua fase, yang murah dulu. Fase satu cuma menggeser orang di dalam satu
+    ronde. Fase dua (_paired_bye_swaps) juga menyentuh yang istirahat, dan itu
+    perlu dua pertukaran sekaligus supaya jumlah main tetap utuh - lebih mahal,
+    jadi baru dijalankan setelah yang murah kehabisan langkah. Selama fase dua
+    masih berbuah, fase satu diulang: menggeser seseorang ke ronde lain sering
+    membuka perbaikan sederhana yang tadinya tertutup.
     """
+    swaps = 0
+    for _ in range(10):
+        swaps += _local_sweeps(st, max_steps)
+        lanjut = _paired_bye_swaps(st)
+        swaps += lanjut
+        if not lanjut:
+            break
+    return swaps
+
+
+def _local_sweeps(st: ScheduleState, max_steps: int) -> int:
+    """Sapuan yang hanya menggeser orang di dalam satu ronde."""
     swaps = 0
     for _ in range(max_steps):
         moved = 0

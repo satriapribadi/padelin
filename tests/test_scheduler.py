@@ -12,6 +12,7 @@ yang tidak boleh dilanggar apa pun setup-nya:
 from __future__ import annotations
 
 import unittest
+from collections import Counter
 from itertools import combinations
 
 from padel_scheduler import Config, Player, Segment, build_schedule
@@ -799,10 +800,11 @@ class TestAllowedMatchups(unittest.TestCase):
         berulang-ulang - dan orang yang sama bertemu lagi. Karena itu komposisi
         dinilai dari dua hal sekaligus, lama duduk DAN kesegaran lawan.
 
-        Ambangnya hasil pengukuran di konfigurasi tes ini (effort 20000).
-        Tanpa penimbang keunikan lawan, pengulangan memuncak di 17 pasang;
-        dengan penimbang, di 11. Setelah anggaran komposisi format dan denda
-        "pernah ketemu 2x" masuk, puncaknya turun ke 5 dari 8 seed. Ambang 7
+        Ambangnya hasil pengukuran berturut-turut di konfigurasi tes ini
+        (effort 20000): tanpa penimbang keunikan lawan 17 pasang; dengan
+        penimbang 11; setelah anggaran komposisi format dan denda "pernah
+        ketemu 2x" turun ke 5; setelah jatah lawan segender disebar dan
+        tukar-berpasangan ditambahkan, puncaknya 2 dari 10 seed. Ambang 4
         memberi ruang seed yang kurang beruntung tanpa membiarkan pembengkakan
         lama lolos lagi.
         """
@@ -813,9 +815,45 @@ class TestAllowedMatchups(unittest.TestCase):
                 cfg.seed = seed
                 sch = build_schedule(self._players(), cfg)
                 self.assertLessEqual(
-                    sch.stats.opponent_repeat_pairs, 7,
+                    sch.stats.opponent_repeat_pairs, 4,
                     f"seed {seed}: lawan berulang membengkak "
                     f"({sch.stats.opponent_repeat_pairs} pasang)")
+
+    def test_same_gender_budget_is_not_blown(self):
+        """Jatah lawan segender per orang tidak boleh dilampaui.
+
+        Batas yang tidak kelihatan di hitungan suplai se-meet. Tiap ronde
+        seorang pemain mendapat 1 lawan segender kalau tim campur melawan tim
+        campur, tapi 2 kalau tim segender melawan tim segender - sementara
+        calon lawan segendernya cuma sebanyak orang segender lainnya.
+
+        11 putri yang main 8 ronde: yang dua kali kebagian putri-vs-putri butuh
+        10 dari 10 calon, jadi harus bertemu semua tepat sekali tanpa satu pun
+        kesempatan meleset. Melewati batas ini membuat lawan berulang WAJIB
+        terjadi, dan kolam pasangan se-meet masih terlihat longgar saat itu -
+        tidak ada peringatan apa pun yang menangkapnya.
+        """
+        izin = ["LL-LL", "LP-LP", "PP-PP"]
+        for seed in (42, 46, 123):
+            with self.subTest(seed=seed):
+                cfg = self._cfg(izin)
+                cfg.seed = seed
+                sch = build_schedule(self._players(), cfg)
+                g = {p.id: p.gender for p in sch.players}
+                tersedia = Counter(g.values())
+                slot = Counter()
+                for rnd in sch.rounds:
+                    for m in rnd.matches:
+                        for x in m.team_a:
+                            for y in m.team_b:
+                                if g[x] == g[y]:
+                                    slot[x] += 1
+                                    slot[y] += 1
+                for p, n in slot.items():
+                    self.assertLessEqual(
+                        n, tersedia[g[p]] - 1,
+                        f"seed {seed}: {p} butuh {n} lawan segender padahal "
+                        f"cuma ada {tersedia[g[p]] - 1} orang segender lain")
 
     def test_unavoidable_repeats_stay_spread(self):
         """Kalau nol mustahil, pengulangan harus TERSEBAR, bukan menumpuk.
@@ -1028,21 +1066,30 @@ class TestPolishPairs(unittest.TestCase):
         self.assertGreater(polish_pairs(st), 0, "ada perbaikan yang terlewat")
         self.assertLess(st.cost(), sebelum)
 
-    def test_does_not_disturb_rest_rotation(self):
-        """Gerakannya tidak boleh menyentuh siapa yang duduk atau berapa main.
+    def test_does_not_disturb_play_counts(self):
+        """Jumlah main tiap orang harus utuh, per orang, bukan cuma totalnya.
 
         Ini yang membuatnya aman dijalankan SETELAH rebalance_plays: kerataan
         yang baru saja dijamin tidak mungkin tergerus di sini.
+
+        Yang boleh bergeser adalah LETAK istirahatnya - fase tukar-berpasangan
+        memang memindahkan orang antar ronde. Yang tidak boleh berubah adalah
+        berapa kali tiap orang main dan berapa kali tiap orang duduk.
         """
-        st = ScheduleState(10, [3.0] * 10, Weights(), 3, Rules())
+        st = ScheduleState(10, [3.0] * 10, Weights(), 4, Rules())
         st.place_round(0, [[0, 1, 2, 3], [4, 5, 6, 7]], [8, 9])
         st.place_round(1, [[0, 1, 4, 5], [2, 3, 8, 9]], [6, 7])
         st.place_round(2, [[0, 1, 6, 7], [2, 3, 4, 5]], [8, 9])
-        byes = [set(b) for b in st.byes]
-        plays = sorted(play_counts(st))
+        st.place_round(3, [[8, 9, 2, 4], [1, 6, 3, 5]], [0, 7])
+        main = list(play_counts(st))
+        duduk = list(st.bye_count)
         polish_pairs(st)
-        self.assertEqual([set(b) for b in st.byes], byes)
-        self.assertEqual(sorted(play_counts(st)), plays)
+        self.assertEqual(list(play_counts(st)), main, "jumlah main bergeser")
+        self.assertEqual(list(st.bye_count), duduk, "jumlah duduk bergeser")
+        for r in range(st.n_rounds):
+            hadir = [p for q in st.matches[r] for p in q]
+            self.assertEqual(len(hadir), len(set(hadir)),
+                             f"ronde {r}: ada yang main dobel")
 
     def test_stops_when_nothing_left(self):
         st = ScheduleState(8, [3.0] * 8, Weights(), 2, Rules())

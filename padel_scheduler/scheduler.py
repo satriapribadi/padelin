@@ -492,6 +492,42 @@ def _grouping_cost(picked: list[tuple[int, int]], st: ScheduleState) -> float:
     return total
 
 
+def _same_gender_headroom(st: ScheduleState) -> dict[int, int]:
+    """Berapa lawan segender lagi yang masih boleh dipakai tiap pemain.
+
+    Ini batas per-orang yang tidak kelihatan di hitungan suplai se-meet.
+    Tiap ronde, seorang pemain mendapat 0, 1, atau 2 lawan segender tergantung
+    bentuk match: di tim campur melawan tim campur ia dapat 1, di tim segender
+    melawan tim segender ia dapat 2. Sementara calon lawan segendernya cuma
+    sebanyak orang lain yang gendernya sama.
+
+    Contoh nyatanya, 11 perempuan yang masing-masing main 8 ronde: yang tidak
+    pernah kebagian match putri-vs-putri butuh 8 dari 10 calon, yang kebagian
+    sekali butuh 9, yang kebagian DUA KALI butuh 10 dari 10 - ia harus bertemu
+    semua perempuan lain, tepat sekali, tanpa satu pun kesempatan meleset.
+    Kolam pasangan se-meet masih longgar saat itu terjadi, jadi tidak ada
+    peringatan apa pun; yang habis adalah jatah orang per orang.
+    """
+    g = st.rules.gender
+    seang: dict[str, int] = {}
+    for p in range(st.n):
+        gp = g.get(p)
+        if gp is not None:
+            seang[gp] = seang.get(gp, 0) + 1
+
+    sisa: dict[int, int] = {}
+    for p in range(st.n):
+        gp = g.get(p)
+        if gp is None:
+            continue
+        pakai = 0
+        for q in range(st.n):
+            if q != p and g.get(q) == gp:
+                pakai += st.oc[st._k(p, q)]
+        sisa[p] = (seang[gp] - 1) - pakai
+    return sisa
+
+
 def _shapes_pairable(
     counts: tuple[int, ...], allowed: frozenset[str], memo: dict
 ) -> bool:
@@ -556,6 +592,36 @@ def _select_pairs_by_shape(
         if shape is None:
             return None
         by_shape[shape].append(pr)
+
+    # Tim segender (LL/PP) memakai DUA jatah lawan segender sekaligus, tim
+    # campur cuma satu. Jadi di antara pasangan yang sama-sama layak turun
+    # menurut lama duduk, yang jatahnya masih longgar didahulukan - kalau tidak,
+    # orang yang sama bisa kebagian match segender dua kali dan jatahnya habis
+    # persis, sehingga meleset sedikit saja langsung jadi lawan berulang yang
+    # tak bisa ditebus.
+    #
+    # Hanya bentuk segender yang diurutkan ulang. Untuk tim campur, urutannya
+    # dibiarkan apa adanya: mendahulukan yang jatahnya longgar di situ justru
+    # terbalik - yang jatahnya menipis malah paling butuh tempat yang murah.
+    #
+    # sort() Python stabil dan kunci utamanya tetap lama duduk, jadi ini cuma
+    # mengganti pemutus seri acak dengan pemutus seri yang punya alasan.
+    #
+    # Hanya dipakai kalau ada anggaran komposisi, yaitu justru saat nol
+    # pengulangan memang bisa dicapai. Kalau jatahnya toh pasti jebol - 14 putra
+    # 6 putri dengan format dibatasi, misalnya - semua orang minus dan
+    # urutannya jadi derau belaka: ia menggeser siapa yang turun tanpa
+    # menyelamatkan apa pun, dan malah membuat perataan jumlah main kehilangan
+    # pertukaran sah yang tadinya ada.
+    if quota is not None:
+        sisa = _same_gender_headroom(st)
+        for shape in ("LL", "PP"):
+            by_shape[shape].sort(
+                key=lambda pr: (
+                    -(st.bye_count[pr[0]] + st.bye_count[pr[1]]),
+                    -min(sisa.get(pr[0], 0), sisa.get(pr[1], 0)),
+                )
+            )
 
     allowed = frozenset(st.rules.allowed_matchups)
     avail = [len(by_shape[s]) for s in TEAM_SHAPES]
