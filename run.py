@@ -179,6 +179,17 @@ def api_analyze(payload: dict) -> dict:
         if usable > 0:
             round_minutes = max(1, usable // total_seg_rounds)
 
+    men = sum(1 for p in players if p.gender == "M")
+    women = sum(1 for p in players if p.gender == "F")
+
+    # Kelayakan sadar format hanya bisa dinilai kalau gender lengkap dan tiap
+    # ronde memakai aturan yang sama. Babak putra/putri/mixed punya kolam
+    # pesertanya sendiri per ronde, dan model ini mengandaikan satu kolam untuk
+    # seluruh meet - lebih baik tidak menilai daripada menilai dengan andaian
+    # yang salah.
+    seragam = all(s.rule == "open" for s in cfg.segments)
+    lengkap = n > 0 and men + women == n and seragam
+
     rep = analyze(
         n_players=n,
         courts=cfg.courts,
@@ -186,10 +197,11 @@ def api_analyze(payload: dict) -> dict:
         round_minutes=round_minutes,
         warmup_minutes=cfg.warmup_minutes,
         rounds_override=rounds_override,
+        men=men if lengkap else None,
+        women=women if lengkap else None,
+        allowed_matchups=cfg.allowed_matchups,
     )
 
-    men = sum(1 for p in players if p.gender == "M")
-    women = sum(1 for p in players if p.gender == "F")
     return {
         "report": {
             k: v for k, v in vars(rep).items() if k != "issues"

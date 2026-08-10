@@ -10,12 +10,17 @@ Dua kegagalan yang saling berlawanan, dan keduanya diperiksa di sini:
   2. Grup BESAR + court SEDIKIT   -> terlalu banyak pemain duduk menunggu.
 
 Host biasanya cuma sadar masalah (1) dan kaget kena masalah (2), atau sebaliknya.
+
+Masalah (1) punya versi yang jauh lebih tajam begitu host membatasi format match
+lewat allowed_matchups. Lihat shape_budget() di bawah.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
+
+from .models import MATCHUP_LABELS, MATCHUPS
 
 # Ambang "nyaman": pemain duduk maksimal ~25% dari total ronde.
 COMFORT_REST_RATIO = 0.25
@@ -64,6 +69,14 @@ class CapacityReport:
     courts_for_zero_rest: int
     courts_for_comfort: int
 
+    # Kelayakan sadar gender & format. None kalau tidak dinilai - jangan dibaca
+    # sebagai "aman". opponent_unique_feasible di atas sudah memperhitungkannya.
+    shape_feasible: bool | None = None
+    shape_target: dict[str, int] | None = None
+    shape_supply: dict[str, int] | None = None
+    shape_binding: str | None = None
+    shape_shortfall: int = 0
+
     issues: list[Issue] = field(default_factory=list)
     verdict: str = "ok"  # "ok" | "warning" | "error"
 
@@ -81,6 +94,266 @@ def rounds_from_duration(
     return max(0, usable // round_minutes)
 
 
+# ---------------------------------------------------------------------------
+# Model suplai pasangan: sadar gender, sadar format
+# ---------------------------------------------------------------------------
+#
+# Batas (N-1)//2 di atas mengandaikan satu kolam pasangan: siapa pun boleh
+# berhadapan dengan siapa pun. Begitu host membatasi format match, andaian itu
+# runtuh. "Sesama bentuk saja" (LL-LL, LP-LP, PP-PP) memecah kolamnya jadi tiga
+# yang tidak bisa saling menutupi: pasangan laki-laki lawan laki-laki tidak
+# pernah bisa dipakai untuk memenuhi kebutuhan lawan perempuan.
+#
+# Kolam terkecil yang menentukan. Dengan 11 perempuan hanya ada C(11,2) = 55
+# pasangan P-P di dunia; satu match PP-PP menghabiskan 4 sekaligus. Jadi
+# komposisi formatnya sendiri yang menentukan mungkin-tidaknya lawan 100% unik,
+# jauh sebelum penjadwalnya mulai bekerja.
+
+# Slot laki-laki yang dipakai satu match, per format. Sisanya slot perempuan -
+# tiap match selalu 4 orang - jadi persamaan slot perempuan otomatis terpenuhi
+# begitu jumlah match dan total slot laki-laki cocok. Tidak perlu dicek dua kali.
+_MALE_SLOTS: dict[str, int] = {
+    "LL-LL": 4, "LL-LP": 3, "LL-PP": 2, "LP-LP": 2, "LP-PP": 1, "PP-PP": 0,
+}
+
+_KINDS = ("LL", "LP", "PP")
+
+# Berapa pasangan yang dihabiskan satu match, dipecah per jenis pasangan
+# (LL = dua laki-laki, LP = campur, PP = dua perempuan).
+#
+# Partner dan lawan dihitung TERPISAH karena memang dibatasi terpisah: dua orang
+# boleh sekali setim dan sekali berhadapan tanpa salah satunya disebut
+# pengulangan. Menjumlahkan keduanya jadi satu anggaran akan menolak jadwal yang
+# sebenarnya sah.
+_PAIR_DEMAND: dict[str, tuple[tuple[int, ...], tuple[int, ...]]] = {
+    # format:  partner (LL, LP, PP)   lawan (LL, LP, PP)
+    "LL-LL": ((2, 0, 0), (4, 0, 0)),
+    "LL-LP": ((1, 1, 0), (2, 2, 0)),
+    "LL-PP": ((1, 0, 1), (0, 4, 0)),
+    "LP-LP": ((0, 2, 0), (1, 2, 1)),
+    "LP-PP": ((0, 1, 1), (0, 2, 2)),
+    "PP-PP": ((0, 0, 2), (0, 0, 4)),
+}
+
+KIND_LABELS = {
+    "LL": "laki-laki dengan laki-laki",
+    "LP": "laki-laki dengan perempuan",
+    "PP": "perempuan dengan perempuan",
+}
+
+# Batas simpul pencarian. Kasus yang benar-benar mengikat (format dibatasi ke
+# 3 format) cuma punya satu derajat kebebasan dan selesai dalam puluhan simpul;
+# batas ini hanya jaring pengaman supaya analyze() tidak pernah menggantung UI.
+_NODE_BUDGET = 200_000
+
+
+@dataclass
+class ShapeBudget:
+    """Masihkah lawan 100% unik mungkin, setelah format match dibatasi?
+
+    feasible None berarti tidak dinilai (gender belum lengkap, format tidak
+    dibatasi, atau pencarian kena batas simpul) - pemanggilnya harus kembali ke
+    batas gender-blind, bukan menganggapnya aman.
+    """
+
+    feasible: bool | None
+    # Komposisi format paling lega, mis. {"LL-LL": 10, "LP-LP": 40, "PP-PP": 2}.
+    # Tanpa `cap` ini optimum di atas kertas - penjadwal memanggil ulang dengan
+    # cap dari rotasi partner yang benar-benar tersedia, dan hasilnya bisa
+    # berbeda. Yang di sini untuk dilaporkan ke host, bukan untuk dieksekusi.
+    target: dict[str, int] | None
+    supply: dict[str, int]
+    demand_partner: dict[str, int] | None
+    demand_opponent: dict[str, int] | None
+    # Jenis pasangan yang paling mepet (kalau layak) atau yang jebol (kalau
+    # tidak), plus kekurangannya dalam satuan pasangan.
+    binding: str | None = None
+    shortfall: int = 0
+
+
+def _walk(codes, matches, male_slots, supply, prune_supply, visit):
+    """Telusuri semua komposisi format yang menghabiskan match & slot.
+
+    Mengembalikan False kalau kena batas simpul (hasilnya jadi tidak tuntas).
+
+    Pemangkasan suplai sah dan tidak menghilangkan solusi: permintaan pasangan
+    hanya bertambah kalau match ditambah, jadi cabang yang sudah kelebihan tidak
+    akan pernah tertolong oleh sisa match.
+    """
+    n = len(codes)
+    ml = [_MALE_SLOTS[c] for c in codes]
+    # Sisa slot laki-laki harus masih mungkin dicapai oleh format yang tersisa.
+    suf_lo = [0] * (n + 1)
+    suf_hi = [0] * (n + 1)
+    for i in range(n - 1, -1, -1):
+        suf_lo[i] = min(ml[i], suf_lo[i + 1]) if i < n - 1 else ml[i]
+        suf_hi[i] = max(ml[i], suf_hi[i + 1])
+
+    nodes = 0
+    counts = [0] * n
+
+    def rec(i, rm, rs, par, opp):
+        nonlocal nodes
+        nodes += 1
+        if nodes > _NODE_BUDGET:
+            return False
+        if i == n:
+            if rm == 0 and rs == 0:
+                visit(tuple(counts), par, opp)
+            return True
+        if rs < suf_lo[i] * rm or rs > suf_hi[i] * rm:
+            return True
+        dp, do = _PAIR_DEMAND[codes[i]]
+        for x in range(rm + 1):
+            if x:
+                par = tuple(par[k] + dp[k] for k in range(3))
+                opp = tuple(opp[k] + do[k] for k in range(3))
+                if prune_supply and any(
+                    par[k] > supply[_KINDS[k]] or opp[k] > supply[_KINDS[k]]
+                    for k in range(3)
+                ):
+                    break
+            counts[i] = x
+            if not rec(i + 1, rm - x, rs - ml[i] * x, par, opp):
+                return False
+        counts[i] = 0
+        return True
+
+    return rec(0, matches, male_slots, (0, 0, 0), (0, 0, 0))
+
+
+def shape_totals(target: dict[str, int]) -> dict[str, int]:
+    """Ubah hitungan per FORMAT match jadi hitungan per BENTUK TIM.
+
+    "LL-LP" sekali berarti satu tim LL dan satu tim LP; "LL-LL" sekali berarti
+    dua tim LL.
+    """
+    tot = {k: 0 for k in _KINDS}
+    for code, n in target.items():
+        a, b = code.split("-")
+        tot[a] += n
+        tot[b] += n
+    return tot
+
+
+def shape_budget(
+    men: int,
+    women: int,
+    matches: int,
+    allowed: list[str] | None = None,
+    cap: dict[str, int] | None = None,
+) -> ShapeBudget:
+    """Hitung jendela komposisi format yang masih memungkinkan lawan unik.
+
+    Generik untuk keenam format dan roster apa pun; tidak ada satu pun angka
+    yang khusus untuk satu setup.
+
+    `cap` membatasi jumlah TIM per bentuk yang benar-benar bisa disediakan
+    konstruktor pasangan. Muat di atas kertas tidak sama dengan terjangkau:
+    komposisi paling lega sering menuntut lebih banyak tim campur daripada yang
+    disediakan rotasi partner, dan target yang tak terjangkau lebih buruk
+    daripada tidak punya target - penjadwalnya melesetinya tiap ronde.
+    """
+    supply = {
+        "LL": men * (men - 1) // 2,
+        "LP": men * women,
+        "PP": women * (women - 1) // 2,
+    }
+    codes = [c for c in MATCHUPS if allowed is None or c in allowed]
+    if matches <= 0 or not codes or men < 0 or women < 0 or men + women < 4:
+        return ShapeBudget(None, None, supply, None, None)
+
+    n_players = men + women
+    base, extra = divmod(4 * matches, n_players)
+    # rebalance_plays() menjamin selisih jumlah main maksimal 1, jadi sebagian
+    # orang main base kali dan sisanya base+1. Berapa dari yang base+1 itu
+    # laki-laki belum tentu - jadi semua pembagian yang mungkin ikut dicoba.
+    lo = max(0, extra - women)
+    hi = min(extra, men)
+
+    best = None
+    tuntas = True
+
+    def nilai(counts, par, opp):
+        nonlocal best
+        slack = {}
+        for k, kind in enumerate(_KINDS):
+            s = supply[kind]
+            if s == 0:
+                if par[k] or opp[k]:
+                    return
+                continue
+            slack[kind] = s - max(par[k], opp[k])
+        if any(v < 0 for v in slack.values()):
+            return
+        # Yang dikejar adalah sumber daya paling mepet, bukan kelegaan
+        # rata-rata: satu kolam yang pas-pasan sudah cukup membuat penjadwal
+        # mentok.
+        longgar = [v / supply[k] for k, v in slack.items()]
+        if cap is not None:
+            # Ketersediaan tim per bentuk ikut jadi sumber daya, bukan sekadar
+            # batas lulus/gagal. Kalau cuma jadi batas, komposisi paling lega
+            # menurut kolam pasangan menang walau menuntut TEPAT sebanyak yang
+            # bisa disediakan - penjadwalnya lalu kehilangan seluruh ruang
+            # gerak untuk meratakan giliran duduk, dan meleset sedikit saja
+            # tidak bisa ditebus lagi.
+            tim = shape_totals(dict(zip(codes, counts)))
+            for kind in _KINDS:
+                batas = cap.get(kind, 0)
+                if tim[kind] > batas:
+                    return
+                if batas:
+                    longgar.append((batas - tim[kind]) / batas)
+        rel = min(longgar, default=1.0)
+        key = (rel, sum(slack.values()))
+        if best is None or key > best[0]:
+            ketat = min(slack, key=lambda k: slack[k] / supply[k]) if slack else None
+            best = (
+                key,
+                dict(zip(codes, counts)),
+                {k: par[i] for i, k in enumerate(_KINDS)},
+                {k: opp[i] for i, k in enumerate(_KINDS)},
+                ketat,
+            )
+
+    for e in range(lo, hi + 1):
+        if not _walk(codes, matches, men * base + e, supply, True, nilai):
+            tuntas = False
+
+    if best is not None:
+        _, target, par, opp, ketat = best
+        target = {c: n for c, n in target.items() if n}
+        return ShapeBudget(True, target, supply, par, opp, ketat, 0)
+
+    if not tuntas:
+        # Tidak menemukan bukan berarti tidak ada - jangan mengaku tahu.
+        return ShapeBudget(None, None, supply, None, None)
+
+    # Tidak ada komposisi yang muat. Cari yang paling sedikit kekurangannya
+    # supaya host dapat angka konkret, bukan sekadar "tidak bisa". Kali ini
+    # tanpa pemangkasan suplai - justru kelebihannya yang mau diukur.
+    kurang = None
+
+    def ukur(counts, par, opp):
+        nonlocal kurang
+        # Kolam paling jebol pada komposisi ini menentukan kekurangannya;
+        # yang dicari lalu komposisi dengan kekurangan terkecil.
+        worst = max(
+            (max(par[k], opp[k]) - supply[kind], kind)
+            for k, kind in enumerate(_KINDS)
+        )
+        if kurang is None or worst[0] < kurang[0]:
+            kurang = worst
+
+    for e in range(lo, hi + 1):
+        if not _walk(codes, matches, men * base + e, supply, False, ukur):
+            break
+
+    if kurang is None:
+        return ShapeBudget(False, None, supply, None, None)
+    return ShapeBudget(False, None, supply, None, None, kurang[1], kurang[0])
+
+
 def analyze(
     n_players: int,
     courts: int,
@@ -88,6 +361,9 @@ def analyze(
     round_minutes: int = 12,
     warmup_minutes: int = 10,
     rounds_override: int | None = None,
+    men: int | None = None,
+    women: int | None = None,
+    allowed_matchups: list[str] | None = None,
 ) -> CapacityReport:
     """Hitung kapasitas + batas matematis + rekomendasi konkret."""
 
@@ -123,7 +399,15 @@ def analyze(
     # lebih mudah tercapai. Ini sering disalahpahami.
     effective_rounds = math.ceil(avg_plays)
     partner_ok = effective_rounds <= max_partner_rounds
-    opponent_ok = effective_rounds <= max_opponent_rounds
+    opponent_blind_ok = effective_rounds <= max_opponent_rounds
+
+    # Batas di atas buta gender. Kalau host membatasi format match, kolam
+    # pasangan pecah tiga dan batas sebenarnya bisa jauh lebih ketat - kadang
+    # mustahil justru di setup yang menurut hitungan buta gender aman.
+    shape = None
+    if men is not None and women is not None and men + women == n_players:
+        shape = shape_budget(men, women, rounds * courts_used, allowed_matchups)
+    opponent_ok = opponent_blind_ok and (shape is None or shape.feasible is not False)
 
     # --- Rekomendasi -----------------------------------------------------
     ideal_players = 4 * courts
@@ -167,7 +451,7 @@ def analyze(
             )
         )
 
-    if not opponent_ok and n_players >= 4:
+    if not opponent_blind_ok and n_players >= 4:
         excess = effective_rounds - max_opponent_rounds
         issues.append(
             Issue(
@@ -182,6 +466,47 @@ def analyze(
                 "Generator akan menyebar pengulangan serata mungkin. "
                 "Kalau mau benar-benar nol: kurangi ronde, perpanjang durasi "
                 "tiap ronde, atau tambah pemain.",
+            )
+        )
+
+    if shape is not None and shape.feasible is False and opponent_blind_ok:
+        kolam = KIND_LABELS.get(shape.binding, shape.binding or "")
+        tersedia = shape.supply.get(shape.binding, 0)
+        butuh = tersedia + shape.shortfall
+        daftar = ", ".join(
+            MATCHUP_LABELS.get(c, c).lower()
+            for c in (allowed_matchups or MATCHUPS)
+        )
+        # Berapa ronde yang masih muat? Angka konkret jauh lebih berguna
+        # daripada "kurangi ronde".
+        muat = 0
+        for r in range(rounds - 1, 0, -1):
+            if shape_budget(men, women, r * courts_used, allowed_matchups).feasible:
+                muat = r
+                break
+        saran = (
+            f"Turunkan ke {muat} ronde"
+            + (f" (dari {rounds})" if muat else "")
+            if muat
+            else "Longgarkan format match"
+        )
+        issues.append(
+            Issue(
+                "warning",
+                "Lawan 100% unik mustahil dengan format yang dibatasi",
+                f"Hitungan umum bilang aman ({effective_rounds} ronde main per "
+                f"orang, batas {max_opponent_rounds}), tapi itu mengandaikan "
+                f"siapa pun boleh melawan siapa pun. Format dibatasi ke "
+                f"{daftar}, jadi pasangan {kolam} hanya bisa diambil dari "
+                f"kolamnya sendiri: dengan {men} laki-laki dan {women} "
+                f"perempuan cuma ada {tersedia} pasangan seperti itu. Susunan "
+                f"format apa pun untuk {rounds * courts_used} match butuh "
+                f"minimal {butuh} - kelebihan {shape.shortfall}. Ini batas "
+                f"suplai, bukan kelemahan algoritma: menaikkan effort tidak "
+                f"akan menolong.",
+                f"{saran}, izinkan lebih banyak format match, atau ubah "
+                f"komposisi peserta (menambah perempuan/laki-laki memperbesar "
+                f"kolam yang mepet jauh lebih cepat daripada menambah ronde).",
             )
         )
 
@@ -280,6 +605,11 @@ def analyze(
         comfortable_max_players=comfortable_max,
         courts_for_zero_rest=courts_zero_rest,
         courts_for_comfort=courts_comfort,
+        shape_feasible=None if shape is None else shape.feasible,
+        shape_target=None if shape is None else shape.target,
+        shape_supply=None if shape is None else shape.supply,
+        shape_binding=None if shape is None else shape.binding,
+        shape_shortfall=0 if shape is None else shape.shortfall,
         issues=issues,
         verdict=verdict,
     )
