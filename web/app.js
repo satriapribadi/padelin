@@ -425,7 +425,26 @@ $('preset-replace').onclick = (e) => { e.preventDefault(); applyPreset(true); };
 // ---------------------------------------------------------------------------
 // Payload
 // ---------------------------------------------------------------------------
+/**
+ * Pilihan "Kualitas optimasi" membawa DUA angka, bukan satu.
+ *
+ * Kesabaran host bisa dibelanjakan ke effort (seberapa dalam satu penjadwalan
+ * dioptimasi) atau ke percobaan (berapa lintasan acak dijajal lalu diambil yang
+ * terbaik), dan keduanya berongkos waktu. Selector ini dulu cuma menggerakkan
+ * effort, jadi separuh anggaran yang tersedia tidak pernah terpakai.
+ *
+ * Diukur pada 4 ukuran meet x 6 seed, effort 160.000 dengan 3 percobaan kalah
+ * dari effort 80.000 dengan 6 percobaan di keempatnya, pada waktu yang praktis
+ * sama - 15,2 lawan 12,0 pasang lawan berulang pada 6 putra + 4 putri di 1
+ * court, dan 41,8 lawan 38,5 pada 6 putra + 6 putri di 2 court format campur.
+ */
+function effortSetting() {
+  const [effort, attempts] = $('effort').value.split(':').map(Number);
+  return { effort, attempts: attempts || 3 };
+}
+
 function buildPayload() {
+  const opt = effortSetting();
   return {
     club_id: $('club_id').value ? +$('club_id').value : null,
     venue_id: $('venue_id').value ? +$('venue_id').value : null,
@@ -442,7 +461,8 @@ function buildPayload() {
     referees_per_court: +$('referees').value,
     ballboys_per_court: +$('ballboys').value,
     seed: +$('seed').value,
-    effort: +$('effort').value,
+    effort: opt.effort,
+    attempts: opt.attempts,
     segments: getSegments(),
     interleave_segments: $('interleave').checked,
     allowed_matchups: selectedMatchups(),
@@ -528,8 +548,33 @@ async function runAnalyze() {
     const tile = statTile;
     const restCls = r.rest_ratio > 1 / 3 ? 'warn' : (r.rest_ratio > 0 ? '' : 'good');
     grid.appendChild(tile('Ronde', r.rounds, `${d.effective_round_minutes} mnt/ronde`));
-    grid.appendChild(tile('Main / orang', r.avg_plays_per_player, `${r.playing_minutes_per_player} menit`));
-    grid.appendChild(tile('Duduk / ronde', r.byes_per_round, pct(r.rest_ratio), restCls));
+    // Rata-rata seluruh peserta menggambarkan nol orang begitu ada babak
+    // putra/putri: 20 putra + 4 putri dengan babak putra/putri/mixed memberi
+    // "5.0" sementara para putra main 3 dan para putri 10. Kalau server bisa
+    // memisahkannya, rentangnya yang ditampilkan - dan kelompoknya disebut di
+    // baris satuan, karena angka tanpa konteks tidak berguna buat host.
+    if (r.groups && r.groups.length) {
+      const nilai = r.groups.map((g) => g.plays);
+      grid.appendChild(tile('Main / orang',
+        `${Math.min(...nilai)}-${Math.max(...nilai)}`,
+        r.groups.map((g) => `${g.label} ${g.plays}`).join(' · '), 'warn'));
+    } else {
+      grid.appendChild(tile('Main / orang', r.avg_plays_per_player,
+        `${r.playing_minutes_per_player} menit`));
+    }
+    // Babak bisa membuat jumlah duduk berayun: 4 putri cuma cukup untuk satu
+    // court, jadi babak putri mendudukkan lebih banyak orang daripada babak
+    // putra. Satu angka di situ selalu ujung yang paling ramai - dan host
+    // memakai kartu ini untuk memutuskan berapa court disewa.
+    if (r.byes_per_round_max) {
+      grid.appendChild(tile('Duduk / ronde',
+        `${r.byes_per_round}-${r.byes_per_round_max}`,
+        `${pct(r.rest_ratio)}-${pct(r.byes_per_round_max / r.n_players)}`
+          + ' · berayun antar babak', restCls));
+    } else {
+      grid.appendChild(tile('Duduk / ronde', r.byes_per_round,
+        pct(r.rest_ratio), restCls));
+    }
     grid.appendChild(tile('Partner unik', r.partner_unique_feasible ? 'Bisa' : 'Tidak',
       `maks ${r.max_unique_partner_rounds} ronde`, r.partner_unique_feasible ? 'good' : 'warn'));
     grid.appendChild(tile('Lawan unik', r.opponent_unique_feasible ? 'Bisa' : 'Tidak',
@@ -687,8 +732,25 @@ function renderSchedule() {
     st.partner_repeat_pairs ? 'warn' : 'good'));
   grid.appendChild(tile('Lawan ulang', st.opponent_repeat_pairs, 'pasang',
     st.opponent_repeat_pairs ? 'warn' : 'good'));
-  grid.appendChild(tile('Duduk beruntun', st.back_to_back_byes, 'kejadian',
-    st.back_to_back_byes ? 'warn' : 'good'));
+  // Duduk beruntun tanpa status warna. Angkanya berguna, tapi ambang "lebih
+  // dari nol berarti buruk" tidak: dengan 1 court dan 10 peserta, jadwal
+  // terbaik yang mungkin pun punya puluhan kejadian duduk beruntun, jadi
+  // kartunya akan selalu kuning dan berhenti memberi tahu apa pun.
+  grid.appendChild(tile('Duduk beruntun', st.back_to_back_byes, 'kejadian'));
+  // Dua kartu di bawah ini punya ambang numerik yang sungguhan.
+  //
+  // Tunggu terpanjang dibandingkan dengan batas yang memang tak terhindarkan:
+  // peserta yang main m dari R ronde punya R-m ronde duduk untuk dibagi ke
+  // paling banyak m+1 sela. Sama dengan batas = sudah sebaik yang mungkin.
+  if (st.longest_wait !== undefined) {
+    grid.appendChild(tile('Tunggu terpanjang', st.longest_wait,
+      `batas ${st.wait_floor} ronde`,
+      st.longest_wait <= st.wait_floor ? 'good' : 'warn'));
+    // Giliran terlewat: berapa kali seseorang turun lagi padahal ada peserta
+    // lain yang sedang duduk dan belum kebagian putaran yang sama.
+    grid.appendChild(tile('Giliran terlewat', st.turn_skips, 'kali',
+      st.turn_skips ? 'warn' : 'good'));
+  }
   $('sched-stats').innerHTML = '';
   $('sched-stats').appendChild(grid);
 
@@ -1077,7 +1139,10 @@ function debugSnapshot() {
         + `lawan_ulang=${st.opponent_repeat_pairs} `
         + `duduk_beruntun=${st.back_to_back_byes}`,
       `  main_per_orang=${Math.min(...Object.values(st.plays_per_player))}-`
-        + `${Math.max(...Object.values(st.plays_per_player))}`);
+        + `${Math.max(...Object.values(st.plays_per_player))}`,
+      `  giliran_terlewat=${st.turn_skips} `
+        + `tunggu_terpanjang=${st.longest_wait} (batas ${st.wait_floor}) `
+        + `main_pertama_terakhir=R${st.last_first_play}`);
     lines.push('', 'jadwal:');
     schedule.rounds.forEach((r) => {
       r.matches.forEach((m) => {
@@ -1211,6 +1276,9 @@ function schedulingStamp() {
   return JSON.stringify([
     p.courts, p.duration_minutes, p.round_minutes, p.warmup_minutes, p.mode,
     p.tier_count, p.referees_per_court, p.ballboys_per_court, p.seed, p.effort,
+    // Percobaan ikut: ia mengubah jadwal yang keluar, jadi menggantinya membuat
+    // yang di layar bukan lagi hasil dari setup yang tertulis.
+    p.attempts,
     p.segments, p.interleave_segments, p.players, p.allowed_matchups,
   ]);
 }
@@ -1330,8 +1398,30 @@ function applyRequest(req) {
   // susunan berbeda walau seed-nya sama.
   // Hanya kalau nilainya memang salah satu pilihan: menyetel <select> ke nilai
   // asing membuatnya kosong, dan buildPayload lalu mengirim effort 0.
-  if (req.effort && [...$('effort').options].some((o) => +o.value === +req.effort)) {
-    $('effort').value = req.effort;
+  //
+  // Dicocokkan berpasangan dengan percobaan, karena dua pilihan sekarang
+  // berbagi effort 80.000 dan hanya percobaannya yang membedakan. Jadwal lama
+  // tidak menyimpan percobaan sama sekali; nilainya dulu selalu 3, jadi itu
+  // yang diandaikan.
+  //
+  // Kalau tidak ada yang cocok persis, diambil yang effort-nya PALING DEKAT,
+  // dan di antara yang sama dekat diambil yang percobaannya lebih banyak.
+  // Bukan sekadar penjaga dari selector kosong: jadwal yang tersimpan dengan
+  // effort 160.000 - pilihan yang sudah dihapus - kalau dibiarkan tidak cocok
+  // akan kembali sebagai apa pun yang kebetulan sedang terpilih, dan diuji,
+  // itu berarti host yang dulu memilih setelan paling teliti dipulihkan ke
+  // "Cepat". Aturan terdekat ini memulangkannya ke "Sangat teliti".
+  if (req.effort) {
+    const opts = [...$('effort').options].map((o) => {
+      const [eff, att] = o.value.split(':').map(Number);
+      return { value: o.value, eff, att: att || 3 };
+    });
+    const pas = opts.find((o) => o.eff === +req.effort
+        && o.att === +(req.attempts ?? 3))
+      || opts.slice().sort((a, b) =>
+        Math.abs(a.eff - req.effort) - Math.abs(b.eff - req.effort)
+        || b.att - a.att)[0];
+    if (pas) $('effort').value = pas.value;
   }
   $('tier-row').style.display = req.mode === 'tiered' ? '' : 'none';
   $('segments').innerHTML = '';

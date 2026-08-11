@@ -261,6 +261,28 @@ class ScheduleStats:
     # berhenti lebih awal, dan berguna juga untuk memberi tahu host bahwa sisa
     # pengulangan yang ia lihat memang tak terhindarkan.
     at_theoretical_floor: bool = False
+    # Berapa kali seseorang turun untuk kali ke-(k+1) padahal masih ada orang
+    # lain yang belum kebagian kali ke-k dan sedang duduk. Nol berarti
+    # gilirannya benar-benar berurutan: tidak ada yang main dua kali sebelum
+    # semua orang kebagian sekali.
+    #
+    # Ini bukan hal yang sama dengan jumlah main yang rata. Jumlah main
+    # menghitung SELURUH acara, dan bisa rata sempurna di akhir walau
+    # urutannya kacau: satu orang main di ronde 1 dan 2 sementara yang lain
+    # baru turun di ronde 4, lalu dibalas di ronde-ronde terakhir. Totalnya
+    # sama, rasanya tidak - yang menunggu empat ronde pertama merasakannya di
+    # tempat, bukan di rekap akhir.
+    turn_skips: int = 0
+    # Ronde menunggu terpanjang yang dialami seorang peserta, termasuk sebelum
+    # ia main pertama kali. Angka yang paling langsung dirasakan peserta.
+    longest_wait: int = 0
+    # Ronde tempat peserta yang paling akhir mendapat match pertamanya.
+    last_first_play: int = 0
+    # Tunggu terpanjang yang masih mungkin kalau slot main dibagi semerata
+    # mungkin. Dipakai untuk membedakan "algoritmanya kurang rapi" dari "court
+    # memang tidak cukup": 10 orang di 1 court hanya punya 4 slot per ronde,
+    # jadi menunggu 2 ronde memang tidak bisa dihindari siapa pun.
+    wait_floor: int = 0
     # id pemain -> {"total": n, "wasit": n, "ballboy": n}
     roles_per_player: dict[int, dict[str, int]] = field(default_factory=dict)
 

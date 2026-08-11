@@ -174,11 +174,18 @@
       <div class="row three">
         <div><label>Variasi (seed)</label><input type="number" id="seed" value="42"></div>
         <div><label>Kualitas optimasi</label>
+          <!-- Nilainya "effort:percobaan". Kesabaran host bisa dibelanjakan ke
+               dua knob, dan dulu selectornya cuma menggerakkan effort - padahal
+               diukur pada 4 ukuran meet x 6 seed, percobaan sering lebih murah
+               per pasang lawan berulang yang dihemat. "Sangat teliti" karena itu
+               tidak lagi effort 160.000: 80.000 dengan 6 percobaan memakai waktu
+               yang praktis sama dan memberi lawan berulang lebih sedikit di
+               keempat ukuran yang diuji. -->
           <select id="effort">
-            <option value="10000">Cepat</option>
-            <option value="30000" selected>Normal</option>
-            <option value="80000">Teliti</option>
-            <option value="160000">Sangat teliti</option>
+            <option value="10000:3">Cepat</option>
+            <option value="30000:3" selected>Normal</option>
+            <option value="80000:3">Teliti</option>
+            <option value="80000:6">Sangat teliti</option>
           </select>
         </div>
         <div style="display:flex;align-items:flex-end">

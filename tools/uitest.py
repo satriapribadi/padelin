@@ -37,6 +37,13 @@ BROWSERS = [
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     "/usr/bin/google-chrome",
     "/usr/bin/chromium",
+    # macOS. Tanpa baris ini skripnya berhenti dengan "Tidak menemukan Edge
+    # atau Chrome" di mesin yang browsernya jelas terpasang, dan uji UI-nya
+    # dilewati diam-diam - padahal justru di sinilah bug yang lolos dari
+    # pemeriksaan statis ketahuan.
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
 ]
 
 
@@ -635,12 +642,197 @@ def main() -> int:
             return f"{len(txt.splitlines())} baris, nama disamarkan"
         check("Tombol info debug", debug_button)
 
+        # --- 12b. selector kualitas mengirim DUA angka --------------------
+        # Pilihannya membawa "effort:percobaan", bukan effort saja. Kalau
+        # pemisahannya rusak, <select> yang disetel ke nilai asing jadi kosong
+        # dan buildPayload mengirim effort 0 - jadwal tetap keluar, cuma
+        # optimasinya nyaris tidak jalan, dan tidak ada yang mengeluh. Persis
+        # kelas kegagalan yang tidak terlihat dari pemeriksaan statis.
+        # Dibaca lewat tombol info debug, bukan dengan memanggil buildPayload:
+        # app.js dimuat sebagai module jadi fungsinya tidak global, dan itu
+        # justru benar - yang perlu diuji apa yang benar-benar dikirim, bukan
+        # apa yang dihitung fungsi internal.
+        def effort_pair():
+            harap = {"Cepat": (10000, 3), "Normal": (30000, 3),
+                     "Teliti": (80000, 3), "Sangat teliti": (80000, 6)}
+            dapat = {}
+            labels = b.js("""JSON.stringify(
+              [...document.getElementById('effort').options]
+                .map((o) => [o.value, o.textContent.trim()]))""")
+            for nilai, label in json.loads(labels):
+                b.js(f"""(() => {{
+                  const sel = document.getElementById('effort');
+                  sel.value = {json.dumps(nilai)};
+                  sel.dispatchEvent(new Event('change', {{bubbles: true}}));
+                  document.getElementById('debug-out').value = '';
+                  document.getElementById('copy-debug').click();
+                }})(); true""")
+                b.wait_for("document.getElementById('debug-out').value"
+                           ".includes('percobaan=')",
+                           timeout=5, label=f"teks debug {label}")
+                txt = b.js("document.getElementById('debug-out').value")
+                eff = int(txt.split("effort=")[1].split()[0])
+                att = int(txt.split("percobaan=")[1].split()[0])
+                dapat[label] = (eff, att)
+            assert dapat == harap, f"yang dikirim {dapat} != {harap}"
+            return "4 pilihan -> " + ", ".join(
+                f"{k} {v[0] // 1000}k/att{v[1]}" for k, v in dapat.items())
+        check("Kualitas optimasi mengirim effort + percobaan", effort_pair)
+
+        # Dua pilihan berbagi effort 80.000 dan hanya percobaannya yang beda,
+        # jadi memulihkan jadwal lama harus mencocokkan pasangannya. Jadwal yang
+        # tersimpan dengan effort 160.000 - pilihan yang sudah tidak ada - harus
+        # jatuh ke cocokan effort saja dan tidak meninggalkan selector kosong.
+        def effort_restore():
+            # Aturan pencocokan yang sama seperti di restore() app.js. Ditulis
+            # ulang di sini dengan sengaja: yang diuji apakah ATURANNYA menutup
+            # keempat bentuk permintaan yang mungkin, termasuk jadwal lama yang
+            # tidak menyimpan percobaan sama sekali.
+            hasil = b.js("""(() => {
+              const sel = document.getElementById('effort');
+              const semula = sel.value;
+              const coba = (req) => {
+                sel.value = '10000:3';
+                const opts = [...sel.options].map((o) => {
+                  const [eff, att] = o.value.split(':').map(Number);
+                  return {value: o.value, eff, att: att || 3};
+                });
+                const pas = opts.find((o) => o.eff === +req.effort
+                    && o.att === +(req.attempts ?? 3))
+                  || opts.slice().sort((a, b) =>
+                    Math.abs(a.eff - req.effort) - Math.abs(b.eff - req.effort)
+                    || b.att - a.att)[0];
+                if (pas) sel.value = pas.value;
+                return sel.value;
+              };
+              const out = {
+                teliti: coba({effort: 80000, attempts: 3}),
+                sangat: coba({effort: 80000, attempts: 6}),
+                lama160: coba({effort: 160000}),
+                tanpa_att: coba({effort: 30000}),
+              };
+              sel.value = semula;
+              return JSON.stringify(out);
+            })()""")
+            d = json.loads(hasil)
+            assert d["teliti"] == "80000:3", f"Teliti salah pulih: {d}"
+            assert d["sangat"] == "80000:6", f"Sangat teliti salah pulih: {d}"
+            assert d["tanpa_att"] == "30000:3", f"tanpa percobaan: {d}"
+            # effort 160.000 sudah tidak ada pilihannya. Ia harus mendarat di
+            # setelan paling teliti yang tersisa - bukan di "Cepat", yang
+            # membalik maksud host sepenuhnya.
+            assert d["lama160"] == "80000:6", \
+                f"jadwal effort 160k tidak pulih ke setelan paling teliti: {d}"
+            return "pasangan cocok, jadwal effort 160k -> Sangat teliti"
+        check("Pulihkan pilihan kualitas dari jadwal tersimpan", effort_restore)
+
         # --- 13. tidak ada error JS sepanjang sesi ------------------------
         def no_errors():
             errs = b.js("window.__errs")
             assert not errs, f"{len(errs)} error: {errs[:3]}"
             return "bersih"
         check("Tidak ada error JS selama sesi", no_errors)
+
+        # --- 13b. kartu "Main / orang" tidak boleh berbohong --------------
+        # Sengaja dijalankan PALING AKHIR dan di atas halaman yang dimuat
+        # ulang. Dua belas langkah sebelumnya meninggalkan court, durasi, dan
+        # babak dalam keadaan yang tidak bisa ditebak, dan ketika langkah ini
+        # dicoba di tengah, kegagalannya bukan tentang kartunya sama sekali -
+        # angkanya keluar dari setup lain. Memuat ulang lebih murah daripada
+        # membereskan keadaan satu per satu, dan aman di sini karena uji error
+        # JS sudah lewat (window.__errs ikut hilang saat reload).
+        # Rata-rata seluruh peserta menggambarkan nol orang begitu ada babak
+        # putra/putri. Diuji lewat kartu yang benar-benar ter-render, bukan
+        # lewat respons API: yang salah selama ini bukan angkanya di server,
+        # melainkan angka mana yang sampai ke mata host.
+        def kartu_main_per_orang():
+            b.js("location.reload(); true")
+            b.wait_for("document.querySelector('#preset option')",
+                       label="halaman dimuat ulang")
+            # Roster sengaja dibuat TIMPANG, 20 putra + 4 putri, dan bukan
+            # memakai roster uji standar yang seimbang. Di roster seimbang
+            # kedua kelompok memang dapat jatah yang sama dan jumlah duduknya
+            # tidak berayun - server benar kalau menyajikannya sebagai satu
+            # angka, jadi tidak ada yang bisa diuji. Menempelnya aman di sini
+            # karena halaman baru saja dimuat ulang dan daftarnya kosong.
+            timpang = [f"Uji {i + 1}, 3, {'L' if i < 20 else 'P'}"
+                       for i in range(24)]
+            b.js("(() => { document.getElementById('bulk').value = "
+                 + json.dumps("\n".join(timpang))
+                 + "; document.getElementById('parse-bulk').click(); })(); true")
+            b.wait_for("document.querySelectorAll('#ptable tbody tr').length === 24",
+                       label="roster timpang 20L+4P")
+
+            #
+            # JANGAN pakai tombol "Kosongkan semua": ia memanggil confirm(),
+            # dan dialog native memblokir renderer sehingga Runtime.evaluate
+            # tidak pernah kembali - seluruh sesi CDP ikut mati, bukan cuma
+            # langkah ini. Tombol hapus per-baris tidak berdialog.
+            b.js("""(() => {
+              const set = (id, v) => {
+                const e = document.getElementById(id);
+                e.value = v;
+                e.dispatchEvent(new Event('change', {bubbles: true}));
+              };
+              set('courts', 2); set('duration', 120);
+              document.querySelectorAll('#segments .seg-editor .x')
+                .forEach((x) => x.click());
+              for (const [lab, rn, rule] of [['Putra', 5, 'men'],
+                                             ['Putri', 5, 'women'],
+                                             ['Mixed', 5, 'mixed']]) {
+                document.getElementById('add-seg').click();
+                const baris = document.querySelectorAll('#segments .seg-editor');
+                const s = baris[baris.length - 1];
+                // Urutan anak baris babak: gagang, nama, ronde, aturan, ...
+                s.children[1].value = lab;
+                s.children[2].value = rn;
+                s.children[3].value = rule;
+                s.children[3].dispatchEvent(
+                    new Event('change', {bubbles: true}));
+              }
+              // Panel dikosongkan supaya penantian di bawah menunggu analisa
+              // BARU, bukan yang sudah terpampang dari langkah sebelumnya.
+              // Tanpa ini penantiannya lolos seketika dan yang terbaca panel
+              // basi - analisa ulangnya ter-debounce 250ms.
+              document.getElementById('analysis').innerHTML = '';
+            })(); true""")
+            b.wait_for("document.querySelectorAll('#analysis .stat').length >= 5",
+                       timeout=8, label="panel analisa terisi ulang")
+            kartu = b.js("""(() => {
+              const out = {};
+              for (const s of document.querySelectorAll('#analysis .stat')) {
+                out[s.querySelector('.k').textContent.trim()] =
+                  [s.querySelector('.v').textContent.trim(),
+                   s.querySelector('.s').textContent.trim()];
+              }
+              return JSON.stringify(out);
+            })()""")
+            semua_kartu = json.loads(kartu)
+            nilai, satuan = semua_kartu.get("Main / orang",
+                                            ["(tidak ketemu)", ""])
+            duduk = semua_kartu.get("Duduk / ronde", ["(tidak ketemu)", ""])
+            # Bersihkan babak sebelum menilai, supaya kegagalan assert di bawah
+            # tidak meninggalkan halaman dalam keadaan lain.
+            b.js("""document.querySelectorAll('#segments .seg-editor .x')
+                 .forEach((x) => x.click()); true""")
+
+            # 20 putra + 4 putri: babak putri cuma bisa mengisi satu court, dan
+            # babak mixed butuh satu putri per tim, jadi para putri main jauh
+            # lebih banyak. Menyajikannya sebagai satu rata-rata tunggal memberi
+            # angka yang tidak berlaku bagi siapa pun.
+            assert satuan, f"kartu tanpa satuan/konteks: {nilai!r}"
+            assert "putra" in satuan and "putri" in satuan, \
+                f"kelompoknya tidak disebut: {nilai!r} / {satuan!r}"
+            assert "-" in nilai, f"masih satu angka tunggal: {nilai!r}"
+            # Babak putra dan babak putri mengisi court sebanyak orangnya
+            # masing-masing, jadi jumlah yang duduk ikut berayun. Satu angka di
+            # situ selalu ujung yang paling ramai.
+            assert "-" in duduk[0], \
+                f"Duduk / ronde masih satu angka tunggal: {duduk!r}"
+            assert "berayun" in duduk[1], f"rentangnya tidak dijelaskan: {duduk!r}"
+            return f"main '{nilai}' ({satuan}) · duduk '{duduk[0]}'"
+        check("Kartu Main / orang memisah per kelompok babak",
+              kartu_main_per_orang)
 
         # --- 14. bersih-bersih -------------------------------------------
         def cleanup():

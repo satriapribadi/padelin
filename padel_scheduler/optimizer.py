@@ -11,6 +11,7 @@ Fungsi biaya:
          + w_opp_cap  * #{pasang dengan oc>=2} # denda "pernah ketemu 2x"
          + w_bye      * SUM bye^2              # ketimpangan istirahat
          + w_b2b      * (duduk 2 ronde beruntun)
+         + w_wait     * SUM L*(L-1)            # rentetan duduk yang menumpuk
          + w_rating   * SUM |rating_tim_A - rating_tim_B|
          + w_spread   * SUM max(0, jarak_rating - ambang)^2
          + w_repeat   * SUM 1/jarak_ronde (match yang persis sama terulang)
@@ -82,6 +83,39 @@ class Weights:
     # membuat jumlah main makin timpang.
     bye: float = 500.0
     b2b_bye: float = 400.0
+    # Menunggu yang MENUMPUK, bukan sekadar menunggu.
+    #
+    # b2b_bye di atas menghitung tiap pasang ronde-duduk yang bersebelahan,
+    # jadi harganya linear terhadap panjang rentetan: duduk 5 ronde beruntun
+    # (4 pasang bersebelahan) dinilai sama persis dengan dua kali duduk 3 ronde
+    # (2 + 2). Buat peserta keduanya sama sekali tidak sama, dan yang pertama
+    # itulah yang terbaca sebagai "kok saya belum main padahal dia sudah dua
+    # kali". Denda ini berbentuk L*(L-1) per rentetan, jadi konveks: 5 beruntun
+    # = 20, dua kali 3 beruntun = 12. Optimizer otomatis memecah rentetan
+    # panjang jadi beberapa yang pendek.
+    #
+    # Ia juga mengurus rentetan PEMBUKA - ronde-ronde sebelum seseorang main
+    # pertama kali. Itu bagian yang paling terasa: menunggu di awal terasa
+    # seperti dilupakan, menunggu di tengah terasa seperti jeda.
+    #
+    # NOL di annealing utama, dan itu keputusan yang diukur - bukan berarti
+    # giliran tidak penting.
+    #
+    # Sebagai suku biaya berbobot, denda ini selalu bisa MEMBELI pengulangan
+    # lawan: memecah satu rentetan menunggu bernilai lebih besar daripada denda
+    # satu pasangan yang berhadapan dua kali. Pada sapuan 324 kasus, bobot 250
+    # di annealing utama membuat 36 jadwal yang tadinya nol lawan berulang
+    # kehilangannya - satu melompat dari 0 ke 9 pasang. Bobot yang cukup kecil
+    # untuk aman (60) hampir tidak memperbaiki gilirannya lagi. Tidak ada satu
+    # bobot yang benar untuk kedua keadaan.
+    #
+    # Jadi annealing utama dibiarkan mengejar keunikan sepenuhnya, seperti
+    # sebelum giliran jadi urusan sama sekali, lalu anneal_giliran() mengurus
+    # giliran sebagai tahap sendiri - dengan bobot kuat, tapi dengan jumlah
+    # pasang berulang yang sudah dicapai dipasang sebagai batas keras. Di sana
+    # bobot inilah yang dipakai (lihat argumen `bobot`), dan di sini nol supaya
+    # tahap pertama tidak pernah menawar.
+    long_wait: float = 60.0
     rating: float = 0.0
     spread: float = 0.0
     spread_threshold: float = 1.5
@@ -140,6 +174,16 @@ class Rules:
     # boleh. Beda dari round_rule: itu mengatur bagaimana satu tim disusun, ini
     # mengatur tim seperti apa boleh berhadapan dengan tim seperti apa.
     allowed_matchups: set[str] = field(default_factory=set)
+
+    def eligible_at(self, r: int, p: int) -> bool:
+        """Apakah p berhak turun di ronde r? Tanpa babak, semua orang berhak.
+
+        Dipakai di jalur panas _set_bye, jadi sengaja sesederhana mungkin: satu
+        pemeriksaan panjang lalu satu keanggotaan set.
+        """
+        if r >= len(self.round_eligible):
+            return True
+        return p in self.round_eligible[r]
 
     def pref_violations(self, quad: list[int]) -> list[tuple[int, str]]:
         """Preferensi mana saja yang dilanggar susunan court ini."""
@@ -256,8 +300,9 @@ class ScheduleState:
 
     __slots__ = (
         "n", "ratings", "w", "rules", "n_rounds", "matches", "byes",
-        "pc", "oc", "bye_count", "seen_at", "cost_pair", "cost_bye",
-        "cost_b2b", "cost_rating", "cost_pref", "cost_repeat",
+        "pc", "oc", "bye_count", "play_count", "rep_pc", "rep_oc", "seen_at",
+        "cost_pair", "cost_bye", "cost_b2b", "cost_wait", "cost_rating",
+        "cost_pref", "cost_repeat",
     )
 
     def __init__(self, n: int, ratings: list[float], w: Weights,
@@ -273,11 +318,25 @@ class ScheduleState:
         self.pc = [0] * (n * n)
         self.oc = [0] * (n * n)
         self.bye_count = [0] * n
+        # Berapa ronde tiap pemain sudah benar-benar turun. Dipelihara
+        # inkremental supaya konstruksi bisa memakainya sebagai antrean giliran
+        # tanpa menyapu ulang seluruh jadwal tiap kali memilih pasangan.
+        self.play_count = [0] * n
+        # Berapa PASANG yang sudah partner-an / berhadapan lebih dari sekali.
+        # Ini angka yang dilihat host dan yang dipakai memilih di antara
+        # beberapa percobaan, jadi ia pula yang harus dijaga saat membetulkan
+        # giliran - bukan biaya konveksnya. Bedanya nyata: begitu pengulangan
+        # memang tak terhindarkan, menggeser pengulangan dari satu pasangan ke
+        # pasangan lain mengubah biaya konveks tapi tidak mengubah angka ini,
+        # dan gerakan seperti itu memang tidak merugikan siapa pun.
+        self.rep_pc = 0
+        self.rep_oc = 0
         # susunan match -> ronde-ronde tempat ia muncul (untuk biaya jarak ulang)
         self.seen_at: dict[tuple, list[int]] = {}
         self.cost_pair = 0.0
         self.cost_bye = 0.0
         self.cost_b2b = 0.0
+        self.cost_wait = 0.0
         self.cost_rating = 0.0
         self.cost_pref = 0.0
         self.cost_repeat = 0.0
@@ -345,6 +404,8 @@ class ScheduleState:
         """sign=+1 pasang match, sign=-1 lepas match. Update count + cost."""
         a, b, c, d = quad
         self._touch_repeat(quad, sign, r)
+        for p in quad:
+            self.play_count[p] += sign
         wp, wo = self.w.partner, self.w.opponent
         pc, oc, k = self.pc, self.oc, self._k
 
@@ -353,10 +414,14 @@ class ScheduleState:
             cur = pc[idx]
             if sign > 0:
                 self.cost_pair += wp * 2 * cur       # (c+1)c - c(c-1) = 2c
+                if cur == 1:                        # baru saja jadi berulang
+                    self.rep_pc += 1
                 pc[idx] = cur + 1
             else:
                 pc[idx] = cur - 1
                 self.cost_pair -= wp * 2 * (cur - 1)
+                if cur == 2:                        # kembali jadi sekali saja
+                    self.rep_pc -= 1
 
         wcap = self.w.opponent_cap
         for (i, j) in ((a, c), (a, d), (b, c), (b, d)):
@@ -366,15 +431,83 @@ class ScheduleState:
                 self.cost_pair += wo * 2 * cur
                 if cur == 1:                        # baru saja jadi berulang
                     self.cost_pair += wcap
+                    self.rep_oc += 1
                 oc[idx] = cur + 1
             else:
                 oc[idx] = cur - 1
                 self.cost_pair -= wo * 2 * (cur - 1)
                 if cur == 2:                        # kembali jadi sekali saja
                     self.cost_pair -= wcap
+                    self.rep_oc -= 1
 
         self.cost_rating += sign * self._rating_cost(quad)
         self.cost_pref += sign * self._pref_cost(quad)
+
+    # -- rentetan duduk ---------------------------------------------------
+    def _run_kiri(self, r: int, p: int) -> int:
+        """Berapa ronde beruntun p sudah duduk PERSIS sebelum ronde r."""
+        n = 0
+        while r - 1 - n >= 0 and p in self.byes[r - 1 - n]:
+            n += 1
+        return n
+
+    def recompute_wait(self) -> None:
+        """Hitung ulang biaya menunggu dari nol.
+
+        Perlu setiap kali bobot long_wait diubah di tengah jalan: biayanya
+        dipelihara inkremental sebagai bobot x jumlah, jadi mengganti bobotnya
+        saja akan meninggalkan angka lama yang tidak lagi berarti apa-apa.
+        """
+        total = 0
+        for p in range(self.n):
+            r = 0
+            while r < self.n_rounds:
+                if p not in self.byes[r]:
+                    r += 1
+                    continue
+                mulai = r
+                while r < self.n_rounds and p in self.byes[r]:
+                    r += 1
+                panjang = r - mulai
+                total += panjang * (panjang - 1)
+        self.cost_wait = self.w.long_wait * total
+
+    def wait_before(self, r: int, p: int) -> int:
+        """Sudah berapa ronde beruntun p menunggu saat ronde r akan disusun.
+
+        Dipakai konstruksi, yang mengisi ronde dari depan ke belakang: saat
+        ronde r disusun, ronde sesudahnya masih kosong, jadi rentetan kiri
+        memang tepat sama dengan "sudah menunggu berapa lama". Pemain yang belum
+        pernah turun sama sekali otomatis mendapat angka r - paling besar yang
+        mungkin, jadi ia selalu di depan antrean.
+        """
+        return self._run_kiri(r, p)
+
+    def _run_kanan(self, r: int, p: int) -> int:
+        """Berapa ronde beruntun p duduk PERSIS setelah ronde r."""
+        n = 0
+        while r + 1 + n < self.n_rounds and p in self.byes[r + 1 + n]:
+            n += 1
+        return n
+
+    def _delta_wait(self, r: int, p: int, on: bool) -> float:
+        """Perubahan biaya menunggu kalau status duduk p di ronde r digeser.
+
+        Biayanya SUM L*(L-1) atas tiap rentetan duduk. Menyalakan duduk di r
+        menyatukan rentetan kiri (L) dan kanan (R) menjadi satu rentetan
+        L+R+1; mematikannya memecahnya kembali. Deltanya dihitung dari keadaan
+        yang sedang berlaku saat ini, jadi totalnya tetap tepat tanpa peduli
+        urutan bongkar-pasangnya - sama seperti biaya duduk-beruntun.
+        """
+        w = self.w.long_wait
+        if not w:
+            return 0.0
+        kiri = self._run_kiri(r, p)
+        kanan = self._run_kanan(r, p)
+        gabung = kiri + kanan + 1
+        pecah = kiri * (kiri - 1) + kanan * (kanan - 1)
+        selisih = gabung * (gabung - 1) - pecah
+        return w * selisih if on else -w * selisih
 
     # -- status bye -------------------------------------------------------
     def _set_bye(self, r: int, p: int, on: bool) -> None:
@@ -383,9 +516,31 @@ class ScheduleState:
         cur = self.bye_count[p]
 
         # Tetangga ronde sebelum & sesudah (untuk deteksi duduk beruntun).
-        prev_bye = p in self.byes[r - 1] if r > 0 else False
-        next_bye = p in self.byes[r + 1] if r + 1 < self.n_rounds else False
-        neighbours = (1 if prev_bye else 0) + (1 if next_bye else 0)
+        #
+        # Hanya dihitung kalau p BERHAK turun di kedua ronde. Duduk di ronde
+        # yang memang bukan babaknya tidak bisa dihindari gerakan apa pun, jadi
+        # mendendanya cuma menambah tetapan - dan di batas babak ia menjadi
+        # bias yang nyata: seorang putra yang didudukkan di ronde terakhir babak
+        # putra dinilai lebih mahal daripada di ronde tengah, semata karena
+        # ronde sesudahnya babak putri tempat ia pasti duduk. Tidak ada dasar
+        # keadilannya, dan optimizer jadi menghindari sesuatu yang tidak
+        # merugikan siapa pun.
+        #
+        # Aturan yang sama dipakai _build_stats supaya angka yang dioptimasi dan
+        # angka yang dilaporkan tidak berbeda lagi.
+        neighbours = 0
+        if self.rules.eligible_at(r, p):
+            if (r > 0 and p in self.byes[r - 1]
+                    and self.rules.eligible_at(r - 1, p)):
+                neighbours += 1
+            if (r + 1 < self.n_rounds and p in self.byes[r + 1]
+                    and self.rules.eligible_at(r + 1, p)):
+                neighbours += 1
+
+        # Dihitung SEBELUM set byes[r] diubah: rentetan kiri & kanan harus
+        # dibaca dari keadaan yang masih utuh, baik saat menyalakan maupun saat
+        # mematikan.
+        d_wait = self._delta_wait(r, p, on)
 
         if on:
             self.byes[r].add(p)
@@ -397,10 +552,11 @@ class ScheduleState:
             self.bye_count[p] = cur - 1
             self.cost_bye -= wb * (2 * cur - 1)
             self.cost_b2b -= wbb * neighbours
+        self.cost_wait += d_wait
 
     # -- total ------------------------------------------------------------
     def cost(self) -> float:
-        return (self.cost_pair + self.cost_bye + self.cost_b2b
+        return (self.cost_pair + self.cost_bye + self.cost_b2b + self.cost_wait
                 + self.cost_rating + self.cost_pref + self.cost_repeat)
 
     def round_legal(self, r: int) -> bool:
@@ -426,8 +582,10 @@ class ScheduleState:
         self.pc = [0] * (self.n * self.n)
         self.oc = [0] * (self.n * self.n)
         self.bye_count = [0] * self.n
+        self.play_count = [0] * self.n
+        self.rep_pc = self.rep_oc = 0
         self.seen_at = {}
-        self.cost_pair = self.cost_bye = self.cost_b2b = 0.0
+        self.cost_pair = self.cost_bye = self.cost_b2b = self.cost_wait = 0.0
         self.cost_rating = self.cost_pref = self.cost_repeat = 0.0
         for r, rnd in enumerate(quads):
             self.place_round(r, rnd, sorted(byes[r]))
@@ -679,7 +837,218 @@ def _repeating_players(st: ScheduleState) -> set[int]:
     return out
 
 
-def _paired_bye_swaps(st: ScheduleState, max_steps: int = 60) -> int:
+def wait_thresholds(st: ScheduleState) -> list[int]:
+    """Rentetan duduk terpanjang yang masih wajar untuk tiap pemain.
+
+    Ini membedakan "algoritmanya kurang rapi" dari "court memang tidak cukup".
+    Pemain yang main m dari R ronde punya R-m ronde duduk yang harus dibagi ke
+    paling banyak m+1 sela (sebelum match pertama, di antara tiap dua match,
+    sesudah match terakhir). Sebaran paling merata memberi rentetan terpanjang
+    ceil((R-m) / (m+1)), dan tidak ada susunan yang bisa lebih pendek dari itu.
+
+    10 orang di 1 court: tiap orang main 6 dari 15 ronde, jadi 9 ronde duduk di
+    7 sela - menunggu 2 ronde memang tak terhindarkan, menunggu 4 tidak.
+
+    Ronde tempat seorang pemain memang tidak boleh turun (babak putra untuk
+    peserta putri) ikut terhitung sebagai duduk, jadi ambangnya jadi lebih
+    longgar di meet bersegmen. Itu arah yang aman: yang dikejar cuma rentetan
+    yang jelas berlebihan, bukan setiap rentetan.
+    """
+    out = []
+    for p in range(st.n):
+        duduk = st.n_rounds - st.play_count[p]
+        out.append(math.ceil(duduk / (st.play_count[p] + 1)) if duduk > 0 else 0)
+    return out
+
+
+def wait_runs(st: ScheduleState) -> list[int]:
+    """Rentetan duduk terpanjang yang BENAR-BENAR dialami tiap pemain."""
+    out = [0] * st.n
+    for p in range(st.n):
+        r = 0
+        while r < st.n_rounds:
+            if p not in st.byes[r]:
+                r += 1
+                continue
+            mulai = r
+            while r < st.n_rounds and p in st.byes[r]:
+                r += 1
+            out[p] = max(out[p], r - mulai)
+    return out
+
+
+def turn_skips(st: ScheduleState) -> int:
+    """Berapa kali antrean giliran diserobot sepanjang jadwal.
+
+    Satu serobotan = seseorang turun untuk kali ke-(k+1) padahal ada peserta
+    lain yang sedang duduk, boleh turun di ronde itu, dan baru main kurang dari
+    k kali.
+
+    Ini ukuran yang BERBEDA dari panjang rentetan duduk, dan keduanya perlu.
+    Rentetan mengukur berapa lama satu orang menunggu; serobotan mengukur
+    apakah urutannya adil dibanding orang lain. Jadwal bisa punya rentetan
+    pendek merata - tidak ada yang menunggu lebih dari 3 ronde - sambil tetap
+    membiarkan satu orang main di ronde 1 dan 3 sementara orang lain baru turun
+    di ronde 4. Diukur pada satu roster nyata: rentetan terpanjang tetap 3 di
+    lima nilai effort, sementara serobotan berayun 2, 4, 5, 15, 4 - jadi ada
+    yang bergerak besar tanpa satu pun angka lama menunjukkannya.
+
+    Ayunan itu SEBARAN ANTAR LINTASAN ACAK, bukan akibat effort, dan bedanya
+    penting supaya tidak ada yang mengejar perbaikan ke arah yang salah. Pernah
+    ditulis di sini bahwa menaikkan effort memperburuk giliran; dibandingkan
+    berpasangan pada 6 konfigurasi x 12 seed, itu tidak benar - effort 160.000
+    lawan 30.000 memberi 38 seed membaik, 31 memburuk, 3 sama, dan rata-rata
+    serobotannya justru turun. Yang nyata simpangannya: pada 16 putra + 10 putri
+    di 4 court, serobotan berkisar 37 sampai 98 pada effort yang sama, simpangan
+    baku 18 - jauh lebih besar daripada selisih antar level effort, yang 5,3.
+    attempts pun tidak menyempitkannya (lihat scheduler._lebih_baik). Jadi yang
+    membuat fungsi ini perlu ada bukan effort, melainkan kenyataan bahwa tidak
+    satu tahap pun menilai urutan giliran.
+
+    Peserta yang memang tidak boleh turun di ronde itu (peserta putri di babak
+    putra) tidak dihitung sedang menunggu - ia tidak sedang dilewati, ia sedang
+    tidak berhak.
+    """
+    sudah = [0] * st.n
+    total = 0
+    for r in range(st.n_rounds):
+        turun = [p for q in st.matches[r] for p in q]
+        if turun:
+            main_r = set(turun)
+            elig = (st.rules.round_eligible[r]
+                    if r < len(st.rules.round_eligible) else None)
+            duduk = [sudah[p] for p in range(st.n)
+                     if p not in main_r and (elig is None or p in elig)]
+            if duduk:
+                paling_tertinggal = min(duduk)
+                total += sum(1 for p in turun if sudah[p] > paling_tertinggal)
+        for p in turun:
+            sudah[p] += 1
+    return total
+
+
+def _terserobot(st: ScheduleState) -> set[int]:
+    """Siapa yang terlibat serobotan: yang menyerobot dan yang diserobot."""
+    sudah = [0] * st.n
+    out: set[int] = set()
+    for r in range(st.n_rounds):
+        turun = [p for q in st.matches[r] for p in q]
+        if turun:
+            main_r = set(turun)
+            elig = (st.rules.round_eligible[r]
+                    if r < len(st.rules.round_eligible) else None)
+            nganggur = [p for p in range(st.n)
+                        if p not in main_r and (elig is None or p in elig)]
+            if nganggur:
+                lo = min(sudah[p] for p in nganggur)
+                lewat = [p for p in turun if sudah[p] > lo]
+                if lewat:
+                    out.update(lewat)
+                    out.update(p for p in nganggur if sudah[p] == lo)
+        for p in turun:
+            sudah[p] += 1
+    return out
+
+
+def _menunggu_lama(st: ScheduleState) -> set[int]:
+    """Siapa saja yang menunggu lebih lama daripada yang seharusnya perlu."""
+    ambang = wait_thresholds(st)
+    nyata = wait_runs(st)
+    return {p for p in range(st.n) if nyata[p] > ambang[p]}
+
+
+def _tolok(st: ScheduleState) -> tuple[float, float, float, int, int]:
+    """Patokan sebelum sebuah gerakan.
+
+    (biaya total, biaya pasangan, biaya menunggu, pasang partner berulang,
+    pasang lawan berulang). Dua yang terakhir bukan biaya melainkan hitungan
+    kepala - lihat ScheduleState.rep_pc.
+    """
+    return (st.cost(), st.cost_pair, st.cost_wait, st.rep_pc, st.rep_oc)
+
+
+def _tolok_serobot(st: ScheduleState) -> tuple:
+    """Patokan untuk sapuan serobotan; hitungan serobotannya ikut dibawa.
+
+    Dipisah dari _tolok karena turn_skips() menyapu seluruh jadwal (O(ronde x
+    peserta)), sedangkan patokan biasa cuma membaca angka yang sudah
+    dipelihara. Hanya sapuan yang memang membutuhkannya yang membayar itu.
+    """
+    return (st.cost(), st.cost_pair, st.cost_wait, st.rep_pc, st.rep_oc,
+            turn_skips(st))
+
+
+def _serobotan_membaik(st: ScheduleState, sebelum: tuple) -> bool:
+    """Terima kalau serobotan berkurang tanpa membayar apa pun.
+
+    Tiga hal dijaga sekaligus, dan semuanya sebagai batas - bukan bobot:
+    jumlah pasang berulang tidak boleh bertambah, dan biaya menunggu tidak
+    boleh naik. Jadi sapuan ini hanya merapikan URUTAN giliran, dan tidak bisa
+    menukarnya dengan keunikan maupun dengan rentetan duduk yang lebih panjang.
+    """
+    return (turn_skips(st) < sebelum[5]
+            and st.rep_pc <= sebelum[3]
+            and st.rep_oc <= sebelum[4]
+            and st.cost_wait <= sebelum[2] + 1e-9)
+
+
+def _biaya_turun(st: ScheduleState, sebelum: tuple) -> bool:
+    """Terima kalau biaya TOTAL turun. Dipakai membersihkan pertemuan berulang."""
+    return st.cost() < sebelum[0] - 1e-9
+
+
+def _giliran_membaik(st: ScheduleState, sebelum: tuple) -> bool:
+    """Terima kalau giliran membaik DAN keunikan tidak dibayar sedikit pun.
+
+    Ini bukan penurunan biaya total, dan bedanya penting. Biaya total adalah
+    penjumlahan berbobot, jadi ia selalu bisa menukar: satu rentetan menunggu
+    yang dipecah cukup mahal untuk membeli satu pertemuan lawan yang berulang.
+    Diukur pada 324 kasus, itu bukan kekhawatiran teoretis - dengan biaya
+    menunggu sekuat 250, tiga puluh enam jadwal yang tadinya nol lawan berulang
+    kehilangannya, termasuk 20 putra + 6 putri di 1 court yang melompat ke 9
+    pasang berulang.
+    Menurunkan bobotnya bukan jawaban: pada bobot yang cukup kecil untuk aman,
+    giliran hampir tidak diperbaiki lagi.
+
+    Jadi syaratnya dibuat leksikografis, bukan berbobot: berapa PASANG yang
+    berulang tidak boleh bertambah sama sekali, berapa pun besar perbaikan
+    gilirannya.
+
+    Yang dijaga hitungan pasangnya, bukan biaya konveksnya, dan itu perbedaan
+    yang menentukan. Biaya konveks berubah setiap kali pengulangan digeser dari
+    satu pasangan ke pasangan lain, jadi menjaganya akan menolak juga gerakan
+    yang tidak merugikan siapa pun - dan pada meet yang pengulangannya memang
+    tak terhindarkan, itu berarti hampir semua gerakan ditolak dan gilirannya
+    tidak pernah membaik. Hitungan pasang adalah angka yang benar-benar
+    dipertaruhkan: ia yang dilihat host di ringkasan, dan ia yang dipakai
+    _lebih_baik untuk memilih di antara beberapa percobaan.
+
+    APA YANG DIBAYAR OLEH KEPUTUSAN INI, diukur supaya tidak dikira terlewat.
+    Pada 282 kasus lintas roster, urutan gender, dan effort produksi, 98 di
+    antaranya punya peserta yang match pertamanya datang lebih telat daripada
+    yang sebenarnya perlu - 87 telat satu ronde, 9 telat dua, 2 telat tiga.
+    Itu sisa yang tidak bisa dibereskan tanpa menaikkan pengulangan.
+
+    Sudah dicoba dan dibatalkan: sapuan khusus yang menyasar putaran pertama,
+    dengan pagar yang sama persis (pasang berulang tidak naik, biaya menunggu
+    tidak naik). Hasilnya 1 kasus membaik dari 282 - tidak sepadan dengan satu
+    sapuan O(ronde x peserta) tambahan per kandidat gerakan.
+
+    Diagnosisnya jelas dan pagar mana yang mengikat sudah diukur satu per satu:
+    melepas pagar biaya menunggu tidak mengubah apa pun (identik di kelima kasus
+    uji), sedangkan melepas pagar lawan membereskan 3 dari 5 - dan ongkosnya 12
+    putra + 8 putri di 2 court kehilangan rekor nol lawan berulangnya, jadi 3
+    pasang. Jadi telatnya match pertama BUKAN kelemahan sapuan; ia harga dari
+    keputusan di fungsi ini. Dijaga uji test_keunikan_menang_atas_giliran.
+    """
+    return (st.cost_wait < sebelum[2] - 1e-9
+            and st.rep_pc <= sebelum[3]
+            and st.rep_oc <= sebelum[4])
+
+
+def _paired_bye_swaps(st: ScheduleState, max_steps: int = 60,
+                      terima=_biaya_turun, panas_fn=_repeating_players,
+                      tolok_fn=_tolok) -> int:
     """Tukar dengan yang istirahat, lalu tukar balik di ronde lain.
 
     Ada pengulangan yang tidak bisa dibuang oleh gerakan mana pun di dalam satu
@@ -695,10 +1064,22 @@ def _paired_bye_swaps(st: ScheduleState, max_steps: int = 60) -> int:
     Yang bergeser cuma LETAK istirahatnya, jadi duduk-beruntun bisa memburuk -
     itu sudah terhitung di biaya total, dan gerakan hanya diterima kalau biaya
     totalnya tetap turun.
+
+    Justru karena ia menggeser LETAK istirahat tanpa menyentuh jumlah main,
+    gerakan ini pula satu-satunya yang bisa membetulkan giliran yang terlewat.
+    "P4 main di ronde 1 dan 2 sementara P10 baru turun di ronde 4" cuma bisa
+    diperbaiki dengan menukar keduanya di dua ronde sekaligus - menariknya
+    sendirian akan membuat salah satu kehilangan satu ronde main.
+
+    Karena itu fungsi ini dipakai untuk dua tujuan, dan yang membedakannya cuma
+    dua argumen: siapa yang dicari (`panas_fn`) dan gerakan seperti apa yang
+    diterima (`terima`). Membersihkan pertemuan berulang memakai patokan biaya
+    total; membetulkan giliran memakai patokan leksikografis yang melarang
+    keunikan ikut terbayar. Lihat _giliran_membaik untuk alasannya.
     """
     swaps = 0
     for _ in range(max_steps):
-        panas = _repeating_players(st)
+        panas = panas_fn(st)
         if not panas:
             break
         dapat = False
@@ -715,17 +1096,22 @@ def _paired_bye_swaps(st: ScheduleState, max_steps: int = 60) -> int:
                     break
                 for pi in range(4):
                     keluar = st.matches[r1][mi][pi]
-                    if keluar not in panas:
-                        continue
                     for masuk in duduk1:
+                        # Cukup salah satu sisi yang bermasalah. Untuk
+                        # pertemuan berulang yang perlu digeser adalah yang
+                        # SEDANG MAIN; untuk giliran yang terlewat yang perlu
+                        # ditarik turun adalah yang SEDANG DUDUK. Menyaring
+                        # dari satu sisi saja akan menutup separuh perbaikan.
+                        if keluar not in panas and masuk not in panas:
+                            continue
                         if elig1 is not None and masuk not in elig1:
                             continue
-                        before = st.cost()
+                        before = tolok_fn(st)
                         undo1 = _try_swap(st, r1, mi, pi, masuk)
                         if not st.rules.quad_ok(st.matches[r1][mi], r1):
                             undo1()
                             continue
-                        if _balas(st, r1, keluar, masuk, before):
+                        if _balas(st, r1, keluar, masuk, before, terima):
                             swaps += 1
                             dapat = True
                             break
@@ -738,7 +1124,7 @@ def _paired_bye_swaps(st: ScheduleState, max_steps: int = 60) -> int:
 
 
 def _balas(st: ScheduleState, r1: int, keluar: int, masuk: int,
-           before: float) -> bool:
+           before: tuple, terima=_biaya_turun) -> bool:
     """Cari ronde yang bisa membalas pertukaran di r1 supaya jumlah main utuh."""
     for r2 in range(st.n_rounds):
         if r2 == r1 or masuk in st.byes[r2] or keluar not in st.byes[r2]:
@@ -752,7 +1138,7 @@ def _balas(st: ScheduleState, r1: int, keluar: int, masuk: int,
                 continue
             undo2 = _try_swap(st, r2, mj, quad.index(masuk), keluar)
             if (st.rules.quad_ok(st.matches[r2][mj], r2)
-                    and st.cost() < before - 1e-9):
+                    and terima(st, before)):
                 return True
             undo2()
             break
@@ -799,6 +1185,203 @@ def polish_pairs(st: ScheduleState, max_steps: int = 200) -> int:
         if not lanjut:
             break
     return swaps
+
+
+def _tukar_antar_ronde(st: ScheduleState, r1: int, r2: int,
+                       rng: random.Random) -> bool:
+    """Tukar seorang yang main di r1 dengan seorang yang main di r2.
+
+    Syaratnya masing-masing sedang duduk di ronde yang lain, jadi bersihnya
+    keduanya cuma BERTUKAR RONDE: jumlah main setiap orang, dan kerataannya,
+    persis sama sesudahnya. Itu yang membuat gerakan ini boleh dipakai
+    annealing tahap kedua tanpa membatalkan rebalance_plays().
+
+    Mengembalikan True kalau pertukaran terjadi. Pembatalannya diserahkan ke
+    pemanggil, yang sudah menyimpan salinan kedua ronde untuk rollback murah.
+    """
+    duduk2 = st.byes[r2]
+    duduk1 = st.byes[r1]
+    # Yang main di r1 tapi duduk di r2, dan sebaliknya.
+    calon_a = [(mi, pi) for mi, q in enumerate(st.matches[r1])
+               for pi, p in enumerate(q) if p in duduk2]
+    calon_b = [(mj, pj) for mj, q in enumerate(st.matches[r2])
+               for pj, p in enumerate(q) if p in duduk1]
+    if not calon_a or not calon_b:
+        return False
+    mi, pi = calon_a[rng.randrange(len(calon_a))]
+    mj, pj = calon_b[rng.randrange(len(calon_b))]
+    a = st.matches[r1][mi][pi]
+    b = st.matches[r2][mj][pj]
+    if a == b:
+        return False
+
+    _try_swap(st, r1, mi, pi, b)
+    _try_swap(st, r2, mj, pj, a)
+    return True
+
+
+def anneal_giliran(st: ScheduleState, iterations: int, rng: random.Random,
+                   bobot: float = 250.0, progress=None) -> None:
+    """Annealing tahap kedua: hanya mengurus giliran, keunikan dikunci.
+
+    Kenapa tahap terpisah, dan bukan satu suku biaya di annealing utama.
+    Sebagai suku biaya, perbaikan giliran selalu bisa MEMBELI pengulangan
+    lawan - memecah satu rentetan menunggu bernilai lebih besar daripada denda
+    satu pasangan yang berhadapan dua kali. Diukur pada 324 kasus, bobot 250 di
+    annealing utama membuat 36 jadwal yang tadinya nol lawan berulang
+    kehilangannya, satu di antaranya melompat dari 0 ke 9 pasang. Menurunkan
+    bobotnya sampai aman membuat gilirannya nyaris tidak membaik. Tidak ada satu
+    bobot yang benar untuk kedua keadaan.
+
+    Di sini keunikan berhenti jadi harga dan menjadi BATAS: jumlah pasang yang
+    berulang - hasil kerja seluruh tahap sebelumnya - tidak boleh bertambah,
+    berapa pun bagusnya perbaikan giliran. Batas keras seperti ini aman justru
+    karena keadaan awalnya sudah memenuhi syarat; gerakan yang melanggar
+    ditolak, dan pencarian tetap punya banyak ruang untuk bergerak.
+
+    Gerakannya pun dibatasi yang tidak mengubah jumlah main sama sekali:
+    menukar ronde antara dua orang, menyusun ulang tim di dalam satu match, dan
+    menukar dua orang yang sama-sama main. Jadi kerataan jumlah main yang baru
+    dijamin rebalance_plays() tidak bisa rusak di sini, dan tidak perlu
+    diratakan ulang setelahnya.
+
+    Berbeda dari ratakan_giliran(), yang hanya mengambil perbaikan yang PERSIS
+    gratis dan karena itu cepat mentok: banyak perbaikan giliran menuntut satu
+    langkah yang sementara memburuk sebelum membaik, dan hanya annealing yang
+    bisa melewatinya.
+    """
+    ronde = [r for r in range(st.n_rounds) if st.matches[r]]
+    if len(ronde) < 2:
+        return
+
+    batas_pc, batas_oc = st.rep_pc, st.rep_oc
+    bobot_lama = st.w.long_wait
+    st.w.long_wait = bobot
+    st.recompute_wait()
+
+    current = st.cost()
+    best = current
+    best_snap = st.snapshot()
+    t0 = max(50.0, st.cost_wait * 0.05 + 50.0)
+    t_end = 0.05
+    tick = max(1, iterations // 10)
+
+    for it in range(iterations):
+        if progress is not None and it % tick == 0:
+            progress(it / iterations, f"Meratakan giliran {it * 100 // iterations}%")
+        temp = t0 * math.pow(t_end / t0, it / iterations)
+        before = current
+
+        r1 = rng.choice(ronde)
+        roll = rng.random()
+        if roll < 0.6:
+            r2 = rng.choice(ronde)
+            if r2 == r1:
+                continue
+            saved = [([q[:] for q in st.matches[t]], set(st.byes[t]))
+                     for t in (r1, r2)]
+            if not _tukar_antar_ronde(st, r1, r2, rng):
+                continue
+            touched = (r1, r2)
+        else:
+            # Gerakan di dalam satu ronde: keempat orangnya tetap turun, jadi
+            # jumlah main jelas tidak tersentuh. Ini yang membuka jalan bagi
+            # pertukaran ronde berikutnya dengan menata ulang lawannya.
+            saved = [([q[:] for q in st.matches[r1]], set(st.byes[r1]))]
+            ms = st.matches[r1]
+            if len(ms) >= 2 and roll < 0.8:
+                i, j = rng.sample(range(len(ms)), 2)
+                _try_cross(st, r1, i, rng.randrange(4), j, rng.randrange(4))
+            else:
+                _try_reorder(st, r1, rng.randrange(len(ms)), rng.randrange(2) + 1)
+            touched = (r1,)
+
+        boleh = (st.rep_pc <= batas_pc and st.rep_oc <= batas_oc
+                 and all(st.round_legal(t) for t in touched))
+        if boleh:
+            current = st.cost()
+            delta = current - before
+            boleh = delta <= 0 or rng.random() < math.exp(-delta / max(temp, 1e-9))
+
+        if boleh:
+            if current < best - 1e-9:
+                best = current
+                best_snap = st.snapshot()
+        else:
+            for t in touched:
+                for q in st.matches[t]:
+                    st._touch_match(q, -1, t)
+                for p in list(st.byes[t]):
+                    st._set_bye(t, p, False)
+            for t, (quads, byes) in zip(touched, saved):
+                st.matches[t] = [q[:] for q in quads]
+                for q in st.matches[t]:
+                    st._touch_match(q, +1, t)
+                for p in sorted(byes):
+                    st._set_bye(t, p, True)
+            current = st.cost()
+
+    if best < current - 1e-9:
+        st.restore(best_snap)
+    st.w.long_wait = bobot_lama
+    st.recompute_wait()
+
+
+def ratakan_giliran(st: ScheduleState, max_steps: int = 60,
+                    bobot: float = 250.0) -> int:
+    """Betulkan giliran yang terlewat, tanpa membayarnya dengan keunikan.
+
+    Dijalankan paling akhir, dan sengaja sebagai tahap sendiri alih-alih sebagai
+    suku biaya yang kuat di annealing.
+
+    Alasannya diukur, bukan diperkirakan. Sebagai suku biaya, perbaikan giliran
+    selalu bisa membeli pengulangan lawan: memecah satu rentetan menunggu yang
+    panjang bernilai lebih besar daripada denda satu pasangan yang berhadapan
+    dua kali, jadi annealing akan mengambilnya. Pada sapuan 324 kasus, biaya
+    menunggu sekuat 250 membuat 36 jadwal yang tadinya nol lawan berulang
+    kehilangannya - satu di antaranya melompat dari 0 ke 9 pasang. Menurunkan
+    bobotnya sampai aman membuat gilirannya nyaris tidak diperbaiki lagi; tidak
+    ada satu bobot yang benar untuk kedua keadaan sekaligus.
+
+    Di sini pertanyaannya tidak lagi "berapa harganya" melainkan "gratis atau
+    tidak": gerakan diterima hanya kalau biaya menunggu turun DAN biaya
+    pasangan - partner, lawan, denda pernah-ketemu-2x - tidak naik sedikit pun.
+    Jadi giliran diperbaiki di semua tempat yang tidak menuntut tebusan, dan
+    keunikan yang sudah dicapai tidak pernah tergerus.
+
+    Gerakannya berpasangan (lihat _paired_bye_swaps), jadi jumlah main tiap
+    orang persis sama seperti sebelum sapuan ini - kerataan yang baru dijamin
+    rebalance_plays() tidak bisa rusak di sini.
+
+    Bobot menunggu dipasang sendiri di sini karena Weights.long_wait sengaja nol
+    di annealing utama; tanpa ini biaya menunggu selalu nol dan sapuan ini tidak
+    punya apa pun untuk diperbaiki.
+    """
+    bobot_lama = st.w.long_wait
+    if not bobot_lama:
+        st.w.long_wait = bobot
+        st.recompute_wait()
+    try:
+        # Dua sapuan bergantian, karena keduanya mengukur hal yang berbeda:
+        # yang pertama memendekkan rentetan menunggu, yang kedua merapikan
+        # urutan giliran antar peserta. Memperbaiki salah satunya sering membuka
+        # perbaikan yang tadinya tertutup di satu lagi, jadi diulang sampai
+        # keduanya tidak menemukan apa pun.
+        total = 0
+        for _ in range(10):
+            langkah = _paired_bye_swaps(st, max_steps, terima=_giliran_membaik,
+                                        panas_fn=_menunggu_lama)
+            langkah += _paired_bye_swaps(st, max_steps, terima=_serobotan_membaik,
+                                         panas_fn=_terserobot,
+                                         tolok_fn=_tolok_serobot)
+            total += langkah
+            if not langkah:
+                break
+        return total
+    finally:
+        if st.w.long_wait != bobot_lama:
+            st.w.long_wait = bobot_lama
+            st.recompute_wait()
 
 
 def _local_sweeps(st: ScheduleState, max_steps: int) -> int:

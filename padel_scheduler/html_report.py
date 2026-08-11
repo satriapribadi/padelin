@@ -450,6 +450,13 @@ def build_html(
         ("Main per orang", f"{min(plays)}-{max(plays)}", "ronde"),
         ("Partner berulang", str(st.partner_repeat_pairs), partner_note),
         ("Lawan berulang", str(st.opponent_repeat_pairs), opp_note),
+        # Tunggu terpanjang selalu disertai batasnya. Peserta yang membaca
+        # laporan ini akan membandingkan angkanya dengan pengalamannya sendiri,
+        # dan "2 ronde" tanpa konteks terbaca seperti kelalaian padahal 4 slot
+        # per ronde untuk 10 orang tidak menyisakan pilihan lain.
+        ("Tunggu terpanjang", str(st.longest_wait),
+         "ronde" if st.longest_wait <= st.wait_floor
+         else f"ronde · tak terhindarkan {st.wait_floor}"),
         ("Kualitas", f"{st.quality_score}", "dari 100"),
     ]
     if show_roles:

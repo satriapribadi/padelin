@@ -72,8 +72,18 @@ def evaluate(
     econ: Economics,
     round_minutes: int = 12,
     warmup_minutes: int = 10,
+    segments: list[tuple[str, int]] | None = None,
+    men: int | None = None,
+    women: int | None = None,
 ) -> Option:
-    """Hitung satu skenario: berapa main, berapa untung."""
+    """Hitung satu skenario: berapa main, berapa untung.
+
+    Babak dan komposisi gender ikut diteruskan karena keduanya menentukan berapa
+    court yang benar-benar bisa terisi. Tanpa itu tiap court dianggap bisa diisi
+    siapa saja, dan justru pertanyaan termahal host - "kalau saya tambah 1
+    court, peserta dapat tambahan berapa menit?" - yang paling salah dijawab.
+    Lihat capacity.court_terpakai() untuk angkanya.
+    """
     duration = int(round(hours * 60))
     cap = analyze(
         n_players=n_players,
@@ -81,6 +91,9 @@ def evaluate(
         duration_minutes=duration,
         round_minutes=round_minutes,
         warmup_minutes=warmup_minutes,
+        segments=segments,
+        roster_men=men,
+        roster_women=women,
     )
 
     court_cost = courts * hours * econ.court_price_per_hour
@@ -142,6 +155,9 @@ def compare(
     hour_options: list[float] | None = None,
     round_minutes: int = 12,
     warmup_minutes: int = 10,
+    segments: list[tuple[str, int]] | None = None,
+    men: int | None = None,
+    women: int | None = None,
 ) -> list[Option]:
     """Bandingkan beberapa kombinasi court x durasi untuk jumlah peserta ini.
 
@@ -158,7 +174,8 @@ def compare(
     out: list[Option] = []
     for c in court_options:
         for h in hour_options:
-            opt = evaluate(n_players, c, h, econ, round_minutes, warmup_minutes)
+            opt = evaluate(n_players, c, h, econ, round_minutes,
+                           warmup_minutes, segments, men, women)
             if opt.rounds <= 0:
                 continue
             out.append(opt)
@@ -198,15 +215,26 @@ def upgrade_analysis(
     econ: Economics,
     round_minutes: int = 12,
     warmup_minutes: int = 10,
+    segments: list[tuple[str, int]] | None = None,
+    men: int | None = None,
+    women: int | None = None,
 ) -> dict:
     """Berapa harga sebenarnya dari menambah satu court?
 
     Menjawab pertanyaan praktis host: "kalau saya tambah 1 court, peserta dapat
     tambahan berapa menit main, dan fee harus naik berapa supaya margin saya
     tidak turun?"
+
+    Diukur pada 5 meet bersegmen, versi yang buta babak melebihkan manfaatnya 8
+    sampai 20 menit - dan pada 20 putra + 4 putri ia membalik sarannya: diramal
+    +20 menit sehingga worth_it, padahal yang benar-benar terjadi +6,7 menit.
+    Court tambahan tidak menolong babak yang gendernya memang tidak cukup untuk
+    mengisinya.
     """
-    base = evaluate(n_players, courts, hours, econ, round_minutes, warmup_minutes)
-    plus = evaluate(n_players, courts + 1, hours, econ, round_minutes, warmup_minutes)
+    base = evaluate(n_players, courts, hours, econ, round_minutes,
+                    warmup_minutes, segments, men, women)
+    plus = evaluate(n_players, courts + 1, hours, econ, round_minutes,
+                    warmup_minutes, segments, men, women)
 
     extra_cost = plus.total_cost - base.total_cost
     extra_minutes = plus.play_minutes_per_player - base.play_minutes_per_player

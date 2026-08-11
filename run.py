@@ -201,6 +201,14 @@ def api_analyze(payload: dict) -> dict:
         men=men if lengkap else None,
         women=women if lengkap else None,
         allowed_matchups=cfg.allowed_matchups,
+        # Babak diteruskan APA ADANYA, tanpa syarat `seragam` di atas. Syarat
+        # itu untuk model bentuk tim, yang memang mengandaikan satu kolam untuk
+        # seluruh meet. Jatah main per kelompok justru cuma berarti kalau
+        # kolamnya TIDAK satu - kapasitas_per_kelompok() yang memutuskan sendiri
+        # kapan ia tidak bisa menjawab.
+        segments=[(s.rule, s.rounds) for s in cfg.segments],
+        roster_men=men,
+        roster_women=women,
     )
 
     return {
@@ -216,7 +224,8 @@ def api_analyze(payload: dict) -> dict:
 def api_economics(payload: dict) -> dict:
     cfg = _config_from(payload)
     econ = _econ_from(payload)
-    n = len(_players_from(payload)) or int(payload.get("n_players", 0))
+    pemain = _players_from(payload)
+    n = len(pemain) or int(payload.get("n_players", 0))
     if n < 4:
         return {"error": "Butuh minimal 4 pemain untuk hitung biaya."}
 
@@ -231,6 +240,13 @@ def api_economics(payload: dict) -> dict:
         c for c in range(max(1, courts - 2), courts + 3) if c >= 1
     } | {courts})
 
+    # Babak dan komposisi gender menentukan berapa court yang benar-benar bisa
+    # terisi, jadi keduanya ikut - tanpa itu perbandingan biaya menjanjikan
+    # waktu main yang tidak akan terjadi.
+    seg_ekonomi = [(s.rule, s.rounds) for s in cfg.segments]
+    men_e = sum(1 for p in pemain if p.gender == "M")
+    women_e = sum(1 for p in pemain if p.gender == "F")
+
     options = compare(
         n_players=n,
         econ=econ,
@@ -238,6 +254,9 @@ def api_economics(payload: dict) -> dict:
         hour_options=sorted({1.0, 1.5, 2.0, 2.5, 3.0, round(hours, 2)}),
         round_minutes=cfg.round_minutes,
         warmup_minutes=cfg.warmup_minutes,
+        segments=seg_ekonomi,
+        men=men_e,
+        women=women_e,
     )
     # Skenario yang sedang dipakai tidak boleh terpangkas oleh batas tampilan.
     def _is_current(o):
@@ -249,7 +268,8 @@ def api_economics(payload: dict) -> dict:
         if current is not None:
             shown = [current] + shown[:23]
     up = upgrade_analysis(n, cfg.courts, hours, econ,
-                          cfg.round_minutes, cfg.warmup_minutes)
+                          cfg.round_minutes, cfg.warmup_minutes,
+                          seg_ekonomi, men_e, women_e)
 
     return {
         "current": vars(up["base"]),
