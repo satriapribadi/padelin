@@ -20,6 +20,7 @@ from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_an
 from padel_scheduler.html_report import build_html
 from padel_scheduler.report import (
     batas_keunikan,
+    kolam_partner,
     to_csv,
     to_dict,
     to_personal_text,
@@ -398,6 +399,41 @@ class TestExports(unittest.TestCase):
                                              effort=4000))
         teks = to_text(sch)
         self.assertNotIn("tak terhindarkan", teks)
+
+    def test_kolam_partner_dipotong_oleh_format(self):
+        """Format yang dibatasi memotong kolam partner, bukan cuma kolam lawan.
+
+        Kasus nyata host: 5 putra + 3 putri dengan "putra vs putra" dan "campur
+        vs campur" saja. Tim dua putri tidak pernah sah - PP-PP tidak diizinkan
+        dan di LL-LL tidak ada putri - jadi tiap putri hanya bisa berpasangan
+        dengan putra, dan calonnya cuma lima. Dengan main 6 ronde, tiga pasang
+        berulang di jadwal itu persis batas bawahnya.
+
+        Dihitung dari jumlah peserta, batasnya terbaca 7 dan angka 3 itu lewat
+        tanpa penjelasan - terbaca sebagai kelalaian penjadwal, padahal optimal.
+        """
+        roster = [(3.0, "F"), (2.0, "M"), (2.0, "F"), (4.0, "M"),
+                  (3.0, "M"), (2.0, "F"), (3.0, "M"), (2.0, "M")]
+        players = [Player(id=i + 1, name=f"P{i+1}", rating=r, gender=g)
+                   for i, (r, g) in enumerate(roster)]
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, effort=4000, attempts=1,
+                     allowed_matchups=["LL-LL", "LP-LP"])
+        sch = build_schedule(players, cfg)
+
+        kolam = kolam_partner(sch)
+        putri = [p.id for p in players if p.gender == "F"]
+        putra = [p.id for p in players if p.gender == "M"]
+        self.assertTrue(all(kolam[p] == len(putra) for p in putri),
+                        f"kolam partner putri bukan sejumlah putra: {kolam}")
+        self.assertTrue(all(kolam[p] == len(players) - 1 for p in putra),
+                        f"kolam partner putra ikut terpotong: {kolam}")
+
+        b = batas_keunikan(sch)["partner"]
+        self.assertIsNotNone(b, "batas partner tidak terdeteksi")
+        self.assertEqual(b["batas"], len(putra))
+        self.assertEqual(b["kelompok"], "putri")
+        self.assertIn("bagi peserta putri", to_text(sch))
 
     def test_batas_keunikan_diam_alih_alih_menebak(self):
         """Diamnya bukan klaim "bisa dihindari" - lihat docstring-nya.

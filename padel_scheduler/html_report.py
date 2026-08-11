@@ -444,8 +444,10 @@ def build_html(
         b = batas[kunci]
         if b is None:
             return "pasang"
-        di_babak = f" di babak {b['babak']}" if b["babak"] else ""
-        return f"pasang · batas matematis {b['batas']} ronde{di_babak}"
+        di_mana = (f" di babak {b['babak']}" if b["babak"]
+                   else f" bagi peserta {b['kelompok']}" if b.get("kelompok")
+                   else "")
+        return f"pasang · batas matematis {b['batas']} ronde{di_mana}"
 
     partner_note = _catatan("partner")
     opp_note = _catatan("lawan")

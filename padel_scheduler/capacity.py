@@ -591,6 +591,43 @@ def duduk_per_ronde(
     return min(nilai), max(nilai)
 
 
+def bisa_liput_semua(men: int, women: int, courts: int, putaran: int,
+                     allowed_matchups: list[str] | None) -> bool:
+    """Bisakah semua peserta kebagian match pertama dalam `putaran` ronde?
+
+    Slotnya cukup di atas kertas - itu definisi `putaran` - tapi format yang
+    dibatasi bisa membuat komposisinya mustahil. Contoh nyata dari host: 5 putra
+    + 3 putri di 1 court dengan format "putra vs putra" dan "campur vs campur"
+    saja. Dua ronde memberi delapan slot untuk delapan orang, tapi dua match
+    hanya bisa menghabiskan (8,0), (6,2), atau (4,4) putra-putri - tidak ada
+    yang (5,3). Ronde kedua karena itu WAJIB memakai orang yang sudah main, dan
+    satu peserta pasti baru turun di ronde ketiga.
+
+    Bedanya penting karena menentukan saran yang benar. Catatan giliran dulu
+    selalu menuduh rotasi partner dan menyarankan memperpendek durasi ronde -
+    yang tidak mengubah apa pun di sini, karena yang mengikat komposisi gender
+    terhadap format, bukan panjang rondenya.
+    """
+    izin = [c for c in (allowed_matchups or ()) if c in _KEBUTUHAN]
+    if not izin or set(izin) == set(MATCHUPS):
+        return True                      # tidak dibatasi: bukan urusan format
+    if men + women <= 0:
+        return True
+    k = max(1, courts) * max(1, putaran)
+    # Ditelusuri sebagai himpunan total yang DIBATASI di (men, women): yang
+    # ditanya cuma "cukup atau tidak", jadi kelebihan tidak perlu dibedakan dan
+    # himpunannya tetap kecil.
+    capai = {(0, 0)}
+    for _ in range(k):
+        maju = set()
+        for m, w in capai:
+            for c in izin:
+                dm, dw = _KEBUTUHAN[c]
+                maju.add((min(m + dm, men), min(w + dw, women)))
+        capai = maju
+    return (men, women) in capai
+
+
 def analyze(
     n_players: int,
     courts: int,

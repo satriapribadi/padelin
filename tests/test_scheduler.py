@@ -20,6 +20,7 @@ from padel_scheduler import Config, Player, Segment, build_schedule
 from padel_scheduler.economics import Economics, upgrade_analysis
 from padel_scheduler.capacity import (
     analyze,
+    bisa_liput_semua,
     court_terpakai,
     duduk_per_ronde,
     gender_tak_terpakai,
@@ -1341,6 +1342,57 @@ class TestPesertaTakTerpakai(unittest.TestCase):
                                      segments=[("open", 15)], men=13, women=13)
         self.assertEqual(polos["extra_play_minutes_per_player"],
                          polos_seg["extra_play_minutes_per_player"])
+
+    def test_format_bisa_menahan_orang_sampai_ronde_ketiga(self):
+        """Slot cukup di atas kertas, tapi komposisinya tidak ada.
+
+        5 putra + 3 putri di 1 court dengan "putra vs putra" dan "campur vs
+        campur" saja: dua ronde memberi delapan slot untuk delapan orang, tapi
+        dua match hanya bisa menghabiskan (8,0), (6,2), atau (4,4) putra-putri -
+        tidak ada yang (5,3). Satu peserta PASTI baru turun di ronde ketiga.
+        """
+        SAMA_CAMPUR = ["LL-LL", "LP-LP"]
+        self.assertFalse(bisa_liput_semua(5, 3, 1, 2, SAMA_CAMPUR))
+        # 4+4 bisa: dua match campur menghabiskan tepat (4,4).
+        self.assertTrue(bisa_liput_semua(4, 4, 1, 2, SAMA_CAMPUR))
+        # Tanpa batasan format bukan urusan fungsi ini.
+        self.assertTrue(bisa_liput_semua(5, 3, 1, 2, None))
+
+    def test_catatan_giliran_menyebut_format_kalau_itu_sebabnya(self):
+        """Saran yang salah lebih buruk daripada tidak ada saran.
+
+        Catatan giliran selalu menuduh rotasi partner dan menyarankan
+        memperpendek durasi ronde. Pada setup di atas keduanya keliru: yang
+        mengikat komposisi gender terhadap format, dan panjang ronde tidak
+        mengubahnya sedikit pun.
+        """
+        roster = [(3.0, "F"), (2.0, "M"), (2.0, "F"), (4.0, "M"),
+                  (3.0, "M"), (2.0, "F"), (3.0, "M"), (2.0, "M")]
+        players = [Player(id=i + 1, name=f"P{i+1}", rating=r, gender=g)
+                   for i, (r, g) in enumerate(roster)]
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=20_000, attempts=1,
+                     allowed_matchups=["LL-LL", "LP-LP"])
+        sch = build_schedule(players, cfg)
+        giliran = [c for c in sch.notes if c.startswith("Giliran belum")]
+        self.assertEqual(len(giliran), 1, f"catatan giliran hilang: {sch.notes}")
+        self.assertIn("format yang dibatasi", giliran[0], giliran[0])
+        self.assertIn("Memperpendek durasi per ronde tidak mengubah ini",
+                      giliran[0], giliran[0])
+        self.assertNotIn("Penyebabnya rotasi partner", giliran[0],
+                         "masih menuduh rotasi padahal formatnya yang mengikat")
+
+    def test_catatan_giliran_tetap_menuduh_rotasi_kalau_memang_itu(self):
+        """Tanpa batasan format, penjelasan lamanya yang benar."""
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=20_000, attempts=1)
+        sch = build_schedule(make_players(10), cfg)
+        giliran = [c for c in sch.notes if c.startswith("Giliran belum")]
+        if giliran:
+            self.assertIn("rotasi partner", giliran[0], giliran[0])
+            self.assertNotIn("format yang dibatasi", giliran[0], giliran[0])
 
     def test_court_terpakai_dibatasi_yang_berhak(self):
         """Court hanya terisi kalau ada cukup orang yang BERHAK mengisinya."""

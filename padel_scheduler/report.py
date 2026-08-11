@@ -7,7 +7,7 @@ import io
 from dataclasses import asdict
 from datetime import date
 
-from .models import Schedule
+from .models import MATCHUPS, Schedule
 
 HARI = ("Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu")
 BULAN = ("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
@@ -35,6 +35,68 @@ PREF_LABELS = {
     "same_gender": "court satu gender",
     "mixed_team": "partner lawan jenis",
 }
+
+
+def _bentuk(g1: str | None, g2: str | None) -> str | None:
+    """Susunan gender satu tim; None kalau gendernya belum terisi."""
+    if g1 is None or g2 is None:
+        return None
+    return "LL" if g1 == g2 == "M" else "PP" if g1 == g2 == "F" else "LP"
+
+
+def kolam_partner(schedule: Schedule) -> dict[int, int]:
+    """Berapa calon partner yang SAH untuk tiap peserta menurut format.
+
+    Format yang dibatasi memotong kolam partner jauh lebih dalam daripada yang
+    terlihat dari jumlah peserta. Contoh nyata dari host: 5 putra + 3 putri
+    dengan format "putra vs putra" dan "campur vs campur" saja. Tim dua putri
+    tidak pernah sah - PP-PP tidak diizinkan dan di LL-LL tidak ada putri sama
+    sekali - jadi tiap putri hanya bisa berpasangan dengan putra, dan calonnya
+    cuma lima. Dengan main 6 ronde, tiap putri WAJIB mengulang satu partner.
+    Tiga pasang berulang di jadwal itu persis batas bawahnya, bukan kelalaian.
+
+    Sepasang dianggap sah kalau bentuk timnya muncul di salah satu format yang
+    diizinkan DAN lawannya masih bisa dibentuk dari sisa roster - tim campur
+    tidak ada gunanya kalau tidak ada dua orang lagi yang bisa jadi lawannya.
+
+    Kosong kalau gender tidak lengkap atau format tidak dibatasi: di situ kolam
+    partnernya seluruh peserta lain, dan hitungan per-babak yang biasa sudah
+    menjawabnya.
+    """
+    izin = set(schedule.config.allowed_matchups or ())
+    if not izin or izin == set(MATCHUPS):
+        return {}
+    g = {p.id: p.gender for p in schedule.players}
+    if any(v not in ("M", "F") for v in g.values()):
+        return {}
+
+    n_m = sum(1 for v in g.values() if v == "M")
+    n_f = sum(1 for v in g.values() if v == "F")
+
+    def bisa_dibentuk(m: int, f: int) -> set[str]:
+        out = set()
+        if m >= 2:
+            out.add("LL")
+        if m >= 1 and f >= 1:
+            out.add("LP")
+        if f >= 2:
+            out.add("PP")
+        return out
+
+    out: dict[int, int] = {}
+    for p, gp in g.items():
+        n = 0
+        for q, gq in g.items():
+            if q == p:
+                continue
+            bentuk = _bentuk(gp, gq)
+            sisa_m = n_m - ((gp == "M") + (gq == "M"))
+            sisa_f = n_f - ((gp == "F") + (gq == "F"))
+            if any("-".join(sorted((bentuk, lawan))) in izin
+                   for lawan in bisa_dibentuk(sisa_m, sisa_f)):
+                n += 1
+        out[p] = n
+    return out
 
 
 def batas_keunikan(schedule: Schedule) -> dict:
@@ -96,7 +158,24 @@ def batas_keunikan(schedule: Schedule) -> dict:
                              ("lawan", max(0, (len(anggota) - 1) // 2))):
             if r > batas and r - batas > lebih[kunci]:
                 lebih[kunci] = r - batas
-                hasil[kunci] = {"batas": batas, "babak": lab if banyak else ""}
+                hasil[kunci] = {"batas": batas, "babak": lab if banyak else "",
+                                "kelompok": ""}
+
+    # Format yang dibatasi bisa memotong kolam partner lebih dalam daripada
+    # jumlah peserta di babaknya - lihat kolam_partner(). Diperiksa belakangan
+    # dan hanya menggantikan kalau kelebihannya lebih besar, supaya yang
+    # dilaporkan tetap kendala yang paling mengikat.
+    main = schedule.stats.plays_per_player
+    gender = {p.id: p.gender for p in schedule.players}
+    for p, muat in kolam_partner(schedule).items():
+        r = main.get(p, 0)
+        if r > muat and r - muat > lebih["partner"]:
+            lebih["partner"] = r - muat
+            hasil["partner"] = {
+                "batas": muat, "babak": "",
+                "kelompok": ("putri" if gender.get(p) == "F" else
+                             "putra" if gender.get(p) == "M" else ""),
+            }
     return hasil
 
 
@@ -174,9 +253,11 @@ def to_text(schedule: Schedule, start_clock: str | None = None,
         b = batas[kunci]
         if not jumlah or b is None:
             return f"{nama}: {jumlah} pasang"
-        di_babak = f" di babak {b['babak']}" if b["babak"] else ""
+        di_mana = (f" di babak {b['babak']}" if b["babak"]
+                   else f" bagi peserta {b['kelompok']}" if b.get("kelompok")
+                   else "")
         return (f"{nama}: {jumlah} pasang (tak terhindarkan - unik cuma "
-                f"mungkin sampai {b['batas']} ronde main{di_babak})")
+                f"mungkin sampai {b['batas']} ronde main{di_mana})")
 
     out.append(_dengan_batas("Partner berulang", st.partner_repeat_pairs,
                              "partner"))

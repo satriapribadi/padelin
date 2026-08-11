@@ -18,7 +18,13 @@ import random
 from dataclasses import dataclass, field, replace
 from itertools import combinations
 
-from .capacity import analyze, rounds_from_duration, shape_budget, shape_totals
+from .capacity import (
+    analyze,
+    bisa_liput_semua,
+    rounds_from_duration,
+    shape_budget,
+    shape_totals,
+)
 from .factorization import mixed_pair_rounds, subset_pair_rounds
 from .models import (
     MATCHUP_LABELS,
@@ -2228,15 +2234,44 @@ def _build_once(players: list[Player], config: Config,
             bagian.append(
                 f"tunggu terpanjang {stats.longest_wait} ronde, sedangkan yang "
                 f"tak terhindarkan {stats.wait_floor} ronde")
-        notes.append(
-            "Giliran belum sepenuhnya berurutan: " + "; ".join(bagian) + ". "
-            "Penyebabnya rotasi partner: pasangan tiap ronde diambil dari satu "
-            "baris kombinasi yang sudah tertentu supaya tidak ada yang "
-            "berpasangan dua kali, jadi peserta yang paling lama menunggu "
-            "kadang hanya bisa turun bersama orang yang baru saja main. "
-            "Menambah court atau memperpendek durasi per ronde adalah yang "
-            "paling banyak menolong."
+        # Sebabnya diperiksa, bukan diasumsikan. Selama ini catatan ini selalu
+        # menuduh rotasi partner dan menyarankan memperpendek durasi ronde -
+        # dan pada setup yang formatnya dibatasi, keduanya salah. Contoh nyata
+        # dari host: 5 putra + 3 putri di 1 court dengan "putra vs putra" dan
+        # "campur vs campur" saja. Dua ronde memberi delapan slot untuk delapan
+        # orang, tapi dua match cuma bisa menghabiskan (8,0), (6,2), atau (4,4)
+        # putra-putri - tidak ada yang (5,3). Satu peserta PASTI baru turun di
+        # ronde ketiga, dan memperpendek ronde tidak mengubahnya sedikit pun.
+        slot_r = 4 * max(1, min(config.courts, n // 4))
+        putaran_min = math.ceil(n / slot_r) if slot_r else 1
+        format_mengikat = (
+            nilai_bentuk
+            and stats.last_first_play > putaran_min
+            and not bisa_liput_semua(n_men, n_women, config.courts,
+                                     putaran_min, config.allowed_matchups)
         )
+        if format_mengikat:
+            notes.append(
+                "Giliran belum sepenuhnya berurutan: " + "; ".join(bagian)
+                + f". Penyebabnya format yang dibatasi, bukan rotasi: dengan "
+                f"{n_men} putra dan {n_women} putri, tidak ada susunan "
+                f"{putaran_min} ronde pertama yang sah sekaligus memakai "
+                f"semua peserta, jadi ronde awal terpaksa mengulang orang yang "
+                f"sudah main. Memperpendek durasi per ronde tidak mengubah ini. "
+                f"Yang menggesernya: izinkan lebih banyak format match, ubah "
+                f"komposisi peserta, atau tambah court supaya lebih banyak "
+                f"orang turun sekaligus."
+            )
+        else:
+            notes.append(
+                "Giliran belum sepenuhnya berurutan: " + "; ".join(bagian) + ". "
+                "Penyebabnya rotasi partner: pasangan tiap ronde diambil dari "
+                "satu baris kombinasi yang sudah tertentu supaya tidak ada yang "
+                "berpasangan dua kali, jadi peserta yang paling lama menunggu "
+                "kadang hanya bisa turun bersama orang yang baru saja main. "
+                "Menambah court atau memperpendek durasi per ronde adalah yang "
+                "paling banyak menolong."
+            )
 
     # Match yang terulang UTUH (empat orang sama, tim sama) paling mudah dikira
     # bug oleh host. Sering kali itu batas matematis: kelompok p orang hanya
