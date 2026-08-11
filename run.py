@@ -201,6 +201,14 @@ def api_analyze(payload: dict) -> dict:
         men=men if lengkap else None,
         women=women if lengkap else None,
         allowed_matchups=cfg.allowed_matchups,
+        # Babak diteruskan APA ADANYA, tanpa syarat `seragam` di atas. Syarat
+        # itu untuk model bentuk tim, yang memang mengandaikan satu kolam untuk
+        # seluruh meet. Jatah main per kelompok justru cuma berarti kalau
+        # kolamnya TIDAK satu - kapasitas_per_kelompok() yang memutuskan sendiri
+        # kapan ia tidak bisa menjawab.
+        segments=[(s.rule, s.rounds) for s in cfg.segments],
+        roster_men=men,
+        roster_women=women,
     )
 
     return {

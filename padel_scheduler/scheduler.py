@@ -2089,6 +2089,9 @@ def _build_once(players: list[Player], config: Config,
         men=n_men if nilai_bentuk else None,
         women=n_women if nilai_bentuk else None,
         allowed_matchups=config.allowed_matchups,
+        segments=[(s.rule, s.rounds) for s in segments],
+        roster_men=n_men,
+        roster_women=n_women,
     )
     for issue in cap.sorted_issues():
         if issue.severity in ("error", "warning"):

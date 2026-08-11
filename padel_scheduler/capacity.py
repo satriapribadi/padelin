@@ -77,6 +77,12 @@ class CapacityReport:
     shape_binding: str | None = None
     shape_shortfall: int = 0
 
+    # Jatah main per kelompok gender di meet bersegmen. None kalau meetnya tanpa
+    # babak atau pembagiannya tidak ditentukan aturan babak - lihat
+    # kapasitas_per_kelompok(). Kalau terisi dan angkanya berbeda,
+    # avg_plays_per_player di atas TIDAK menggambarkan siapa pun.
+    groups: list[dict] | None = None
+
     issues: list[Issue] = field(default_factory=list)
     verdict: str = "ok"  # "ok" | "warning" | "error"
 
@@ -473,6 +479,59 @@ def gender_tak_terpakai(
     return out
 
 
+def kapasitas_per_kelompok(
+    men: int, women: int, courts: int,
+    segments: list[tuple[str, int]] | None,
+) -> list[dict] | None:
+    """Berapa ronde main yang didapat tiap kelompok gender di meet bersegmen.
+
+    None kalau pembagiannya memang tidak ditentukan aturan babak - dan itu
+    jawaban yang lebih jujur daripada angka yang dikarang. Lihat di bawah.
+
+    Kenapa perlu. Rata-rata seluruh peserta menggambarkan nol orang begitu ada
+    babak putra/putri: 20 putra + 4 putri dengan babak putra/putri/mixed
+    dilaporkan "rata-rata main 5,0 ronde", padahal para putra main 3 dan para
+    putri 10. Itu satu-satunya angka jatah main yang dilihat host di panel
+    analisa, dan ia salah untuk semua orang di ruangan.
+
+    Aritmetikanya, per babak:
+
+      putra / putri  seluruh slot jatuh ke gender itu, dan court yang benar-
+                     benar terpakai dibatasi jumlah orangnya: min(court, n // 4)
+      mixed          tiap tim satu putra + satu putri, jadi satu match menghabiskan
+                     2 putra + 2 putri; court terpakai min(court, putra // 2,
+                     putri // 2), dan slotnya terbagi rata
+
+    Diadu dengan jadwal betulan pada tujuh setup - termasuk yang timpang ekstrem
+    (20+4, 6+14) dan yang ronde babaknya timpang (8/2/5) - angkanya cocok persis
+    di ketujuhnya.
+
+    Babak "open" dan "same_gender" sengaja membuat fungsi ini menyerah. Di sana
+    slotnya satu kolam bersama dan siapa yang mengisinya ditentukan optimizer,
+    bukan aturan babak; menebaknya lalu menyajikannya sebagai angka pasti akan
+    jadi kesalahan yang persis sama dengan yang sedang diperbaiki.
+    """
+    if not segments or men <= 0 or women <= 0:
+        return None
+    if any(rule not in ("men", "women", "mixed") for rule, _ in segments):
+        return None
+
+    slot = {"M": 0, "P": 0}
+    for rule, ronde in segments:
+        if rule == "men":
+            slot["M"] += ronde * 4 * min(courts, men // 4)
+        elif rule == "women":
+            slot["P"] += ronde * 4 * min(courts, women // 4)
+        else:                                   # mixed
+            c = min(courts, men // 2, women // 2)
+            slot["M"] += ronde * 2 * c
+            slot["P"] += ronde * 2 * c
+    return [
+        {"label": "putra", "size": men, "plays": round(slot["M"] / men, 1)},
+        {"label": "putri", "size": women, "plays": round(slot["P"] / women, 1)},
+    ]
+
+
 def analyze(
     n_players: int,
     courts: int,
@@ -483,6 +542,9 @@ def analyze(
     men: int | None = None,
     women: int | None = None,
     allowed_matchups: list[str] | None = None,
+    segments: list[tuple[str, int]] | None = None,
+    roster_men: int | None = None,
+    roster_women: int | None = None,
 ) -> CapacityReport:
     """Hitung kapasitas + batas matematis + rekomendasi konkret."""
 
@@ -527,6 +589,23 @@ def analyze(
     if men is not None and women is not None and men + women == n_players:
         shape = shape_budget(men, women, rounds * courts_used, allowed_matchups)
     opponent_ok = opponent_blind_ok and (shape is None or shape.feasible is not False)
+
+    # Jatah main per kelompok gender. Dihitung dari aturan babak, bukan dari
+    # jadwal - panel ini jalan SEBELUM ada jadwal, dan justru di situ gunanya:
+    # host masih bisa mengubah setupnya.
+    #
+    # Memakai roster_men/roster_women, BUKAN men/women. Kedua pemanggil sengaja
+    # mengosongkan men/women begitu ada babak putra atau putri, karena model
+    # bentuk tim di atas mengandaikan satu kolam peserta untuk seluruh meet.
+    # Perhitungan ini justru cuma berarti kalau kolamnya tidak satu, jadi ia
+    # butuh jumlah yang apa adanya. Dipisah alih-alih melonggarkan syarat itu:
+    # cabang gender_tak_terpakai juga bergantung padanya, dan melonggarkannya
+    # akan membuatnya memperingatkan "putri tidak muat di format" untuk meet
+    # yang justru punya babak putri sendiri.
+    groups = kapasitas_per_kelompok(roster_men or 0, roster_women or 0,
+                                    courts, segments)
+    if groups and len({g["plays"] for g in groups}) < 2:
+        groups = None                    # semua sama, tidak ada yang perlu dipisah
 
     # --- Rekomendasi -----------------------------------------------------
     ideal_players = 4 * courts
@@ -694,9 +773,20 @@ def analyze(
                     "warning",
                     f"{byes_per_round} orang duduk tiap ronde "
                     f"({rest_ratio * 100:.0f}%)",
-                    f"Rata-rata tiap peserta main {avg_plays:.1f} dari {rounds} "
-                    f"ronde, yaitu ~{playing_minutes:.0f} menit di lapangan dari "
-                    f"{duration_minutes} menit sewa.",
+                    # Rata-rata seluruh peserta menyesatkan begitu ada babak
+                    # putra/putri: pada 20 putra + 4 putri ia bilang "5,0 ronde"
+                    # sementara para putra main 3 dan para putri 10 - angka yang
+                    # tidak berlaku bagi satu orang pun di ruangan.
+                    (f"Jatah mainnya tidak sama: "
+                     + ", ".join(f"{g['size']} {g['label']} main {g['plays']} "
+                                 f"ronde" for g in groups)
+                     + f" dari {rounds} ronde acara. Selisihnya ditentukan "
+                     f"jumlah peserta tiap gender dibanding court dan ronde "
+                     f"babaknya, bukan oleh rotasi."
+                     if groups else
+                     f"Rata-rata tiap peserta main {avg_plays:.1f} dari {rounds} "
+                     f"ronde, yaitu ~{playing_minutes:.0f} menit di lapangan dari "
+                     f"{duration_minutes} menit sewa."),
                     f"Ini keputusan bisnis, bukan kesalahan setup: {courts} court "
                     f"menekan biaya, {courts_comfort} court menaikkan waktu main "
                     f"tapi menambah sewa. Buka panel Biaya & Margin untuk melihat "
@@ -775,6 +865,7 @@ def analyze(
         shape_supply=None if shape is None else shape.supply,
         shape_binding=None if shape is None else shape.binding,
         shape_shortfall=0 if shape is None else shape.shortfall,
+        groups=groups,
         issues=issues,
         verdict=verdict,
     )

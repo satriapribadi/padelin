@@ -548,7 +548,20 @@ async function runAnalyze() {
     const tile = statTile;
     const restCls = r.rest_ratio > 1 / 3 ? 'warn' : (r.rest_ratio > 0 ? '' : 'good');
     grid.appendChild(tile('Ronde', r.rounds, `${d.effective_round_minutes} mnt/ronde`));
-    grid.appendChild(tile('Main / orang', r.avg_plays_per_player, `${r.playing_minutes_per_player} menit`));
+    // Rata-rata seluruh peserta menggambarkan nol orang begitu ada babak
+    // putra/putri: 20 putra + 4 putri dengan babak putra/putri/mixed memberi
+    // "5.0" sementara para putra main 3 dan para putri 10. Kalau server bisa
+    // memisahkannya, rentangnya yang ditampilkan - dan kelompoknya disebut di
+    // baris satuan, karena angka tanpa konteks tidak berguna buat host.
+    if (r.groups && r.groups.length) {
+      const nilai = r.groups.map((g) => g.plays);
+      grid.appendChild(tile('Main / orang',
+        `${Math.min(...nilai)}-${Math.max(...nilai)}`,
+        r.groups.map((g) => `${g.label} ${g.plays}`).join(' · '), 'warn'));
+    } else {
+      grid.appendChild(tile('Main / orang', r.avg_plays_per_player,
+        `${r.playing_minutes_per_player} menit`));
+    }
     grid.appendChild(tile('Duduk / ronde', r.byes_per_round, pct(r.rest_ratio), restCls));
     grid.appendChild(tile('Partner unik', r.partner_unique_feasible ? 'Bisa' : 'Tidak',
       `maks ${r.max_unique_partner_rounds} ronde`, r.partner_unique_feasible ? 'good' : 'warn'));

@@ -733,6 +733,93 @@ def main() -> int:
             return "bersih"
         check("Tidak ada error JS selama sesi", no_errors)
 
+        # --- 13b. kartu "Main / orang" tidak boleh berbohong --------------
+        # Sengaja dijalankan PALING AKHIR dan di atas halaman yang dimuat
+        # ulang. Dua belas langkah sebelumnya meninggalkan court, durasi, dan
+        # babak dalam keadaan yang tidak bisa ditebak, dan ketika langkah ini
+        # dicoba di tengah, kegagalannya bukan tentang kartunya sama sekali -
+        # angkanya keluar dari setup lain. Memuat ulang lebih murah daripada
+        # membereskan keadaan satu per satu, dan aman di sini karena uji error
+        # JS sudah lewat (window.__errs ikut hilang saat reload).
+        # Rata-rata seluruh peserta menggambarkan nol orang begitu ada babak
+        # putra/putri. Diuji lewat kartu yang benar-benar ter-render, bukan
+        # lewat respons API: yang salah selama ini bukan angkanya di server,
+        # melainkan angka mana yang sampai ke mata host.
+        def kartu_main_per_orang():
+            b.js("location.reload(); true")
+            b.wait_for("document.querySelector('#preset option')",
+                       label="halaman dimuat ulang")
+            b.js("(() => { document.getElementById('bulk').value = "
+                 + json.dumps("\n".join(roster))
+                 + "; document.getElementById('parse-bulk').click(); })(); true")
+            b.wait_for("document.querySelectorAll('#ptable tbody tr').length === "
+                       f"{len(roster)}", label="roster terisi lagi")
+
+            # Ketimpangan dibuat lewat JUMLAH RONDE tiap babak, bukan dengan
+            # mengganti roster. Roster uji standar seimbang gendernya, dan di
+            # roster seimbang kedua kelompok memang dapat jatah yang sama -
+            # server benar kalau tidak memisahnya. Babak 10/2/3 memberi
+            # ketimpangan yang sama tanpa menyentuh peserta sama sekali.
+            #
+            # JANGAN pakai tombol "Kosongkan semua": ia memanggil confirm(),
+            # dan dialog native memblokir renderer sehingga Runtime.evaluate
+            # tidak pernah kembali - seluruh sesi CDP ikut mati, bukan cuma
+            # langkah ini. Tombol hapus per-baris tidak berdialog.
+            b.js("""(() => {
+              const set = (id, v) => {
+                const e = document.getElementById(id);
+                e.value = v;
+                e.dispatchEvent(new Event('change', {bubbles: true}));
+              };
+              set('courts', 2); set('duration', 120);
+              document.querySelectorAll('#segments .seg-editor .x')
+                .forEach((x) => x.click());
+              for (const [lab, rn, rule] of [['Putra', 10, 'men'],
+                                             ['Putri', 2, 'women'],
+                                             ['Mixed', 3, 'mixed']]) {
+                document.getElementById('add-seg').click();
+                const baris = document.querySelectorAll('#segments .seg-editor');
+                const s = baris[baris.length - 1];
+                // Urutan anak baris babak: gagang, nama, ronde, aturan, ...
+                s.children[1].value = lab;
+                s.children[2].value = rn;
+                s.children[3].value = rule;
+                s.children[3].dispatchEvent(
+                    new Event('change', {bubbles: true}));
+              }
+              // Panel dikosongkan supaya penantian di bawah menunggu analisa
+              // BARU, bukan yang sudah terpampang dari langkah sebelumnya.
+              // Tanpa ini penantiannya lolos seketika dan yang terbaca panel
+              // basi - analisa ulangnya ter-debounce 250ms.
+              document.getElementById('analysis').innerHTML = '';
+            })(); true""")
+            b.wait_for("document.querySelectorAll('#analysis .stat').length >= 5",
+                       timeout=8, label="panel analisa terisi ulang")
+            kartu = b.js("""(() => {
+              for (const s of document.querySelectorAll('#analysis .stat')) {
+                if (s.querySelector('.k').textContent.includes('Main / orang'))
+                  return JSON.stringify([s.querySelector('.v').textContent.trim(),
+                                         s.querySelector('.s').textContent.trim()]);
+              }
+              return JSON.stringify(['(tidak ketemu)', '']);
+            })()""")
+            nilai, satuan = json.loads(kartu)
+            # Bersihkan babak sebelum menilai, supaya kegagalan assert di bawah
+            # tidak meninggalkan halaman dalam keadaan lain.
+            b.js("""document.querySelectorAll('#segments .seg-editor .x')
+                 .forEach((x) => x.click()); true""")
+
+            # 10 ronde babak putra lawan 2 ronde babak putri: para putra main
+            # jauh lebih banyak, dan menyajikannya sebagai satu rata-rata
+            # tunggal memberi angka yang tidak berlaku bagi siapa pun.
+            assert satuan, f"kartu tanpa satuan/konteks: {nilai!r}"
+            assert "putra" in satuan and "putri" in satuan, \
+                f"kelompoknya tidak disebut: {nilai!r} / {satuan!r}"
+            assert "-" in nilai, f"masih satu angka tunggal: {nilai!r}"
+            return f"'{nilai}' - {satuan}"
+        check("Kartu Main / orang memisah per kelompok babak",
+              kartu_main_per_orang)
+
         # --- 14. bersih-bersih -------------------------------------------
         def cleanup():
             if not nonlocal_created:
