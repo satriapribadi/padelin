@@ -431,9 +431,15 @@ class TestExports(unittest.TestCase):
         laporan yang sama: layar 900px memberi satu baris berisi delapan, cetak
         memberi 7+1. Host melihat yang satu, peserta memegang yang lain.
 
+        Delapan kartu dipecah jadi dua baris berimbang, bukan dipaksa sebaris:
+        sebaris memberi 83px per kartu sehingga labelnya membungkus tiga baris
+        dan "Rp 24.750" yang butuh 75px tidak muat di 66px isi. Empat kolom
+        memberi 172px - semua label dan nilai muat satu baris, dan tidak ada
+        kartu yatim.
+
         Yang dijaga di sini jumlah KOLOM yang dikirim ke CSS, karena itu yang
-        menentukan semuanya muat sebaris di cetakan - tata letak sebenarnya
-        diperiksa dengan merender, bukan oleh uji ini.
+        menentukan susunannya - tata letak sebenarnya diperiksa dengan
+        merender, bukan oleh uji ini.
         """
         players = [Player(id=i, name=f"P{i}") for i in range(8)]
         cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
@@ -444,23 +450,18 @@ class TestExports(unittest.TestCase):
         # Dihitung per pembuka div, bukan dengan prefiks "class='tile": itu ikut
         # mencocoki kontainer <div class='tiles'> dan hasilnya kelebihan satu.
         def n_kartu(html):
-            return html.count("<div class='tile'>") + html.count(
-                "<div class='tile wide'>")
+            return html.count("<div class='tile'>")
 
         h = build_html(sch, title="Uji", fee=24_750)
         self.assertEqual(n_kartu(h), 8,
                          "jumlah kartu berubah - ambang di uji ini ikut basi")
-        # 8 kartu + kartu fee yang mengambil dua kolom = 9 kolom.
-        self.assertIn("--n:9", h)
-        self.assertIn("class='tile wide'", h,
-                      "kartu fee tidak diberi kolom lebih, padahal nilainya "
-                      "yang terpanjang")
+        self.assertIn("--n:4", h, "delapan kartu tidak dipecah jadi 4+4")
 
-        # Tanpa fee: tidak ada kartu lebar, jadi kolomnya sebanyak kartunya.
+        # Tujuh kartu masih muat sebaris dengan 96px per kartu - itu lebar
+        # rancangan aslinya, jadi jangan dipecah tanpa sebab.
         tanpa = build_html(sch, title="Uji")
         self.assertEqual(n_kartu(tanpa), 7)
         self.assertIn("--n:7", tanpa)
-        self.assertNotIn("tile wide", tanpa)
 
     def test_html_shows_fee_per_player(self):
         """Fee itu hal pertama yang dicari peserta saat laporan dibagikan."""
