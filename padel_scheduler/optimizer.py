@@ -175,6 +175,16 @@ class Rules:
     # mengatur tim seperti apa boleh berhadapan dengan tim seperti apa.
     allowed_matchups: set[str] = field(default_factory=set)
 
+    def eligible_at(self, r: int, p: int) -> bool:
+        """Apakah p berhak turun di ronde r? Tanpa babak, semua orang berhak.
+
+        Dipakai di jalur panas _set_bye, jadi sengaja sesederhana mungkin: satu
+        pemeriksaan panjang lalu satu keanggotaan set.
+        """
+        if r >= len(self.round_eligible):
+            return True
+        return p in self.round_eligible[r]
+
     def pref_violations(self, quad: list[int]) -> list[tuple[int, str]]:
         """Preferensi mana saja yang dilanggar susunan court ini."""
         if not self.court_pref:
@@ -506,9 +516,26 @@ class ScheduleState:
         cur = self.bye_count[p]
 
         # Tetangga ronde sebelum & sesudah (untuk deteksi duduk beruntun).
-        prev_bye = p in self.byes[r - 1] if r > 0 else False
-        next_bye = p in self.byes[r + 1] if r + 1 < self.n_rounds else False
-        neighbours = (1 if prev_bye else 0) + (1 if next_bye else 0)
+        #
+        # Hanya dihitung kalau p BERHAK turun di kedua ronde. Duduk di ronde
+        # yang memang bukan babaknya tidak bisa dihindari gerakan apa pun, jadi
+        # mendendanya cuma menambah tetapan - dan di batas babak ia menjadi
+        # bias yang nyata: seorang putra yang didudukkan di ronde terakhir babak
+        # putra dinilai lebih mahal daripada di ronde tengah, semata karena
+        # ronde sesudahnya babak putri tempat ia pasti duduk. Tidak ada dasar
+        # keadilannya, dan optimizer jadi menghindari sesuatu yang tidak
+        # merugikan siapa pun.
+        #
+        # Aturan yang sama dipakai _build_stats supaya angka yang dioptimasi dan
+        # angka yang dilaporkan tidak berbeda lagi.
+        neighbours = 0
+        if self.rules.eligible_at(r, p):
+            if (r > 0 and p in self.byes[r - 1]
+                    and self.rules.eligible_at(r - 1, p)):
+                neighbours += 1
+            if (r + 1 < self.n_rounds and p in self.byes[r + 1]
+                    and self.rules.eligible_at(r + 1, p)):
+                neighbours += 1
 
         # Dihitung SEBELUM set byes[r] diubah: rentetan kiri & kanan harus
         # dibaca dari keadaan yang masih utuh, baik saat menyalakan maupun saat

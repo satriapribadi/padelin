@@ -1301,9 +1301,8 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
                 plays[p] += 1
     byes = {pid: st.bye_count[pid] for pid in ids}
 
-    b2b = 0
-    for r in range(n_rounds - 1):
-        b2b += len(st.byes[r] & st.byes[r + 1])
+    # Duduk-beruntun dihitung setelah blok giliran di bawah, karena penyebutnya
+    # butuh berapa ronde tiap orang benar-benar berhak turun.
 
     # Giliran: berapa kali seseorang turun untuk kali ke-(k+1) padahal masih ada
     # orang lain yang sedang duduk dan belum kebagian kali ke-k. Dihitung ulang
@@ -1331,11 +1330,13 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     menunggu = {pid: 0 for pid in ids}
     ronde_berhak = {pid: 0 for pid in ids}
     main_pertama: dict[int, int] = {}
+    duduk_berhak: list[set[int]] = []
     for r in range(n_rounds):
         turun = {p for q in st.matches[r] for p in q}
         elig = (st.rules.round_eligible[r]
                 if r < len(st.rules.round_eligible) else None)
         berhak = [p for p in ids if elig is None or p in elig or p in turun]
+        duduk_berhak.append({p for p in berhak if p not in turun})
         if turun:
             tertinggal = min((sudah[p] for p in berhak if p not in turun),
                              default=None)
@@ -1412,8 +1413,21 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     # Batas bawahnya: pemain yang main m dari R ronde punya R-m ronde duduk yang
     # bisa dipecah ke paling banyak m+1 rentetan, jadi sisanya pasti bersebelahan.
     # Batas atasnya: seluruh ronde duduknya menyatu jadi satu rentetan.
-    b2b_floor = sum(max(0, (n_rounds - plays[p]) - (plays[p] + 1)) for p in ids)
-    b2b_ceil = sum(max(0, (n_rounds - plays[p]) - 1) for p in ids)
+    #
+    # R di sini ronde yang PESERTANYA BERHAK turun, dan pasangan ronde yang
+    # dihitung hanya yang ia berhak di keduanya. Tanpa itu cacat saturasi yang
+    # sama kambuh lewat babak alih-alih lewat jumlah court: pada 8 putra + 8
+    # putri di 2 court dengan babak putra lalu babak putri, para putri duduk
+    # sepanjang babak putra dan b2b mentahnya 80 dari atap 80 - denda penuh 1,0
+    # untuk jadwal yang sebenarnya tidak mendudukkan siapa pun di ronde yang ia
+    # berhak mainkan. Dihitung dengan menghormati kelayakan, b2b-nya 0 dari atap
+    # 0. Meet tanpa babak tidak berubah sama sekali: tiap orang berhak di semua
+    # ronde, jadi kedua hitungan identik (diukur: 23 lawan 23, dan 15 lawan 15).
+    b2b = sum(len(duduk_berhak[r] & duduk_berhak[r + 1])
+              for r in range(n_rounds - 1))
+    b2b_floor = sum(max(0, (ronde_berhak[p] - plays[p]) - (plays[p] + 1))
+                    for p in ids)
+    b2b_ceil = sum(max(0, (ronde_berhak[p] - plays[p]) - 1) for p in ids)
     b2b_pen = min(1.0, max(0, b2b - b2b_floor) / max(1, b2b_ceil - b2b_floor))
 
     # Keadilan giliran, dua sisi yang berbeda dan dua-duanya perlu: berapa kali
@@ -1872,6 +1886,38 @@ def _build_once(players: list[Player], config: Config,
                     f"Segmen '{seg.label}': {sitting} pemain otomatis istirahat "
                     f"karena tidak masuk kriteria gender."
                 )
+
+    # Babak berurutan membuat peserta babak belakangan menunggu lama sebelum
+    # match pertamanya, dan itu tidak terbaca di angka mana pun.
+    #
+    # Dulu terhukum secara tidak sengaja: denda duduk-beruntun menghitung ronde
+    # babak lain sebagai duduk, jadi jadwal berurutan selalu kena denda penuh.
+    # Itu sinyal yang salah dengan dua cara - tersaturasi, jadi jadwal rapi dan
+    # jadwal kacau kehilangan 5 poin yang sama, dan tersembunyi, jadi host tidak
+    # pernah tahu apa yang membuat skornya turun maupun apa obatnya. Sejak denda
+    # itu menghormati kelayakan, hukuman diam-diamnya hilang; ini penggantinya,
+    # dan bentuknya kalimat dengan angka, bukan potongan skor.
+    if len(segments) > 1 and not config.interleave_segments:
+        menit_ronde = round_minutes
+        # Ronde pertama tempat tiap peserta BERHAK turun; yang dicari peserta
+        # yang paling lama menunggunya. Bukan "ronde pertama yang babaknya
+        # terbatas" - di babak putra lalu putri, itu ronde 1 dan angkanya nol,
+        # padahal yang menunggu justru para putri sampai ronde 7.
+        pertama_berhak: dict[int, int] = {}
+        for r, (seg, _) in enumerate(round_plan(segments,
+                                                config.interleave_segments)):
+            for p in _eligible_for(seg.rule, local_players):
+                pertama_berhak.setdefault(p, r)
+        tunggu = max(pertama_berhak.values(), default=0)
+        if tunggu > 0:
+            notes.append(
+                f"Babak dijalankan berurutan sebagai blok, jadi peserta babak "
+                f"belakangan menunggu sampai ronde {tunggu + 1} - sekitar "
+                f"{tunggu * menit_ronde} menit - sebelum match pertamanya, lalu "
+                f"peserta babak awal duduk selama sisa acara. Jumlah main tiap "
+                f"orang tetap sama. Nyalakan 'Selang-seling babak' kalau mau "
+                f"ronde tiap babak tersebar sepanjang acara."
+            )
 
     # --- Optimasi --------------------------------------------------------
     say(0.10, f"Mengoptimasi {total_rounds} ronde")

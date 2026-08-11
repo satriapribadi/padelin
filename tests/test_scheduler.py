@@ -1662,6 +1662,70 @@ class TestGiliranBerurutan(unittest.TestCase):
             " ".join(sch.notes),
             f"peringatan giliran untuk jadwal yang sempurna: {sch.notes}")
 
+    def test_duduk_beruntun_tidak_menghukum_babak_lain(self):
+        """Duduk sepanjang babak orang lain bukan rotasi yang buruk.
+
+        b2b menghitung tiap pasang ronde-duduk yang bersebelahan. Tanpa
+        menyaring kelayakan, para putri yang duduk sepanjang babak putra
+        menyumbang b2b sebesar ATAP-nya sendiri, jadi dendanya persis 1,0 - dan
+        begitu tersaturasi ia berhenti jadi ukuran: jadwal rapi dan jadwal kacau
+        kehilangan 5 poin yang sama. Itu cacat yang sama persis dengan yang
+        dulu diperbaiki untuk penyebut b2b, cuma kambuh lewat babak alih-alih
+        lewat jumlah court.
+
+        Di roster ini tiap babak memuat 8 orang untuk 8 slot, jadi tidak ada
+        satu pun peserta yang duduk di ronde yang ia berhak mainkan - dendanya
+        harus nol, dan skornya harus sama dengan versi selang-selingnya.
+        """
+        players = make_players(16, genders=["M"] * 8 + ["F"] * 8)
+
+        def bangun(selang):
+            cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                         warmup_minutes=0, mode="americano", seed=42,
+                         effort=20_000, attempts=1,
+                         segments=[Segment("Putra", 6, "men"),
+                                   Segment("Putri", 6, "women")],
+                         interleave_segments=selang)
+            return build_schedule(players, cfg)
+
+        urut, selang = bangun(False), bangun(True)
+        self.assertEqual(urut.stats.back_to_back_byes, 0,
+                         f"duduk karena babak lain dihitung beruntun: "
+                         f"{urut.stats.back_to_back_byes}")
+        self.assertEqual(
+            urut.stats.quality_score, selang.stats.quality_score,
+            f"babak berurutan masih terhukum diam-diam: "
+            f"{urut.stats.quality_score} vs {selang.stats.quality_score}")
+
+    def test_babak_berurutan_dikatakan_bukan_didenda(self):
+        """Menunggu babaknya tiba harus DIKATAKAN, dengan angkanya.
+
+        Skor tidak lagi memotong diam-diam untuk ini, jadi satu-satunya cara
+        host tahu adalah catatannya - dan catatan itu harus menyebut ronde ke
+        berapa dan berapa menit, bukan sekadar menyarankan sesuatu.
+        """
+        players = make_players(16, genders=["M"] * 8 + ["F"] * 8)
+        seg = [Segment("Putra", 6, "men"), Segment("Putri", 6, "women")]
+
+        def catatan(selang):
+            cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                         warmup_minutes=0, mode="americano", seed=42,
+                         effort=20_000, attempts=1, segments=seg,
+                         interleave_segments=selang)
+            return [c for c in build_schedule(players, cfg).notes
+                    if "berurutan sebagai blok" in c]
+
+        urut = catatan(False)
+        self.assertEqual(len(urut), 1, f"catatan tidak muncul: {urut}")
+        # 12 ronde dalam 120 menit berarti 10 menit per ronde, dan para putri
+        # baru turun di ronde 7 - jadi 60 menit menunggu.
+        self.assertIn("ronde 7", urut[0], urut[0])
+        self.assertIn("60 menit", urut[0], urut[0])
+        self.assertIn("Selang-seling babak", urut[0],
+                      "obatnya harus disebut, bukan cuma masalahnya")
+        self.assertEqual(catatan(True), [],
+                         "selang-seling tidak boleh ikut diperingatkan")
+
     def test_giliran_di_babak_terbuka_tidak_berubah(self):
         """Meet tanpa babak: tiap orang berhak di semua ronde, angkanya sama.
 
