@@ -85,5 +85,8 @@
       }
     ],
     "afterPack": "electron/after-pack.js"
+  },
+  "allowScripts": {
+    "electron@33.4.11": true
   }
 }
