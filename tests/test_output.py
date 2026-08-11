@@ -421,7 +421,7 @@ class TestExports(unittest.TestCase):
                      allowed_matchups=["LL-LL", "LP-LP"])
         sch = build_schedule(players, cfg)
 
-        kolam = kolam_partner(sch)
+        kolam = kolam_partner(sch.players, sch.config.allowed_matchups)
         putri = [p.id for p in players if p.gender == "F"]
         putra = [p.id for p in players if p.gender == "M"]
         self.assertTrue(all(kolam[p] == len(putra) for p in putri),

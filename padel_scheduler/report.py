@@ -44,8 +44,11 @@ def _bentuk(g1: str | None, g2: str | None) -> str | None:
     return "LL" if g1 == g2 == "M" else "PP" if g1 == g2 == "F" else "LP"
 
 
-def kolam_partner(schedule: Schedule) -> dict[int, int]:
+def kolam_partner(players, allowed_matchups) -> dict[int, int]:
     """Berapa calon partner yang SAH untuk tiap peserta menurut format.
+
+    Menerima daftar peserta dan format, bukan Schedule: penjadwal memanggilnya
+    saat catatan disusun, dan di titik itu jadwalnya belum dirakit.
 
     Format yang dibatasi memotong kolam partner jauh lebih dalam daripada yang
     terlihat dari jumlah peserta. Contoh nyata dari host: 5 putra + 3 putri
@@ -63,10 +66,10 @@ def kolam_partner(schedule: Schedule) -> dict[int, int]:
     partnernya seluruh peserta lain, dan hitungan per-babak yang biasa sudah
     menjawabnya.
     """
-    izin = set(schedule.config.allowed_matchups or ())
+    izin = set(allowed_matchups or ())
     if not izin or izin == set(MATCHUPS):
         return {}
-    g = {p.id: p.gender for p in schedule.players}
+    g = {p.id: p.gender for p in players}
     if any(v not in ("M", "F") for v in g.values()):
         return {}
 
@@ -167,7 +170,8 @@ def batas_keunikan(schedule: Schedule) -> dict:
     # dilaporkan tetap kendala yang paling mengikat.
     main = schedule.stats.plays_per_player
     gender = {p.id: p.gender for p in schedule.players}
-    for p, muat in kolam_partner(schedule).items():
+    for p, muat in kolam_partner(schedule.players,
+                                 schedule.config.allowed_matchups).items():
         r = main.get(p, 0)
         if r > muat and r - muat > lebih["partner"]:
             lebih["partner"] = r - muat

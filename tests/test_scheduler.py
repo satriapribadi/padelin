@@ -1383,6 +1383,41 @@ class TestPesertaTakTerpakai(unittest.TestCase):
         self.assertNotIn("Penyebabnya rotasi partner", giliran[0],
                          "masih menuduh rotasi padahal formatnya yang mengikat")
 
+    def test_partner_terpaksa_dijelaskan_di_catatan_juga(self):
+        """Ketiga permukaan harus menceritakan hal yang sama.
+
+        Penjelasan partner sempat cuma sampai ke laporan cetak dan teks share.
+        `notes` yang muncul di layar jadwal dan di info debug - permukaan yang
+        paling sering dilihat host - justru tidak kebagian, jadi angka yang sama
+        punya tiga cerita berbeda tergantung di mana dibacanya.
+
+        analyze() punya catatan partner sendiri tapi hitungannya buta gender:
+        ia membandingkan ronde main dengan jumlah peserta dikurangi satu, jadi
+        diam persis saat formatnya yang memotong kolam.
+        """
+        roster = [(3.0, "F"), (2.0, "M"), (2.0, "F"), (4.0, "M"),
+                  (3.0, "M"), (2.0, "F"), (3.0, "M"), (2.0, "M")]
+        players = [Player(id=i + 1, name=f"P{i+1}", rating=r, gender=g)
+                   for i, (r, g) in enumerate(roster)]
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=20_000, attempts=1,
+                     allowed_matchups=["LL-LL", "LP-LP"])
+        sch = build_schedule(players, cfg)
+        self.assertGreater(sch.stats.partner_repeat_pairs, 0,
+                           "prasyarat: partner memang berulang")
+        cocok = [c for c in sch.notes if "calon partner yang sah" in c]
+        self.assertEqual(len(cocok), 1, f"catatan partner hilang: {sch.notes}")
+        self.assertIn("3 peserta putri", cocok[0], cocok[0])
+        self.assertIn("5 calon partner", cocok[0], cocok[0])
+        self.assertIn("batas bawahnya", cocok[0], cocok[0])
+
+        # Tanpa batasan format kolam partnernya utuh, jadi jangan berkomentar.
+        polos = build_schedule(players, Config(
+            courts=1, duration_minutes=120, round_minutes=10, warmup_minutes=0,
+            mode="americano", seed=42, effort=20_000, attempts=1))
+        self.assertFalse([c for c in polos.notes if "calon partner yang sah" in c])
+
     def test_catatan_giliran_tetap_menuduh_rotasi_kalau_memang_itu(self):
         """Tanpa batasan format, penjelasan lamanya yang benar."""
         cfg = Config(courts=1, duration_minutes=120, round_minutes=8,

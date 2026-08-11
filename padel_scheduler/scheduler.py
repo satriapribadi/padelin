@@ -43,6 +43,7 @@ from .models import (
     matchup_code,
     team_shape,
 )
+from .report import kolam_partner
 from .optimizer import (
     Rules,
     ScheduleState,
@@ -2217,6 +2218,43 @@ def _build_once(players: list[Player], config: Config,
                 f"menyisakan lawan yang sah untuk mereka - jadwal tetap dibuat "
                 f"karena membiarkan mereka tanpa lawan berarti menghapus "
                 f"peserta dari ronde itu."
+            )
+
+    # Partner berulang yang dipaksa FORMAT. analyze() punya catatannya sendiri
+    # ("Partner pasti ada yang berulang") tapi hitungannya buta gender: ia
+    # membandingkan ronde main dengan jumlah peserta dikurangi satu, jadi ia
+    # diam persis saat formatnya yang memotong kolam. Pada 5 putra + 3 putri
+    # dengan "putra vs putra" dan "campur vs campur" saja, tiap putri cuma
+    # punya lima calon partner sementara mainnya enam ronde - tiga pasang
+    # berulang di jadwal itu batas bawahnya, bukan kelalaian.
+    #
+    # Ditulis di sini, bukan cuma di laporan cetak dan teks share: `notes` yang
+    # muncul di layar jadwal dan di info debug, dan tiga permukaan yang
+    # menceritakan hal berbeda tentang angka yang sama lebih membingungkan
+    # daripada satu pun tidak menjelaskan.
+    if stats.partner_repeat_pairs and not any(
+            n.startswith("Partner pasti ada yang berulang") for n in notes):
+        muat = kolam_partner(final_players, config.allowed_matchups)
+        gmap_p = {p.id: p.gender for p in final_players}
+        terikat = [(stats.plays_per_player.get(p, 0) - k, p, k)
+                   for p, k in muat.items()
+                   if stats.plays_per_player.get(p, 0) > k]
+        if terikat:
+            _, pid, batas = max(terikat)
+            label = ("putri" if gmap_p.get(pid) == "F"
+                     else "putra" if gmap_p.get(pid) == "M" else "peserta")
+            jumlah = sum(1 for p in muat
+                         if gmap_p.get(p) == gmap_p.get(pid)
+                         and stats.plays_per_player.get(p, 0) > muat[p])
+            notes.append(
+                f"Partner pasti ada yang berulang: format yang Anda pilih "
+                f"membuat {jumlah} peserta {label} hanya punya {batas} calon "
+                f"partner yang sah, sedangkan jadwal ini memberi "
+                f"{stats.plays_per_player.get(pid, 0)} ronde main. "
+                f"{stats.partner_repeat_pairs} pasang berulang di jadwal ini "
+                f"adalah batas bawahnya, bukan kelemahan algoritma. Yang "
+                f"menggesernya cuma dua: izinkan lebih banyak format match, "
+                f"atau ubah komposisi peserta."
             )
 
     # Giliran yang belum berurutan. Host menyadarinya lewat satu peserta yang
