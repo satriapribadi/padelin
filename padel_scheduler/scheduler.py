@@ -1397,7 +1397,41 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     o_pen = max(0.0, actual_oppo_excess - min_oppo_excess) / total_oppo_slots
 
     play_vals = list(plays.values())
-    spread = (max(play_vals) - min(play_vals)) if play_vals else 0
+
+    # Kerataan jatah main diukur DI DALAM kelompok yang memperebutkan slot yang
+    # sama, bukan lintas seluruh peserta.
+    #
+    # Dua orang yang berhak turun di ronde yang sama persis memang bersaing
+    # memperebutkan slot yang sama, jadi selisih main di antara mereka adalah
+    # kesalahan rotasi dan harus didenda. Selisih ANTAR kelompok bukan: ia
+    # ditentukan berapa slot yang tersedia untuk tiap kelompok, dan itu hasil
+    # komposisi roster ditambah aturan babak. Tidak ada jadwal yang bisa
+    # mengubahnya.
+    #
+    # Diukur pada 7 meet bersegmen, selisih di dalam kelompok selalu 0 atau 1 -
+    # rotasinya memang sudah rapi - sementara selisih global 2 sampai 7, dan
+    # dendanya tersaturasi di 1,0 pada enam di antaranya. Dengan bobot 15, itu
+    # potongan terbesar setelah keunikan, diberikan untuk sesuatu yang tidak
+    # bisa diperbaiki siapa pun; dan begitu tersaturasi ia berhenti membedakan
+    # jadwal rapi dari jadwal kacau. Contoh terjelasnya 20 putra + 4 putri
+    # dengan babak putra/putri/mixed: para putra main 3 ronde dan para putri 10,
+    # selisih di dalam kelompok NOL, dan skornya tetap kehilangan 15 poin penuh.
+    #
+    # Ketimpangan antar kelompok tidak disembunyikan - ia dikatakan sebagai
+    # catatan dengan angkanya, tempat host bisa menindaklanjutinya. Di meet
+    # tanpa babak semua orang satu kelompok, jadi angkanya persis sama seperti
+    # sebelumnya.
+    kelompok_main: dict[tuple, list[int]] = {}
+    for pid in ids:
+        sig = tuple(r for r in range(n_rounds)
+                    if r >= len(st.rules.round_eligible)
+                    or pid in st.rules.round_eligible[r])
+        kelompok_main.setdefault(sig, []).append(pid)
+    spread = max(
+        (max(plays[p] for p in g) - min(plays[p] for p in g)
+         for g in kelompok_main.values()),
+        default=0,
+    )
     bye_pen = min(1.0, spread / 3.0)
 
     # Duduk-beruntun diukur relatif terhadap rentangnya yang benar-benar bisa
@@ -2082,6 +2116,45 @@ def _build_once(players: list[Player], config: Config,
             "hampir selalu berarti setupnya yang perlu diubah - lihat catatan "
             "lain di daftar ini untuk sebabnya."
         )
+
+    # Jatah main yang timpang ANTAR kelompok babak. Skor kualitas sengaja tidak
+    # lagi mendendanya - tidak ada jadwal yang bisa mengubahnya, dan dendanya
+    # dulu tersaturasi sehingga berhenti membedakan apa pun - jadi ini
+    # satu-satunya tempat host mendengarnya, dan karena itu angkanya harus
+    # angka sebenarnya.
+    #
+    # Yang selama ini muncul justru menyesatkan: analyze() buta babak dan
+    # melaporkan "rata-rata tiap peserta main 5.0 dari 15 ronde" untuk meet 20
+    # putra + 4 putri, padahal para putra main 3 dan para putri 10. Rata-rata
+    # itu tidak berlaku bagi satu peserta pun.
+    if len(segments) > 1 and stats.plays_per_player:
+        plan_note = round_plan(segments, config.interleave_segments)
+        elig_note = [set(_eligible_for(s.rule, players)) for s, _ in plan_note]
+        kelompok: dict[tuple, list[Player]] = {}
+        for p in players:
+            sig = tuple(i for i in range(len(elig_note)) if p.id in elig_note[i])
+            kelompok.setdefault(sig, []).append(p)
+        if len(kelompok) > 1:
+            rincian = []
+            for anggota in sorted(kelompok.values(), key=len, reverse=True):
+                m = [stats.plays_per_player.get(p.id, 0) for p in anggota]
+                gender = {p.gender for p in anggota}
+                nama = ("putra" if gender == {"M"} else
+                        "putri" if gender == {"F"} else "peserta")
+                rentang = (f"{min(m)}" if min(m) == max(m)
+                           else f"{min(m)}-{max(m)}")
+                rincian.append(f"{len(anggota)} {nama} main {rentang} ronde")
+            rerata = [sum(stats.plays_per_player.get(p.id, 0) for p in g) / len(g)
+                      for g in kelompok.values()]
+            if max(rerata) - min(rerata) >= 2:
+                notes.append(
+                    "Jatah main tidak sama antar babak: " + "; ".join(rincian)
+                    + ". Selisihnya datang dari berapa slot yang tersedia untuk "
+                    "tiap kelompok - jumlah peserta tiap gender dibanding court "
+                    "dan ronde babaknya - bukan dari rotasi, jadi tidak ada "
+                    "jadwal yang bisa meratakannya. Yang menggeser angkanya: "
+                    "ubah jumlah ronde tiap babak, atau ubah komposisi peserta."
+                )
 
     final_players = sorted(players, key=lambda x: x.id)
     if tier_of:

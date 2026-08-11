@@ -1726,6 +1726,85 @@ class TestGiliranBerurutan(unittest.TestCase):
         self.assertEqual(catatan(True), [],
                          "selang-seling tidak boleh ikut diperingatkan")
 
+    def test_jatah_main_dinilai_di_dalam_kelompoknya(self):
+        """Selisih main antar babak bukan kesalahan rotasi.
+
+        20 putra + 4 putri dengan babak putra/putri/mixed: para putra main 3
+        ronde dan para putri 10. Itu aritmetika slot, bukan rotasi yang buruk -
+        babak putri cuma bisa mengisi satu court karena putrinya empat, dan
+        babak mixed butuh satu putri per tim. Tidak ada jadwal yang bisa
+        meratakannya.
+
+        Di dalam tiap kelompok rotasinya justru sempurna: kedua puluh putra main
+        sama banyak, keempat putri juga. Dendanya harus melihat itu, bukan
+        selisih globalnya - kalau tidak, jadwal terbaik yang mungkin kehilangan
+        15 poin penuh dan skornya berhenti bisa membedakan apa pun.
+        """
+        players = make_players(24, genders=["M"] * 20 + ["F"] * 4)
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=20_000, attempts=1,
+                     segments=[Segment("Putra", 5, "men"),
+                               Segment("Putri", 5, "women"),
+                               Segment("Mixed", 5, "mixed")])
+        sch = build_schedule(players, cfg)
+        main = sch.stats.plays_per_player
+        pria = [main[p.id] for p in players if p.gender == "M"]
+        wanita = [main[p.id] for p in players if p.gender == "F"]
+
+        # Rotasi di dalam kelompok memang rapi - itu prasyarat uji ini.
+        self.assertLessEqual(max(pria) - min(pria), 1, f"putra: {sorted(pria)}")
+        self.assertLessEqual(max(wanita) - min(wanita), 1,
+                             f"putri: {sorted(wanita)}")
+        # Selisih antar kelompok besar dan memang tak terhindarkan.
+        self.assertGreaterEqual(min(wanita) - max(pria), 2,
+                                f"prasyarat tidak terpenuhi: {sorted(main.values())}")
+        # ...dan skornya tidak boleh dihukum untuk itu. Denda spread penuh
+        # berarti kehilangan 15 poin; ambang ini jauh di atasnya.
+        self.assertGreater(
+            sch.stats.quality_score, 78.0,
+            f"jadwal terbaik yang mungkin masih terhukum: "
+            f"{sch.stats.quality_score}")
+
+    def test_ketimpangan_antar_babak_dikatakan_dengan_angkanya(self):
+        """Karena skor tidak lagi mendendanya, catatannya yang harus menyebutkan.
+
+        Dan angkanya harus angka sebenarnya: analyze() buta babak dan melaporkan
+        "rata-rata tiap peserta main 5.0" untuk roster ini, padahal tidak ada
+        satu peserta pun yang main 5 ronde.
+        """
+        players = make_players(24, genders=["M"] * 20 + ["F"] * 4)
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=20_000, attempts=1,
+                     segments=[Segment("Putra", 5, "men"),
+                               Segment("Putri", 5, "women"),
+                               Segment("Mixed", 5, "mixed")])
+        sch = build_schedule(players, cfg)
+        cocok = [c for c in sch.notes if "Jatah main tidak sama antar babak" in c]
+        self.assertEqual(len(cocok), 1, f"catatan tidak muncul: {sch.notes}")
+        main = sch.stats.plays_per_player
+        pria = max(main[p.id] for p in players if p.gender == "M")
+        wanita = min(main[p.id] for p in players if p.gender == "F")
+        self.assertIn(f"20 putra main {pria} ronde", cocok[0], cocok[0])
+        self.assertIn(f"4 putri main {wanita} ronde", cocok[0], cocok[0])
+
+    def test_meet_tanpa_babak_tetap_dinilai_lintas_semua(self):
+        """Tanpa babak semua orang satu kelompok - angkanya tidak boleh berubah.
+
+        Pengelompokan kelayakan tidak boleh diam-diam melonggarkan meet biasa:
+        di situ tiap orang berhak di semua ronde, jadi 'di dalam kelompok' dan
+        'lintas semua peserta' adalah hal yang sama.
+        """
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=20_000, attempts=1)
+        sch = build_schedule(make_players(14), cfg)
+        main = list(sch.stats.plays_per_player.values())
+        self.assertLessEqual(
+            max(main) - min(main), 1,
+            f"jatah main tidak merata di meet tanpa babak: {sorted(main)}")
+
     def test_giliran_di_babak_terbuka_tidak_berubah(self):
         """Meet tanpa babak: tiap orang berhak di semua ronde, angkanya sama.
 
