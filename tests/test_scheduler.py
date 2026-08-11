@@ -1377,11 +1377,44 @@ class TestPesertaTakTerpakai(unittest.TestCase):
         sch = build_schedule(players, cfg)
         giliran = [c for c in sch.notes if c.startswith("Giliran belum")]
         self.assertEqual(len(giliran), 1, f"catatan giliran hilang: {sch.notes}")
-        self.assertIn("format yang dibatasi", giliran[0], giliran[0])
-        self.assertIn("Memperpendek durasi per ronde tidak mengubah ini",
+        self.assertIn("dipaksa format", giliran[0], giliran[0])
+        self.assertIn("Memperpendek durasi per ronde tidak mengubah bagian itu",
                       giliran[0], giliran[0])
         self.assertNotIn("Penyebabnya rotasi partner", giliran[0],
                          "masih menuduh rotasi padahal formatnya yang mengikat")
+
+        # Porsinya disebut apa adanya, bukan disapu semuanya ke format.
+        # bisa_liput_semua() cuma membuktikan MATCH PERTAMA yang telat;
+        # serobotan di tengah acara tidak dijelaskannya. Diukur pada jadwal ini:
+        # dari empat serobotan, korbannya sudah main 0, 1, 2, dan 4 kali - jadi
+        # hanya satu yang terjadi sebelum semua orang kebagian main.
+        self.assertRegex(giliran[0], r"\d+ dari \d+ serobotan itu dipaksa format")
+        self.assertIn("Sisanya rotasi partner", giliran[0], giliran[0])
+
+    def test_catatan_giliran_tidak_salah_menggambarkan_angkanya(self):
+        """"Menunggu giliran pertamanya" bukan yang dihitung turn_skips.
+
+        Yang dihitung: seseorang turun untuk kali ke-(k+1) padahal ada yang
+        duduk dan baru main kurang dari k kali - bukan khusus yang belum pernah
+        main sama sekali. Diperiksa pada jadwal host, dari empat serobotan
+        korbannya sudah main 0, 1, 2, dan 4 kali: kalimat lama benar untuk satu
+        kejadian dan keliru untuk tiga. Host yang membacanya akan mencari
+        peserta yang belum turun sama sekali dan tidak menemukannya.
+        """
+        for cfg in (
+            Config(courts=1, duration_minutes=120, round_minutes=8,
+                   warmup_minutes=0, mode="americano", seed=42,
+                   effort=20_000, attempts=1),
+            Config(courts=2, duration_minutes=120, round_minutes=8,
+                   warmup_minutes=0, mode="americano", seed=7,
+                   effort=20_000, attempts=1),
+        ):
+            sch = build_schedule(make_players(10), cfg)
+            for c in sch.notes:
+                self.assertNotIn(
+                    "menunggu giliran pertamanya", c,
+                    "catatan menggambarkan turn_skips sebagai giliran pertama, "
+                    "padahal korbannya sering sudah main beberapa kali")
 
     def test_partner_terpaksa_dijelaskan_di_catatan_juga(self):
         """Ketiga permukaan harus menceritakan hal yang sama.

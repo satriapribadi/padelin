@@ -2264,10 +2264,17 @@ def _build_once(players: list[Player], config: Config,
     if stats.turn_skips or stats.longest_wait > stats.wait_floor:
         bagian = []
         if stats.turn_skips:
+            # "menunggu giliran PERTAMANYA" salah menggambarkan angkanya, dan
+            # salahnya besar. turn_skips menghitung orang yang turun untuk kali
+            # ke-(k+1) padahal ada yang duduk dan baru main kurang dari k kali -
+            # bukan khusus yang belum pernah main. Diperiksa pada jadwal host:
+            # dari 4 serobotan, korbannya sudah main 0, 1, 2, dan 4 kali, jadi
+            # kalimat lama benar untuk SATU kejadian dan keliru untuk tiga.
+            # Host yang membacanya akan mencari peserta yang belum turun sama
+            # sekali, dan tidak menemukannya.
             bagian.append(
                 f"{stats.turn_skips} kali seseorang turun lagi padahal ada "
-                f"peserta lain yang masih menunggu giliran pertamanya di "
-                f"putaran itu")
+                f"peserta lain yang sedang duduk dan baru main lebih sedikit")
         if stats.longest_wait > stats.wait_floor:
             bagian.append(
                 f"tunggu terpanjang {stats.longest_wait} ronde, sedangkan yang "
@@ -2289,16 +2296,42 @@ def _build_once(players: list[Player], config: Config,
                                      putaran_min, config.allowed_matchups)
         )
         if format_mengikat:
+            # Yang dibuktikan bisa_liput_semua() cuma MATCH PERTAMA yang telat.
+            # Serobotan di tengah acara dan rentetan duduk tidak dijelaskannya,
+            # dan menyapu semuanya ke "penyebabnya format" adalah klaim yang
+            # lebih besar daripada buktinya. Diukur pada jadwal host: dari 4
+            # serobotan, hanya 1 terjadi sebelum semua orang kebagian main -
+            # tiga sisanya di ronde 4, 6, dan 10, jauh setelah itu. Jadi
+            # porsinya dihitung dan disebut apa adanya.
+            sudah_main: dict[int, int] = {pid: 0 for pid in stats.plays_per_player}
+            belum = set(sudah_main)
+            serobot_awal = 0
+            for rnd in rounds:
+                turun = {p for m in rnd.matches for p in m.players()}
+                if belum:
+                    duduk = [sudah_main[p] for p in sudah_main if p not in turun]
+                    if duduk:
+                        serobot_awal += sum(1 for p in turun
+                                            if sudah_main[p] > min(duduk))
+                for p in turun:
+                    sudah_main[p] = sudah_main.get(p, 0) + 1
+                belum -= turun
+
+            porsi = (f"{serobot_awal} dari {stats.turn_skips} serobotan itu"
+                     if stats.turn_skips else "Bagian awalnya")
             notes.append(
                 "Giliran belum sepenuhnya berurutan: " + "; ".join(bagian)
-                + f". Penyebabnya format yang dibatasi, bukan rotasi: dengan "
-                f"{n_men} putra dan {n_women} putri, tidak ada susunan "
-                f"{putaran_min} ronde pertama yang sah sekaligus memakai "
-                f"semua peserta, jadi ronde awal terpaksa mengulang orang yang "
-                f"sudah main. Memperpendek durasi per ronde tidak mengubah ini. "
-                f"Yang menggesernya: izinkan lebih banyak format match, ubah "
-                f"komposisi peserta, atau tambah court supaya lebih banyak "
-                f"orang turun sekaligus."
+                + f". {porsi} dipaksa format, bukan rotasi: dengan {n_men} "
+                f"putra dan {n_women} putri tidak ada susunan {putaran_min} "
+                f"ronde pertama yang sah sekaligus memakai semua peserta, jadi "
+                f"satu peserta pasti baru turun di ronde "
+                f"{stats.last_first_play} dan ronde awal terpaksa mengulang "
+                f"orang yang sudah main. Memperpendek durasi per ronde tidak "
+                f"mengubah bagian itu; yang menggesernya cuma mengizinkan lebih "
+                f"banyak format match, mengubah komposisi peserta, atau menambah "
+                f"court. Sisanya rotasi partner - pasangan tiap ronde diambil "
+                f"dari satu baris kombinasi yang sudah tertentu supaya tidak "
+                f"ada yang berpasangan dua kali."
             )
         else:
             notes.append(
