@@ -1424,8 +1424,8 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     # satu menutupi yang lain: pada 10 peserta di 1 court, tunggu 3 ronde dari
     # batas 2 sudah memberi 0.5, dan serobotan boleh membengkak dari 4 ke 15
     # tanpa mengubah skor sama sekali. Skor yang tidak bergerak berarti pemilih
-    # antar-percobaan tidak bisa melihat bedanya - dan itu persis bagaimana
-    # menaikkan effort bisa memperburuk giliran tanpa terlihat di mana pun.
+    # antar-percobaan tidak bisa melihat bedanya - jadi ayunan serobotan sebesar
+    # itu lewat tanpa terbaca di mana pun.
     lewat_pen = min(1.0, turn_skips / max(1, sum(play_vals)))
     tunggu_pen = min(1.0, max(0, tunggu_max - wait_floor) / 2.0)
     giliran_pen = min(1.0, lewat_pen + tunggu_pen)
@@ -1512,6 +1512,26 @@ def _lebih_baik(a: Schedule, b: Schedule) -> bool:
     dia lagi", bukan selisih 0.4 poin di angka kualitas - dan skor kualitas
     memberi lawan cuma 30 dari 100, jadi memilih dengannya bisa membuang jadwal
     yang lawannya bersih demi jadwal yang istirahatnya sedikit lebih rapi.
+
+    KONSEKUENSINYA UNTUK GILIRAN, diukur supaya tidak salah diharapkan. Karena
+    urutan ini leksikografis, percobaan tambahan dibelanjakan untuk keunikan
+    lawan lebih dulu, dan giliran cuma ikut apa adanya. Diuji pada 4 konfigurasi
+    x 12 seed dengan attempts 1, 3, dan 6 pada effort tetap:
+
+      lawan berulang turun MONOTON di keempatnya
+        16L+10P/4court  5,6 -> 4,7 -> 3,6
+        6L+4P/1court   15,5 -> 13,9 -> 13,2
+        10L+6P/2court  25,1 -> 24,3 -> 22,8
+        6L+6P/2court   40,5 -> 40,3 -> 39,3
+      serobotan justru MEMBURUK di dua dari empat
+        10L+6P/2court  18,5 -> 17,8 -> 20,3
+        6L+6P/2court   12,1 -> 13,4 -> 13,7
+      dan sebarannya tidak menyempit sama sekali: pada 16L+10P simpangan
+        bakunya 20,3 -> 18,2 -> 20,6, rentangnya tetap 37 sampai sekitar 100
+
+    Jadi attempts adalah kendali untuk KEUNIKAN, bukan untuk giliran. Menaikkan
+    attempts demi merapikan giliran tidak akan menolong, dan itu bukan cacat
+    melainkan akibat langsung dari urutan di fungsi ini.
     """
     x, y = a.stats, b.stats
     return ((x.partner_repeat_pairs, x.opponent_repeat_pairs, -x.quality_score)
@@ -1547,14 +1567,28 @@ def build_schedule(players: list[Player], config: Config,
     # 3 pasang berulang setelah 3 percobaan, sementara waktunya naik dari 3,2
     # ke 9,8 detik. Waktu yang dibayar tidak membeli apa pun.
     #
-    # Itu berhenti benar begitu keadilan giliran ikut dinilai. Giliran BUKAN
-    # derau antar percobaan: pada roster 10 peserta di 1 court, lima nilai
-    # effort menghasilkan 2, 0, 5, 11, dan 4 serobotan dengan pengulangan lawan
-    # yang sama-sama tak terhindarkan. Menjatuhkannya ke satu percobaan berarti
-    # mengambil salah satu angka itu secara acak, dan host tidak punya cara
-    # tahu ia sedang kebagian yang mana. Jadi percobaannya dijalankan, dan
-    # _lebih_baik yang memilih - keunikan tetap lebih dulu, giliran jadi
-    # pemutus di antara yang keunikannya setara.
+    # Pemangkasan itu tetap salah, tapi ALASANNYA berbeda dari yang pernah
+    # ditulis di sini, dan dua-duanya sudah diukur ulang.
+    #
+    # Alasan lama pemangkasan - "kalau pengulangan memang wajib, percobaan
+    # tambahan cuma menemukan derau" - keliru. Diuji pada 4 konfigurasi x 12
+    # seed yang SEMUANYA punya pengulangan lawan tak terhindarkan, attempts 1
+    # -> 3 -> 6 menurunkan pasang lawan berulang secara monoton di keempatnya:
+    # 5,6 -> 3,6 pada 16 putra + 10 putri di 4 court, dan 25,1 -> 22,8 pada 10
+    # putra + 6 putri di 2 court. Jadi percobaan tambahan memang membeli
+    # sesuatu, persis di keadaan yang dulu dianggap sia-sia.
+    #
+    # Alasan yang sempat menggantikannya - "giliran BUKAN derau antar
+    # percobaan" - juga keliru, dan ke arah sebaliknya. Serobotan berayun lebar
+    # antar lintasan acak dan attempts tidak menyempitkannya: pada 16 putra +
+    # 10 putri simpangan bakunya 20,3 di attempts=1 dan 20,6 di attempts=6,
+    # rentangnya tetap 37 sampai sekitar 100, dan pada dua dari empat
+    # konfigurasi rata-ratanya justru naik. Lihat _lebih_baik: karena urutannya
+    # leksikografis, percobaan tambahan dibelanjakan untuk keunikan lebih dulu.
+    #
+    # Ringkasnya: percobaan tetap dijalankan, tapi yang dibelinya keunikan.
+    # Giliran ikut apa adanya, dan _lebih_baik memutus di antara yang
+    # keunikannya setara.
     terbaik: Schedule | None = None
     # Berapa ronde yang dibutuhkan supaya semua peserta kebagian match pertama,
     # kalau tiap slot dipakai untuk orang yang berbeda. Dipakai sebagai syarat

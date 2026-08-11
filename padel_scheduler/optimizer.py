@@ -862,9 +862,21 @@ def turn_skips(st: ScheduleState) -> int:
     apakah urutannya adil dibanding orang lain. Jadwal bisa punya rentetan
     pendek merata - tidak ada yang menunggu lebih dari 3 ronde - sambil tetap
     membiarkan satu orang main di ronde 1 dan 3 sementara orang lain baru turun
-    di ronde 4. Diukur pada satu roster nyata: menaikkan effort dari 30.000 ke
-    160.000 membuat rentetan terpanjang tetap 3 sementara serobotan naik dari 4
-    ke 15, karena tidak ada satu pun tahap yang menilainya.
+    di ronde 4. Diukur pada satu roster nyata: rentetan terpanjang tetap 3 di
+    lima nilai effort, sementara serobotan berayun 2, 4, 5, 15, 4 - jadi ada
+    yang bergerak besar tanpa satu pun angka lama menunjukkannya.
+
+    Ayunan itu SEBARAN ANTAR LINTASAN ACAK, bukan akibat effort, dan bedanya
+    penting supaya tidak ada yang mengejar perbaikan ke arah yang salah. Pernah
+    ditulis di sini bahwa menaikkan effort memperburuk giliran; dibandingkan
+    berpasangan pada 6 konfigurasi x 12 seed, itu tidak benar - effort 160.000
+    lawan 30.000 memberi 38 seed membaik, 31 memburuk, 3 sama, dan rata-rata
+    serobotannya justru turun. Yang nyata simpangannya: pada 16 putra + 10 putri
+    di 4 court, serobotan berkisar 37 sampai 98 pada effort yang sama, simpangan
+    baku 18 - jauh lebih besar daripada selisih antar level effort, yang 5,3.
+    attempts pun tidak menyempitkannya (lihat scheduler._lebih_baik). Jadi yang
+    membuat fungsi ini perlu ada bukan effort, melainkan kenyataan bahwa tidak
+    satu tahap pun menilai urutan giliran.
 
     Peserta yang memang tidak boleh turun di ronde itu (peserta putri di babak
     putra) tidak dihitung sedang menunggu - ia tidak sedang dilewati, ia sedang
