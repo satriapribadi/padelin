@@ -19,6 +19,8 @@ from itertools import combinations
 from padel_scheduler import Config, Player, Segment, build_schedule
 from padel_scheduler.capacity import (
     analyze,
+    court_terpakai,
+    duduk_per_ronde,
     gender_tak_terpakai,
     shape_budget,
     shape_totals,
@@ -1279,6 +1281,44 @@ class TestPesertaTakTerpakai(unittest.TestCase):
                       "host harus diberi tahu format mana yang menolong")
         self.assertEqual(d["F"]["tambah"], 1,
                          "satu peserta perempuan lagi sudah cukup")
+
+    def test_jumlah_duduk_berayun_antar_babak(self):
+        """4 putri cuma cukup untuk satu court, berapa pun court yang disewa.
+
+        byes_per_round dihitung sekali untuk seluruh acara dengan court terpakai
+        = min(court, semua_peserta // 4), jadi ia memberi angka babak yang
+        paling ramai saja. Pada 20 putra + 4 putri di 2 court, babak putri
+        mendudukkan 20 orang sementara yang dilaporkan 16.
+
+        Melesetnya sedang, bukan parah - diukur pada 8 setup, angka lama selalu
+        persis sama dengan yang TERKECIL dan tidak pernah keluar dari rentang
+        sebenarnya. Tapi arahnya selalu sama, dan host memakai angka ini untuk
+        memutuskan berapa court disewa.
+        """
+        self.assertEqual(
+            duduk_per_ronde(24, 20, 4, 2,
+                            [("men", 5), ("women", 5), ("mixed", 5)]),
+            (16, 20))
+        # Roster seimbang: ketiga babak mengisi court yang sama banyak, jadi
+        # satu angka memang sudah menggambarkan seluruh acara.
+        self.assertIsNone(
+            duduk_per_ronde(16, 8, 8, 2,
+                            [("men", 5), ("women", 5), ("mixed", 5)]))
+        # Tanpa babak tidak ada yang perlu direntang.
+        self.assertIsNone(duduk_per_ronde(26, 13, 13, 2, [("open", 15)]))
+        self.assertIsNone(duduk_per_ronde(26, 13, 13, 2, None))
+
+    def test_court_terpakai_dibatasi_yang_berhak(self):
+        """Court hanya terisi kalau ada cukup orang yang BERHAK mengisinya."""
+        self.assertEqual(court_terpakai("women", 20, 4, 24, 2), 1)
+        self.assertEqual(court_terpakai("men", 20, 4, 24, 2), 2)
+        # Mixed menghabiskan 2 putra + 2 putri per match, jadi putri yang mepet
+        # membatasinya lebih cepat daripada hitungan "dibagi empat".
+        self.assertEqual(court_terpakai("mixed", 20, 4, 24, 2), 2)
+        self.assertEqual(court_terpakai("mixed", 20, 2, 22, 2), 1)
+        # Tim satu gender: putra dan putri sama-sama bisa mengisi court sendiri.
+        self.assertEqual(court_terpakai("same_gender", 8, 8, 16, 4), 4)
+        self.assertEqual(court_terpakai("open", 20, 4, 24, 2), 2)
 
     def test_dua_putri_sudah_cukup(self):
         """Ambangnya di dua, bukan di satu: LP-LP butuh dua tim campur."""

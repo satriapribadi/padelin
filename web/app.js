@@ -562,7 +562,19 @@ async function runAnalyze() {
       grid.appendChild(tile('Main / orang', r.avg_plays_per_player,
         `${r.playing_minutes_per_player} menit`));
     }
-    grid.appendChild(tile('Duduk / ronde', r.byes_per_round, pct(r.rest_ratio), restCls));
+    // Babak bisa membuat jumlah duduk berayun: 4 putri cuma cukup untuk satu
+    // court, jadi babak putri mendudukkan lebih banyak orang daripada babak
+    // putra. Satu angka di situ selalu ujung yang paling ramai - dan host
+    // memakai kartu ini untuk memutuskan berapa court disewa.
+    if (r.byes_per_round_max) {
+      grid.appendChild(tile('Duduk / ronde',
+        `${r.byes_per_round}-${r.byes_per_round_max}`,
+        `${pct(r.rest_ratio)}-${pct(r.byes_per_round_max / r.n_players)}`
+          + ' · berayun antar babak', restCls));
+    } else {
+      grid.appendChild(tile('Duduk / ronde', r.byes_per_round,
+        pct(r.rest_ratio), restCls));
+    }
     grid.appendChild(tile('Partner unik', r.partner_unique_feasible ? 'Bisa' : 'Tidak',
       `maks ${r.max_unique_partner_rounds} ronde`, r.partner_unique_feasible ? 'good' : 'warn'));
     grid.appendChild(tile('Lawan unik', r.opponent_unique_feasible ? 'Bisa' : 'Tidak',

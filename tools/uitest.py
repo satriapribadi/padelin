@@ -749,17 +749,20 @@ def main() -> int:
             b.js("location.reload(); true")
             b.wait_for("document.querySelector('#preset option')",
                        label="halaman dimuat ulang")
+            # Roster sengaja dibuat TIMPANG, 20 putra + 4 putri, dan bukan
+            # memakai roster uji standar yang seimbang. Di roster seimbang
+            # kedua kelompok memang dapat jatah yang sama dan jumlah duduknya
+            # tidak berayun - server benar kalau menyajikannya sebagai satu
+            # angka, jadi tidak ada yang bisa diuji. Menempelnya aman di sini
+            # karena halaman baru saja dimuat ulang dan daftarnya kosong.
+            timpang = [f"Uji {i + 1}, 3, {'L' if i < 20 else 'P'}"
+                       for i in range(24)]
             b.js("(() => { document.getElementById('bulk').value = "
-                 + json.dumps("\n".join(roster))
+                 + json.dumps("\n".join(timpang))
                  + "; document.getElementById('parse-bulk').click(); })(); true")
-            b.wait_for("document.querySelectorAll('#ptable tbody tr').length === "
-                       f"{len(roster)}", label="roster terisi lagi")
+            b.wait_for("document.querySelectorAll('#ptable tbody tr').length === 24",
+                       label="roster timpang 20L+4P")
 
-            # Ketimpangan dibuat lewat JUMLAH RONDE tiap babak, bukan dengan
-            # mengganti roster. Roster uji standar seimbang gendernya, dan di
-            # roster seimbang kedua kelompok memang dapat jatah yang sama -
-            # server benar kalau tidak memisahnya. Babak 10/2/3 memberi
-            # ketimpangan yang sama tanpa menyentuh peserta sama sekali.
             #
             # JANGAN pakai tombol "Kosongkan semua": ia memanggil confirm(),
             # dan dialog native memblokir renderer sehingga Runtime.evaluate
@@ -774,9 +777,9 @@ def main() -> int:
               set('courts', 2); set('duration', 120);
               document.querySelectorAll('#segments .seg-editor .x')
                 .forEach((x) => x.click());
-              for (const [lab, rn, rule] of [['Putra', 10, 'men'],
-                                             ['Putri', 2, 'women'],
-                                             ['Mixed', 3, 'mixed']]) {
+              for (const [lab, rn, rule] of [['Putra', 5, 'men'],
+                                             ['Putri', 5, 'women'],
+                                             ['Mixed', 5, 'mixed']]) {
                 document.getElementById('add-seg').click();
                 const baris = document.querySelectorAll('#segments .seg-editor');
                 const s = baris[baris.length - 1];
@@ -796,27 +799,38 @@ def main() -> int:
             b.wait_for("document.querySelectorAll('#analysis .stat').length >= 5",
                        timeout=8, label="panel analisa terisi ulang")
             kartu = b.js("""(() => {
+              const out = {};
               for (const s of document.querySelectorAll('#analysis .stat')) {
-                if (s.querySelector('.k').textContent.includes('Main / orang'))
-                  return JSON.stringify([s.querySelector('.v').textContent.trim(),
-                                         s.querySelector('.s').textContent.trim()]);
+                out[s.querySelector('.k').textContent.trim()] =
+                  [s.querySelector('.v').textContent.trim(),
+                   s.querySelector('.s').textContent.trim()];
               }
-              return JSON.stringify(['(tidak ketemu)', '']);
+              return JSON.stringify(out);
             })()""")
-            nilai, satuan = json.loads(kartu)
+            semua_kartu = json.loads(kartu)
+            nilai, satuan = semua_kartu.get("Main / orang",
+                                            ["(tidak ketemu)", ""])
+            duduk = semua_kartu.get("Duduk / ronde", ["(tidak ketemu)", ""])
             # Bersihkan babak sebelum menilai, supaya kegagalan assert di bawah
             # tidak meninggalkan halaman dalam keadaan lain.
             b.js("""document.querySelectorAll('#segments .seg-editor .x')
                  .forEach((x) => x.click()); true""")
 
-            # 10 ronde babak putra lawan 2 ronde babak putri: para putra main
-            # jauh lebih banyak, dan menyajikannya sebagai satu rata-rata
-            # tunggal memberi angka yang tidak berlaku bagi siapa pun.
+            # 20 putra + 4 putri: babak putri cuma bisa mengisi satu court, dan
+            # babak mixed butuh satu putri per tim, jadi para putri main jauh
+            # lebih banyak. Menyajikannya sebagai satu rata-rata tunggal memberi
+            # angka yang tidak berlaku bagi siapa pun.
             assert satuan, f"kartu tanpa satuan/konteks: {nilai!r}"
             assert "putra" in satuan and "putri" in satuan, \
                 f"kelompoknya tidak disebut: {nilai!r} / {satuan!r}"
             assert "-" in nilai, f"masih satu angka tunggal: {nilai!r}"
-            return f"'{nilai}' - {satuan}"
+            # Babak putra dan babak putri mengisi court sebanyak orangnya
+            # masing-masing, jadi jumlah yang duduk ikut berayun. Satu angka di
+            # situ selalu ujung yang paling ramai.
+            assert "-" in duduk[0], \
+                f"Duduk / ronde masih satu angka tunggal: {duduk!r}"
+            assert "berayun" in duduk[1], f"rentangnya tidak dijelaskan: {duduk!r}"
+            return f"main '{nilai}' ({satuan}) · duduk '{duduk[0]}'"
         check("Kartu Main / orang memisah per kelompok babak",
               kartu_main_per_orang)
 

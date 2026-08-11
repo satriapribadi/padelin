@@ -83,6 +83,11 @@ class CapacityReport:
     # avg_plays_per_player di atas TIDAK menggambarkan siapa pun.
     groups: list[dict] | None = None
 
+    # Jumlah duduk per ronde berayun antar babak. None kalau angkanya sama di
+    # semua babak - byes_per_round di atas sudah cukup. Kalau terisi,
+    # byes_per_round adalah ujung TERKECILNYA, bukan yang khas.
+    byes_per_round_max: int | None = None
+
     issues: list[Issue] = field(default_factory=list)
     verdict: str = "ok"  # "ok" | "warning" | "error"
 
@@ -532,6 +537,60 @@ def kapasitas_per_kelompok(
     ]
 
 
+def court_terpakai(rule: str, men: int, women: int, n_players: int,
+                   courts: int) -> int:
+    """Berapa court yang benar-benar bisa terisi di babak beraturan `rule`.
+
+    Court hanya terpakai kalau ada cukup orang YANG BERHAK untuk mengisinya, dan
+    aturan babak menentukan siapa mereka. Empat putri cuma cukup untuk satu
+    court, berapa pun court yang disewa.
+    """
+    if rule == "men":
+        return min(courts, men // 4)
+    if rule == "women":
+        return min(courts, women // 4)
+    if rule == "mixed":                  # tiap tim 1 putra + 1 putri
+        return min(courts, men // 2, women // 2)
+    if rule == "same_gender":            # tiap match LL-LL atau PP-PP
+        return min(courts, men // 4 + women // 4)
+    return min(courts, n_players // 4)   # open
+
+
+def duduk_per_ronde(
+    n_players: int, men: int, women: int, courts: int,
+    segments: list[tuple[str, int]] | None,
+) -> tuple[int, int] | None:
+    """Berapa peserta yang duduk tiap ronde: terkecil dan terbesar lintas babak.
+
+    None kalau tidak ada babak, kalau data gendernya tidak lengkap padahal
+    dibutuhkan, atau kalau angkanya sama di semua babak - di ketiganya satu
+    angka sudah menggambarkan seluruh acara.
+
+    Kenapa perlu. byes_per_round dihitung sekali untuk seluruh acara, dengan
+    court terpakai = min(court, seluruh_peserta // 4). Di meet bersegmen itu
+    memberi angka babak yang paling ramai saja: pada 20 putra + 4 putri, babak
+    putri hanya bisa mengisi satu court sehingga 20 orang duduk, sementara yang
+    dilaporkan 16.
+
+    Melesetnya sedang, bukan parah - diukur pada 8 setup, angka lama selalu
+    persis sama dengan yang TERKECIL dan tidak pernah keluar dari rentang
+    sebenarnya; selisihnya 5 sampai 7 poin persen di tiga kasus dan nol di
+    lima lainnya. Tapi arahnya selalu sama: melaporkan keadaan yang paling
+    ramai, dan host memakai angka ini untuk memutuskan berapa court disewa.
+    """
+    if not segments:
+        return None
+    perlu_gender = any(r in ("men", "women", "mixed", "same_gender")
+                       for r, _ in segments)
+    if perlu_gender and men + women != n_players:
+        return None
+    nilai = [n_players - 4 * court_terpakai(r, men, women, n_players, courts)
+             for r, ronde in segments if ronde > 0]
+    if not nilai or min(nilai) == max(nilai):
+        return None
+    return min(nilai), max(nilai)
+
+
 def analyze(
     n_players: int,
     courts: int,
@@ -606,6 +665,10 @@ def analyze(
                                     courts, segments)
     if groups and len({g["plays"] for g in groups}) < 2:
         groups = None                    # semua sama, tidak ada yang perlu dipisah
+
+    rentang_duduk = duduk_per_ronde(n_players, roster_men or 0,
+                                    roster_women or 0, courts, segments)
+    byes_max = rentang_duduk[1] if rentang_duduk else None
 
     # --- Rekomendasi -----------------------------------------------------
     ideal_players = 4 * courts
@@ -771,8 +834,15 @@ def analyze(
             issues.append(
                 Issue(
                     "warning",
-                    f"{byes_per_round} orang duduk tiap ronde "
-                    f"({rest_ratio * 100:.0f}%)",
+                    # Rentangnya disebut kalau babak membuatnya berayun; satu
+                    # angka di situ selalu ujung yang paling ramai, dan host
+                    # memakai angka ini untuk memutuskan sewa court.
+                    (f"{byes_per_round}-{byes_max} orang duduk tiap ronde "
+                     f"({rest_ratio * 100:.0f}-"
+                     f"{byes_max / n_players * 100:.0f}%)"
+                     if byes_max else
+                     f"{byes_per_round} orang duduk tiap ronde "
+                     f"({rest_ratio * 100:.0f}%)"),
                     # Rata-rata seluruh peserta menyesatkan begitu ada babak
                     # putra/putri: pada 20 putra + 4 putri ia bilang "5,0 ronde"
                     # sementara para putra main 3 dan para putri 10 - angka yang
@@ -866,6 +936,7 @@ def analyze(
         shape_binding=None if shape is None else shape.binding,
         shape_shortfall=0 if shape is None else shape.shortfall,
         groups=groups,
+        byes_per_round_max=byes_max,
         issues=issues,
         verdict=verdict,
     )
