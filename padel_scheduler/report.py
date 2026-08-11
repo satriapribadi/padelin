@@ -37,6 +37,69 @@ PREF_LABELS = {
 }
 
 
+def batas_keunikan(schedule: Schedule) -> dict:
+    """Batas ronde main untuk partner/lawan 100% unik, per kolam babak.
+
+    Angka pengulangan tanpa konteks terbaca seperti cacat jadwal, padahal sering
+    kali itu batas matematis: tiap ronde seorang pemain dapat 1 partner dan 2
+    lawan, jadi keunikan mentok di (kolam-1) dan (kolam-1)//2 ronde.
+
+    Yang menentukan KOLAM YANG BENAR-BENAR DIHADAPI, bukan jumlah seluruh
+    peserta. Babak putra/putri memecah kolamnya: pada 8 putra + 8 putri dengan
+    babak putra lalu putri, tiap putra cuma pernah berhadapan dengan 7 putra
+    lain, jadi 6 ronde main sudah jauh melewati batas 3 ronde dan 15 pasang
+    berulang itu wajib terjadi. Dihitung dari 16 peserta, batasnya terbaca 7
+    ronde dan penjelasannya tidak pernah muncul - persis di kasus yang paling
+    membutuhkannya.
+
+    Kolamnya dibaca dari jadwal jadi, bukan dimodelkan dari aturan babak: siapa
+    yang benar-benar muncul di ronde-ronde babak itu sudah menjawabnya persis,
+    termasuk untuk babak "sesama gender" dan "mixed" yang komposisinya berbeda.
+
+    Kembaliannya {"partner": ..., "lawan": ...}; tiap nilai None kalau keunikan
+    memang masih mungkin - di situ tidak ada yang perlu dijelaskan - atau
+    {"batas": ronde, "babak": nama} untuk babak yang paling mengikat. `babak`
+    kosong kalau meetnya cuma satu babak.
+
+    SYARAT CUKUP, BUKAN SYARAT LENGKAP, dan bedanya penting bagi yang membaca
+    keluarannya. Kalau fungsi ini menyebut sebuah batas, pengulangannya memang
+    tak terhindarkan - itu prinsip laci merpati pada kolam yang terukur. Tapi
+    diamnya BUKAN berarti pengulangan bisa dihindari: babak "sesama gender"
+    memuat kedua gender di kolam yang sama padahal seorang putra tidak pernah
+    berhadapan dengan putri di situ, jadi kolam yang sebenarnya lebih kecil
+    daripada yang terbaca. Diukur pada 8 putra + 8 putri dengan babak sesama
+    gender + mixed, 8 pasang lawan berulang lewat tanpa catatan. Menahan diri di
+    situ disengaja: mengaku tahu sesuatu tak terhindarkan padahal belum tentu
+    lebih buruk daripada tidak berkomentar.
+    """
+    kolam: dict[str, set[int]] = {}
+    main_babak: dict[str, dict[int, int]] = {}
+    for rnd in schedule.rounds:
+        lab = rnd.segment or ""
+        turun = {p for m in rnd.matches for p in m.players()}
+        if not turun:
+            continue
+        kolam.setdefault(lab, set()).update(turun)
+        hit = main_babak.setdefault(lab, {})
+        for p in turun:
+            hit[p] = hit.get(p, 0) + 1
+
+    banyak = len(kolam) > 1
+    hasil: dict[str, dict | None] = {"partner": None, "lawan": None}
+    # Yang dilaporkan babak dengan KELEBIHAN terbesar di atas batasnya, bukan
+    # batas terkecil: babak yang batasnya rendah tapi rondenya sedikit tidak
+    # memaksa pengulangan apa pun.
+    lebih = {"partner": -1, "lawan": -1}
+    for lab, anggota in kolam.items():
+        r = max(main_babak[lab].values(), default=0)
+        for kunci, batas in (("partner", max(0, len(anggota) - 1)),
+                             ("lawan", max(0, (len(anggota) - 1) // 2))):
+            if r > batas and r - batas > lebih[kunci]:
+                lebih[kunci] = r - batas
+                hasil[kunci] = {"batas": batas, "babak": lab if banyak else ""}
+    return hasil
+
+
 def _clock(minutes_from_start: int, start_clock: str | None) -> str:
     """Ubah offset menit jadi jam dinding kalau host mengisi jam mulai."""
     if not start_clock:
@@ -100,10 +163,25 @@ def to_text(schedule: Schedule, start_clock: str | None = None,
     st = schedule.stats
     out.append("*Ringkasan*")
     out.append(f"Kualitas jadwal: {st.quality_score}/100")
-    out.append(
-        f"Partner berulang: {st.partner_repeat_pairs} pasang | "
-        f"Lawan berulang: {st.opponent_repeat_pairs} pasang"
-    )
+    # Batasnya ikut disebut, sama seperti di laporan cetak. Teks inilah yang
+    # ditempel ke grup dan dibaca semua peserta, jadi justru di sini angka
+    # pengulangan telanjang paling mudah terbaca sebagai kegagalan jadwal -
+    # "Lawan berulang: 15 pasang" pada meet berbabak putra/putri adalah angka
+    # yang tidak mungkin lebih kecil.
+    batas = batas_keunikan(schedule)
+
+    def _dengan_batas(nama, jumlah, kunci):
+        b = batas[kunci]
+        if not jumlah or b is None:
+            return f"{nama}: {jumlah} pasang"
+        di_babak = f" di babak {b['babak']}" if b["babak"] else ""
+        return (f"{nama}: {jumlah} pasang (tak terhindarkan - unik cuma "
+                f"mungkin sampai {b['batas']} ronde main{di_babak})")
+
+    out.append(_dengan_batas("Partner berulang", st.partner_repeat_pairs,
+                             "partner"))
+    out.append(_dengan_batas("Lawan berulang", st.opponent_repeat_pairs,
+                             "lawan"))
     plays = list(st.plays_per_player.values())
     if plays:
         out.append(f"Main per orang: {min(plays)}-{max(plays)} ronde")

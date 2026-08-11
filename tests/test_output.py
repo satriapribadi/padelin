@@ -18,7 +18,13 @@ from padel_scheduler import (
 )
 from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_analysis
 from padel_scheduler.html_report import build_html
-from padel_scheduler.report import to_csv, to_dict, to_personal_text, to_text
+from padel_scheduler.report import (
+    batas_keunikan,
+    to_csv,
+    to_dict,
+    to_personal_text,
+    to_text,
+)
 from padel_scheduler.roles import assign_roles
 
 
@@ -359,6 +365,62 @@ class TestExports(unittest.TestCase):
         self.assertRegex(
             h, r"Rp [\d.]+-[\d.]+ / menit main",
             "fee per menit masih satu angka padahal jatah mainnya terbelah")
+
+    def test_teks_share_menyebut_batas_yang_sama_dengan_laporan(self):
+        """Teks WhatsApp dan laporan cetak harus menjelaskan angka yang sama.
+
+        Teks inilah yang ditempel ke grup dan dibaca semua peserta, jadi justru
+        di sini angka pengulangan telanjang paling mudah terbaca sebagai
+        kegagalan jadwal. Dulu ia mencetak "Lawan berulang: 15 pasang" tanpa
+        sepatah kata pun, sementara laporan cetak untuk jadwal yang sama sudah
+        menjelaskan batasnya.
+        """
+        players = [Player(id=i, name=f"P{i}",
+                          gender=("M" if i < 8 else "F")) for i in range(16)]
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, effort=4000, attempts=1,
+                     segments=[Segment("Putra", 6, "men"),
+                               Segment("Putri", 6, "women")])
+        sch = build_schedule(players, cfg)
+        teks = to_text(sch)
+
+        self.assertGreater(sch.stats.opponent_repeat_pairs, 0,
+                           "prasyarat: pengulangan lawan memang terjadi")
+        self.assertIn("tak terhindarkan", teks,
+                      "angka pengulangan dicetak telanjang di teks share")
+        self.assertIn("3 ronde main di babak Putra", teks,
+                      "batas atau babak pengikatnya tidak disebut")
+
+    def test_teks_share_diam_kalau_keunikan_masih_mungkin(self):
+        """Jangan menempelkan "tak terhindarkan" ke jadwal yang memang bersih."""
+        players = [Player(id=i, name=f"P{i}") for i in range(26)]
+        sch = build_schedule(players, Config(courts=4, duration_minutes=120,
+                                             effort=4000))
+        teks = to_text(sch)
+        self.assertNotIn("tak terhindarkan", teks)
+
+    def test_batas_keunikan_diam_alih_alih_menebak(self):
+        """Diamnya bukan klaim "bisa dihindari" - lihat docstring-nya.
+
+        Babak "sesama gender" memuat kedua gender di kolam yang sama padahal
+        seorang putra tidak pernah berhadapan dengan putri di situ, jadi kolam
+        sebenarnya lebih kecil daripada yang terbaca dari jadwal. Yang dijaga di
+        sini: fungsi itu tidak boleh MENGAKU tahu batasnya untuk kasus yang
+        tidak bisa ia buktikan.
+        """
+        players = [Player(id=i, name=f"P{i}",
+                          gender=("M" if i < 8 else "F")) for i in range(16)]
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, effort=4000, attempts=1,
+                     segments=[Segment("Sesama gender", 6, "same_gender"),
+                               Segment("Mixed", 6, "mixed")],
+                     interleave_segments=True)
+        sch = build_schedule(players, cfg)
+        b = batas_keunikan(sch)
+        # Kolam terbacanya 16 orang dan tiap orang main 3 ronde per babak, jadi
+        # tidak ada yang bisa dibuktikan tak terhindarkan dari angka itu saja.
+        self.assertIsNone(b["lawan"])
+        self.assertIsNone(b["partner"])
 
     def test_html_shows_fee_per_player(self):
         """Fee itu hal pertama yang dicari peserta saat laporan dibagikan."""

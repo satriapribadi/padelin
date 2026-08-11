@@ -15,7 +15,7 @@ from __future__ import annotations
 import html
 
 from .models import Schedule
-from .report import format_date_id
+from .report import batas_keunikan, format_date_id
 
 PREF_LABELS = {
     "women_only": "court isi 4 perempuan",
@@ -424,62 +424,21 @@ def build_html(
     # sering kali itu batas matematis: tiap ronde seorang pemain dapat 1 partner
     # dan 2 lawan, jadi lawan unik mentok di (N-1)/2 ronde. Batasnya disebut di
     # kartunya sendiri, bukan hanya di catatan yang jauh di bawah.
-    n_players = len(schedule.players)
+    # Batasnya dihitung dari kolam yang benar-benar dihadapi, per babak - lihat
+    # report.batas_keunikan(). Dipakai bersama teks share supaya keduanya tidak
+    # bisa menyimpang: angka yang sama harus menjelaskan hal yang sama, di mana
+    # pun peserta membacanya.
+    batas = batas_keunikan(schedule)
 
-    # Batasnya dihitung dari KOLAM YANG BENAR-BENAR DIHADAPI, per babak, bukan
-    # dari seluruh peserta.
-    #
-    # Babak putra/putri memecah kolamnya: pada 8 putra + 8 putri dengan babak
-    # putra lalu putri, tiap putra cuma pernah berhadapan dengan 7 putra lain,
-    # jadi 6 ronde main sudah jauh melewati batas 3 ronde untuk lawan unik dan
-    # 15 pasang berulang itu WAJIB terjadi. Hitungan lama memakai 24 peserta,
-    # menyimpulkan batasnya 11 ronde, lalu diam - persis di kasus yang paling
-    # butuh penjelasan. Angka pengulangan tanpa konteks terbaca sebagai cacat
-    # jadwal, dan itu justru alasan kedua catatan ini ada.
-    #
-    # Kolamnya diambil dari jadwal jadi, bukan dimodelkan: siapa yang benar-
-    # benar muncul di ronde-ronde babak itu sudah menjawabnya persis, termasuk
-    # untuk babak "sesama gender" dan "mixed" yang aturan komposisinya berbeda.
-    kolam: dict[str, set[int]] = {}
-    main_babak: dict[str, dict[int, int]] = {}
-    for rnd in schedule.rounds:
-        lab = rnd.segment or ""
-        turun = {p for m in rnd.matches for p in m.players()}
-        kolam.setdefault(lab, set()).update(turun)
-        hit = main_babak.setdefault(lab, {})
-        for p in turun:
-            hit[p] = hit.get(p, 0) + 1
+    def _catatan(kunci):
+        b = batas[kunci]
+        if b is None:
+            return "pasang"
+        di_babak = f" di babak {b['babak']}" if b["babak"] else ""
+        return f"pasang · batas matematis {b['batas']} ronde{di_babak}"
 
-    # Babak yang paling mengikat: yang kelebihannya di atas batas paling besar.
-    max_partner_rounds = max(0, n_players - 1)
-    max_opp_rounds = max(0, (n_players - 1) // 2)
-    partner_ketat = opp_ketat = None
-    for lab, anggota in kolam.items():
-        if not anggota:
-            continue
-        r = max(main_babak[lab].values(), default=0)
-        b_partner = max(0, len(anggota) - 1)
-        b_opp = max(0, (len(anggota) - 1) // 2)
-        if r > b_partner and (partner_ketat is None
-                              or r - b_partner > partner_ketat[1]):
-            partner_ketat = (lab, r - b_partner, b_partner)
-        if r > b_opp and (opp_ketat is None or r - b_opp > opp_ketat[1]):
-            opp_ketat = (lab, r - b_opp, b_opp)
-
-    played = max(plays)
-    banyak_babak = len([k for k, v in kolam.items() if v]) > 1
-
-    def _catatan(ketat, batas_umum, satuan):
-        if ketat is not None:
-            lab, _, batas = ketat
-            di_babak = f" di babak {lab}" if banyak_babak and lab else ""
-            return f"pasang · batas matematis {batas} ronde{di_babak}"
-        if played > batas_umum:
-            return f"pasang · {satuan} {batas_umum} ronde"
-        return "pasang"
-
-    partner_note = _catatan(partner_ketat, max_partner_rounds, "batas")
-    opp_note = _catatan(opp_ketat, max_opp_rounds, "batas matematis")
+    partner_note = _catatan("partner")
+    opp_note = _catatan("lawan")
 
     tiles = []
 
