@@ -425,7 +425,26 @@ $('preset-replace').onclick = (e) => { e.preventDefault(); applyPreset(true); };
 // ---------------------------------------------------------------------------
 // Payload
 // ---------------------------------------------------------------------------
+/**
+ * Pilihan "Kualitas optimasi" membawa DUA angka, bukan satu.
+ *
+ * Kesabaran host bisa dibelanjakan ke effort (seberapa dalam satu penjadwalan
+ * dioptimasi) atau ke percobaan (berapa lintasan acak dijajal lalu diambil yang
+ * terbaik), dan keduanya berongkos waktu. Selector ini dulu cuma menggerakkan
+ * effort, jadi separuh anggaran yang tersedia tidak pernah terpakai.
+ *
+ * Diukur pada 4 ukuran meet x 6 seed, effort 160.000 dengan 3 percobaan kalah
+ * dari effort 80.000 dengan 6 percobaan di keempatnya, pada waktu yang praktis
+ * sama - 15,2 lawan 12,0 pasang lawan berulang pada 6 putra + 4 putri di 1
+ * court, dan 41,8 lawan 38,5 pada 6 putra + 6 putri di 2 court format campur.
+ */
+function effortSetting() {
+  const [effort, attempts] = $('effort').value.split(':').map(Number);
+  return { effort, attempts: attempts || 3 };
+}
+
 function buildPayload() {
+  const opt = effortSetting();
   return {
     club_id: $('club_id').value ? +$('club_id').value : null,
     venue_id: $('venue_id').value ? +$('venue_id').value : null,
@@ -442,7 +461,8 @@ function buildPayload() {
     referees_per_court: +$('referees').value,
     ballboys_per_court: +$('ballboys').value,
     seed: +$('seed').value,
-    effort: +$('effort').value,
+    effort: opt.effort,
+    attempts: opt.attempts,
     segments: getSegments(),
     interleave_segments: $('interleave').checked,
     allowed_matchups: selectedMatchups(),
@@ -1231,6 +1251,9 @@ function schedulingStamp() {
   return JSON.stringify([
     p.courts, p.duration_minutes, p.round_minutes, p.warmup_minutes, p.mode,
     p.tier_count, p.referees_per_court, p.ballboys_per_court, p.seed, p.effort,
+    // Percobaan ikut: ia mengubah jadwal yang keluar, jadi menggantinya membuat
+    // yang di layar bukan lagi hasil dari setup yang tertulis.
+    p.attempts,
     p.segments, p.interleave_segments, p.players, p.allowed_matchups,
   ]);
 }
@@ -1350,8 +1373,30 @@ function applyRequest(req) {
   // susunan berbeda walau seed-nya sama.
   // Hanya kalau nilainya memang salah satu pilihan: menyetel <select> ke nilai
   // asing membuatnya kosong, dan buildPayload lalu mengirim effort 0.
-  if (req.effort && [...$('effort').options].some((o) => +o.value === +req.effort)) {
-    $('effort').value = req.effort;
+  //
+  // Dicocokkan berpasangan dengan percobaan, karena dua pilihan sekarang
+  // berbagi effort 80.000 dan hanya percobaannya yang membedakan. Jadwal lama
+  // tidak menyimpan percobaan sama sekali; nilainya dulu selalu 3, jadi itu
+  // yang diandaikan.
+  //
+  // Kalau tidak ada yang cocok persis, diambil yang effort-nya PALING DEKAT,
+  // dan di antara yang sama dekat diambil yang percobaannya lebih banyak.
+  // Bukan sekadar penjaga dari selector kosong: jadwal yang tersimpan dengan
+  // effort 160.000 - pilihan yang sudah dihapus - kalau dibiarkan tidak cocok
+  // akan kembali sebagai apa pun yang kebetulan sedang terpilih, dan diuji,
+  // itu berarti host yang dulu memilih setelan paling teliti dipulihkan ke
+  // "Cepat". Aturan terdekat ini memulangkannya ke "Sangat teliti".
+  if (req.effort) {
+    const opts = [...$('effort').options].map((o) => {
+      const [eff, att] = o.value.split(':').map(Number);
+      return { value: o.value, eff, att: att || 3 };
+    });
+    const pas = opts.find((o) => o.eff === +req.effort
+        && o.att === +(req.attempts ?? 3))
+      || opts.slice().sort((a, b) =>
+        Math.abs(a.eff - req.effort) - Math.abs(b.eff - req.effort)
+        || b.att - a.att)[0];
+    if (pas) $('effort').value = pas.value;
   }
   $('tier-row').style.display = req.mode === 'tiered' ? '' : 'none';
   $('segments').innerHTML = '';

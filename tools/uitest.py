@@ -37,6 +37,13 @@ BROWSERS = [
     r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
     "/usr/bin/google-chrome",
     "/usr/bin/chromium",
+    # macOS. Tanpa baris ini skripnya berhenti dengan "Tidak menemukan Edge
+    # atau Chrome" di mesin yang browsernya jelas terpasang, dan uji UI-nya
+    # dilewati diam-diam - padahal justru di sinilah bug yang lolos dari
+    # pemeriksaan statis ketahuan.
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
 ]
 
 
@@ -634,6 +641,90 @@ def main() -> int:
             assert "P1 " in txt, "nama samaran tidak dipakai"
             return f"{len(txt.splitlines())} baris, nama disamarkan"
         check("Tombol info debug", debug_button)
+
+        # --- 12b. selector kualitas mengirim DUA angka --------------------
+        # Pilihannya membawa "effort:percobaan", bukan effort saja. Kalau
+        # pemisahannya rusak, <select> yang disetel ke nilai asing jadi kosong
+        # dan buildPayload mengirim effort 0 - jadwal tetap keluar, cuma
+        # optimasinya nyaris tidak jalan, dan tidak ada yang mengeluh. Persis
+        # kelas kegagalan yang tidak terlihat dari pemeriksaan statis.
+        # Dibaca lewat tombol info debug, bukan dengan memanggil buildPayload:
+        # app.js dimuat sebagai module jadi fungsinya tidak global, dan itu
+        # justru benar - yang perlu diuji apa yang benar-benar dikirim, bukan
+        # apa yang dihitung fungsi internal.
+        def effort_pair():
+            harap = {"Cepat": (10000, 3), "Normal": (30000, 3),
+                     "Teliti": (80000, 3), "Sangat teliti": (80000, 6)}
+            dapat = {}
+            labels = b.js("""JSON.stringify(
+              [...document.getElementById('effort').options]
+                .map((o) => [o.value, o.textContent.trim()]))""")
+            for nilai, label in json.loads(labels):
+                b.js(f"""(() => {{
+                  const sel = document.getElementById('effort');
+                  sel.value = {json.dumps(nilai)};
+                  sel.dispatchEvent(new Event('change', {{bubbles: true}}));
+                  document.getElementById('debug-out').value = '';
+                  document.getElementById('copy-debug').click();
+                }})(); true""")
+                b.wait_for("document.getElementById('debug-out').value"
+                           ".includes('percobaan=')",
+                           timeout=5, label=f"teks debug {label}")
+                txt = b.js("document.getElementById('debug-out').value")
+                eff = int(txt.split("effort=")[1].split()[0])
+                att = int(txt.split("percobaan=")[1].split()[0])
+                dapat[label] = (eff, att)
+            assert dapat == harap, f"yang dikirim {dapat} != {harap}"
+            return "4 pilihan -> " + ", ".join(
+                f"{k} {v[0] // 1000}k/att{v[1]}" for k, v in dapat.items())
+        check("Kualitas optimasi mengirim effort + percobaan", effort_pair)
+
+        # Dua pilihan berbagi effort 80.000 dan hanya percobaannya yang beda,
+        # jadi memulihkan jadwal lama harus mencocokkan pasangannya. Jadwal yang
+        # tersimpan dengan effort 160.000 - pilihan yang sudah tidak ada - harus
+        # jatuh ke cocokan effort saja dan tidak meninggalkan selector kosong.
+        def effort_restore():
+            # Aturan pencocokan yang sama seperti di restore() app.js. Ditulis
+            # ulang di sini dengan sengaja: yang diuji apakah ATURANNYA menutup
+            # keempat bentuk permintaan yang mungkin, termasuk jadwal lama yang
+            # tidak menyimpan percobaan sama sekali.
+            hasil = b.js("""(() => {
+              const sel = document.getElementById('effort');
+              const semula = sel.value;
+              const coba = (req) => {
+                sel.value = '10000:3';
+                const opts = [...sel.options].map((o) => {
+                  const [eff, att] = o.value.split(':').map(Number);
+                  return {value: o.value, eff, att: att || 3};
+                });
+                const pas = opts.find((o) => o.eff === +req.effort
+                    && o.att === +(req.attempts ?? 3))
+                  || opts.slice().sort((a, b) =>
+                    Math.abs(a.eff - req.effort) - Math.abs(b.eff - req.effort)
+                    || b.att - a.att)[0];
+                if (pas) sel.value = pas.value;
+                return sel.value;
+              };
+              const out = {
+                teliti: coba({effort: 80000, attempts: 3}),
+                sangat: coba({effort: 80000, attempts: 6}),
+                lama160: coba({effort: 160000}),
+                tanpa_att: coba({effort: 30000}),
+              };
+              sel.value = semula;
+              return JSON.stringify(out);
+            })()""")
+            d = json.loads(hasil)
+            assert d["teliti"] == "80000:3", f"Teliti salah pulih: {d}"
+            assert d["sangat"] == "80000:6", f"Sangat teliti salah pulih: {d}"
+            assert d["tanpa_att"] == "30000:3", f"tanpa percobaan: {d}"
+            # effort 160.000 sudah tidak ada pilihannya. Ia harus mendarat di
+            # setelan paling teliti yang tersisa - bukan di "Cepat", yang
+            # membalik maksud host sepenuhnya.
+            assert d["lama160"] == "80000:6", \
+                f"jadwal effort 160k tidak pulih ke setelan paling teliti: {d}"
+            return "pasangan cocok, jadwal effort 160k -> Sangat teliti"
+        check("Pulihkan pilihan kualitas dari jadwal tersimpan", effort_restore)
 
         # --- 13. tidak ada error JS sepanjang sesi ------------------------
         def no_errors():
