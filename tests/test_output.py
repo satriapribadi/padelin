@@ -422,6 +422,46 @@ class TestExports(unittest.TestCase):
         self.assertIsNone(b["lawan"])
         self.assertIsNone(b["partner"])
 
+    def test_kartu_cetak_tidak_terpecah_beda_dari_layar(self):
+        """Cetakan dan layar harus menyusun kartu yang sama dengan cara sama.
+
+        minmax(94px) disetel untuk TUJUH kartu. Begitu wasit/ballboy aktif
+        kartunya jadi delapan, dan 8x94 + 7x5 = 787px tidak muat di isi A4 yang
+        cuma 703px - kartu terakhir jatuh sendirian ke baris kedua. Diukur pada
+        laporan yang sama: layar 900px memberi satu baris berisi delapan, cetak
+        memberi 7+1. Host melihat yang satu, peserta memegang yang lain.
+
+        Yang dijaga di sini jumlah KOLOM yang dikirim ke CSS, karena itu yang
+        menentukan semuanya muat sebaris di cetakan - tata letak sebenarnya
+        diperiksa dengan merender, bukan oleh uji ini.
+        """
+        players = [Player(id=i, name=f"P{i}") for i in range(8)]
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, effort=4000, attempts=1,
+                     referees_per_court=1, ballboys_per_court=1)
+        sch = build_schedule(players, cfg)
+
+        # Dihitung per pembuka div, bukan dengan prefiks "class='tile": itu ikut
+        # mencocoki kontainer <div class='tiles'> dan hasilnya kelebihan satu.
+        def n_kartu(html):
+            return html.count("<div class='tile'>") + html.count(
+                "<div class='tile wide'>")
+
+        h = build_html(sch, title="Uji", fee=24_750)
+        self.assertEqual(n_kartu(h), 8,
+                         "jumlah kartu berubah - ambang di uji ini ikut basi")
+        # 8 kartu + kartu fee yang mengambil dua kolom = 9 kolom.
+        self.assertIn("--n:9", h)
+        self.assertIn("class='tile wide'", h,
+                      "kartu fee tidak diberi kolom lebih, padahal nilainya "
+                      "yang terpanjang")
+
+        # Tanpa fee: tidak ada kartu lebar, jadi kolomnya sebanyak kartunya.
+        tanpa = build_html(sch, title="Uji")
+        self.assertEqual(n_kartu(tanpa), 7)
+        self.assertIn("--n:7", tanpa)
+        self.assertNotIn("tile wide", tanpa)
+
     def test_html_shows_fee_per_player(self):
         """Fee itu hal pertama yang dicari peserta saat laporan dibagikan."""
         players = [Player(id=i, name=f"P{i}") for i in range(8)]

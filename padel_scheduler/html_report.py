@@ -98,12 +98,16 @@ body{
   max-width:100%; text-align:right; overflow-wrap:anywhere;
 }
 
-/* 94px supaya tujuh kartu (dengan fee) muat sebaris di lebar A4; dengan 104px
-   kartu terakhir jatuh sendirian ke baris kedua dan terlihat belum rampung. */
+/* Di layar kartu boleh membungkus: laporan ini juga dibuka di HP, dan memaksa
+   delapan kolom di lebar 375px membuat semuanya tidak terbaca. Yang tidak boleh
+   membungkus cetakannya - lihat --n di @media print. */
 .tiles{display:grid; grid-template-columns:repeat(auto-fit,minmax(94px,1fr));
   gap:5px; margin-bottom:14px}
 .tile{background:var(--band); border:1px solid var(--line); border-radius:7px;
   padding:6px 9px}
+/* Nilai kartu fee paling panjang ("Rp 24.750" butuh 75px sementara sisanya 9-33
+   px), jadi kartunya yang diberi dua kolom - bukan seluruh kartu dikecilkan. */
+.tile.wide{grid-column:span 2}
 .tile .k{font-size:8.5px; text-transform:uppercase; letter-spacing:.06em;
   color:var(--muted); font-weight:600}
 .tile .v{font-size:15px; font-weight:700; margin-top:1px; letter-spacing:-.01em}
@@ -307,7 +311,17 @@ table{width:100%; border-collapse:collapse}
   h2{margin-top:11px}
   .round{border-color:#d8dde4}
   .masthead{margin-bottom:10px}
-  .tiles{margin-bottom:10px; gap:5px}
+  /* Kolomnya dipatok sebanyak kartu yang memang dirakit, bukan diserahkan ke
+     auto-fit. minmax(94px) disetel untuk TUJUH kartu; begitu wasit/ballboy
+     aktif kartunya jadi delapan, dan 8x94 + 7x5 = 787px tidak muat di isi A4
+     yang cuma 703px - kartu terakhir jatuh sendirian ke baris kedua dan
+     terlihat belum rampung. Diukur pada laporan yang sama: layar 900px memberi
+     satu baris berisi delapan, cetak memberi 7+1. Cetakan dan layar lalu
+     bercerita beda, dan yang dipegang peserta cetakannya.
+     --n dikirim inline oleh build_html karena hanya di sanalah jumlah kartunya
+     diketahui; 7 dipakai kalau atributnya hilang. */
+  .tiles{margin-bottom:10px; gap:5px;
+    grid-template-columns:repeat(var(--n,7),minmax(0,1fr))}
   .rounds{gap:5px}
   .m{padding:2px 7px; font-size:9.5px; line-height:1.35}
   .resting{padding:1px 7px; font-size:8.5px; line-height:1.35}
@@ -482,10 +496,21 @@ def build_html(
     if show_roles:
         duties = sum(v.get("total", 0) for v in st.roles_per_player.values())
         tiles.append(("Tugas dibagikan", str(duties), "wasit + ballboy"))
-    parts.append("<div class='tiles'>")
-    for k, v, s in tiles:
+    # Kartu fee mengambil dua kolom karena isinya memang yang terpanjang.
+    # Diukur di lebar isi A4 dengan delapan kartu: tiap kolom menyisakan 66px
+    # untuk isi, sementara "Rp 24.750" butuh 75px - nilainya lalu pecah jadi
+    # "Rp" di baris satu dan "24.750" di baris dua. Nilai kartu lain butuh 9
+    # sampai 33px, jadi mengecilkan semuanya demi satu kartu itu salah sasaran.
+    ada_fee = bool(fee and fee > 0)
+    kolom = len(tiles) + (1 if ada_fee else 0)
+
+    # Jumlah KOLOM dikirim ke CSS: cetakan memakainya untuk memastikan semuanya
+    # muat sebaris, berapa pun kartu yang terpasang. Lihat @media print.
+    parts.append(f"<div class='tiles' style='--n:{kolom}'>")
+    for i, (k, v, s) in enumerate(tiles):
+        lebar = " wide" if ada_fee and i == 0 else ""
         parts.append(
-            f"<div class='tile'><div class='k'>{_e(k)}</div>"
+            f"<div class='tile{lebar}'><div class='k'>{_e(k)}</div>"
             f"<div class='v'>{_e(v)}</div><div class='s'>{_e(s)}</div></div>"
         )
     parts.append("</div>")
