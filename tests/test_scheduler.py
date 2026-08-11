@@ -1391,6 +1391,40 @@ class TestPesertaTakTerpakai(unittest.TestCase):
         self.assertRegex(giliran[0], r"\d+ dari \d+ serobotan itu dipaksa format")
         self.assertIn("Sisanya rotasi partner", giliran[0], giliran[0])
 
+    def test_catatan_giliran_menyebut_siapa(self):
+        """Angka tanpa nama adalah tuduhan tanpa alamat.
+
+        "4 kali seseorang turun lagi" tidak bisa dicek host di jadwalnya sendiri
+        sampai ia tahu siapa. Yang disebut kedua sisinya: yang dilewati - mereka
+        yang mungkin mengeluh - dan yang turun lagi.
+
+        Nama aslinya memang dipakai di sini. Catatan ini muncul di layar jadwal
+        dan di laporan yang dibagikan, dan di keduanya nama justru gunanya. Yang
+        menyamarkannya pembuat info debug di web/app.js, karena teks ITU yang
+        disalin keluar saat melapor - dijaga terpisah oleh tools/uitest.py.
+        """
+        nama = ["Rina Kartika", "Bagus Pratama", "Sinta Lestari",
+                "Dimas Wicaksono", "Eko Prasetyo", "Fitri Handayani",
+                "Gilang Saputra", "Hendra Wijaya"]
+        gen = ["F", "M", "F", "M", "M", "F", "M", "M"]
+        players = [Player(id=i + 1, name=nama[i], rating=float(2 + i % 4),
+                          gender=gen[i]) for i in range(8)]
+        cfg = Config(courts=1, duration_minutes=120, round_minutes=10,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=20_000, attempts=1,
+                     allowed_matchups=["LL-LL", "LP-LP"])
+        sch = build_schedule(players, cfg)
+        giliran = [c for c in sch.notes if c.startswith("Giliran belum")]
+        self.assertEqual(len(giliran), 1, f"catatan giliran hilang: {sch.notes}")
+
+        self.assertIn("yang dilewati", giliran[0], giliran[0])
+        self.assertIn("yang turun lagi", giliran[0], giliran[0])
+        # Minimal satu nama peserta betulan ikut, bukan sekadar frasanya.
+        self.assertTrue(any(n in giliran[0] for n in nama),
+                        f"tidak ada nama yang disebut: {giliran[0]}")
+        # Jumlahnya ikut, supaya bisa dicocokkan dengan jadwal.
+        self.assertRegex(giliran[0], r"yang dilewati [^;]*\d+x")
+
     def test_catatan_giliran_tidak_salah_menggambarkan_angkanya(self):
         """"Menunggu giliran pertamanya" bukan yang dihitung turn_skips.
 

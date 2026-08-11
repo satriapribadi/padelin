@@ -1152,8 +1152,21 @@ function debugSnapshot() {
       });
     });
     if (schedule.notes && schedule.notes.length) {
+      // Catatan bisa memuat nama peserta - "tidak kebagian main sama sekali:
+      // Budi", "yang dilewati: Sari 2x". Info debug ini dibuat untuk DIBAGIKAN
+      // saat melapor, jadi namanya harus ikut disamarkan seperti di tabel
+      // peserta dan jadwal di atas; sebelumnya catatan disisipkan apa adanya
+      // dan nama asli lolos ke teks yang disalin host.
+      //
+      // Diganti dari yang TERPANJANG dulu supaya nama yang kebetulan menjadi
+      // bagian dari nama lain ("Ani" di dalam "Anisa") tidak memotongnya
+      // duluan dan menyisakan potongan yang tidak tersamarkan.
+      const samarkan = (teks) => [...players]
+        .filter((p) => p.name)
+        .sort((a, b) => b.name.length - a.name.length)
+        .reduce((s, p) => s.split(p.name).join(alias.get(p.id)), teks);
       lines.push('', 'catatan:');
-      schedule.notes.forEach((nt) => lines.push('  - ' + nt));
+      schedule.notes.forEach((nt) => lines.push('  - ' + samarkan(nt)));
     }
   } else {
     lines.push('', '(jadwal belum dibuat)');

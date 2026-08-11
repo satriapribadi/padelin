@@ -2275,6 +2275,46 @@ def _build_once(players: list[Player], config: Config,
             bagian.append(
                 f"{stats.turn_skips} kali seseorang turun lagi padahal ada "
                 f"peserta lain yang sedang duduk dan baru main lebih sedikit")
+
+            # Siapa, bukan cuma berapa. "4 kali" tanpa nama adalah tuduhan
+            # tanpa alamat: yang pertama dicari host justru siapa orangnya, dan
+            # tanpa itu angkanya tidak bisa dicek sendiri di jadwal. Dihitung
+            # dengan aturan yang sama seperti stats.turn_skips, termasuk
+            # menghormati siapa yang berhak turun di ronde itu.
+            elig_giliran = [set(_eligible_for(s.rule, final_players))
+                            for s, _ in round_plan(segments,
+                                                   config.interleave_segments)]
+            sudah_g = {pid: 0 for pid in stats.plays_per_player}
+            lewat_n: dict[int, int] = {}
+            dilewati_n: dict[int, int] = {}
+            for idx, rnd in enumerate(rounds):
+                turun = {p for m in rnd.matches for p in m.players()}
+                elig = (elig_giliran[idx] if idx < len(elig_giliran) else None)
+                duduk = [p for p in sudah_g
+                         if p not in turun and (elig is None or p in elig)]
+                if turun and duduk:
+                    lo = min(sudah_g[p] for p in duduk)
+                    lewat = [p for p in turun if sudah_g[p] > lo]
+                    for p in lewat:
+                        lewat_n[p] = lewat_n.get(p, 0) + 1
+                    if lewat:
+                        for p in duduk:
+                            if sudah_g[p] == lo:
+                                dilewati_n[p] = dilewati_n.get(p, 0) + 1
+                for p in turun:
+                    sudah_g[p] = sudah_g.get(p, 0) + 1
+
+            def _sebut(hitung: dict[int, int], batas: int = 3) -> str:
+                urut = sorted(hitung.items(), key=lambda kv: (-kv[1], kv[0]))
+                sebagian = ", ".join(
+                    f"{nama_peserta.get(p, p)} {n}x" for p, n in urut[:batas])
+                sisa = len(urut) - batas
+                return sebagian + (f", dan {sisa} lainnya" if sisa > 0 else "")
+
+            if dilewati_n:
+                bagian.append("yang dilewati " + _sebut(dilewati_n))
+            if lewat_n:
+                bagian.append("yang turun lagi " + _sebut(lewat_n))
         if stats.longest_wait > stats.wait_floor:
             bagian.append(
                 f"tunggu terpanjang {stats.longest_wait} ronde, sedangkan yang "

@@ -636,10 +636,21 @@ def main() -> int:
             for needed in ("INFO DEBUG PADELIN", "court=", "seed=", "peserta="):
                 assert needed in txt, f"bagian '{needed}' hilang"
             # Nama asli TIDAK boleh ikut - itu inti penyamarannya.
-            first = roster[0].split(",")[0].strip()
-            assert first not in txt, f"nama asli '{first}' bocor ke info debug"
+            #
+            # Diperiksa SEMUA nama, bukan cuma yang pertama. Catatan jadwal
+            # sekarang memuat nama ("yang dilewati Budi 2x", "tidak kebagian
+            # main sama sekali: Sari") dan disisipkan ke teks ini; memeriksa
+            # satu nama saja membuat uji ini lolos kebetulan justru saat
+            # catatan menyebut orang lain.
+            nama = [r.split(",")[0].strip() for r in roster]
+            bocor = [n for n in nama if n and n in txt]
+            assert not bocor, f"nama asli bocor ke info debug: {bocor[:3]}"
             assert "P1 " in txt, "nama samaran tidak dipakai"
-            return f"{len(txt.splitlines())} baris, nama disamarkan"
+            # Bagian catatan harus benar-benar ada, kalau tidak pemeriksaan di
+            # atas cuma menguji teks yang memang tidak pernah memuat nama.
+            assert "catatan:" in txt, "info debug tanpa bagian catatan"
+            return (f"{len(txt.splitlines())} baris, {len(nama)} nama "
+                    f"disamarkan")
         check("Tombol info debug", debug_button)
 
         # --- 12b. selector kualitas mengirim DUA angka --------------------
