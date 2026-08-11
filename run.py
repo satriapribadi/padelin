@@ -224,7 +224,8 @@ def api_analyze(payload: dict) -> dict:
 def api_economics(payload: dict) -> dict:
     cfg = _config_from(payload)
     econ = _econ_from(payload)
-    n = len(_players_from(payload)) or int(payload.get("n_players", 0))
+    pemain = _players_from(payload)
+    n = len(pemain) or int(payload.get("n_players", 0))
     if n < 4:
         return {"error": "Butuh minimal 4 pemain untuk hitung biaya."}
 
@@ -243,8 +244,8 @@ def api_economics(payload: dict) -> dict:
     # terisi, jadi keduanya ikut - tanpa itu perbandingan biaya menjanjikan
     # waktu main yang tidak akan terjadi.
     seg_ekonomi = [(s.rule, s.rounds) for s in cfg.segments]
-    men_e = sum(1 for p in _players_from(payload) if p.gender == "M")
-    women_e = sum(1 for p in _players_from(payload) if p.gender == "F")
+    men_e = sum(1 for p in pemain if p.gender == "M")
+    women_e = sum(1 for p in pemain if p.gender == "F")
 
     options = compare(
         n_players=n,
