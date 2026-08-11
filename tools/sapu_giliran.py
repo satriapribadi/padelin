@@ -28,6 +28,7 @@ from __future__ import annotations
 import itertools
 import json
 import math
+import random
 import sys
 import time
 import traceback
@@ -48,6 +49,12 @@ FORMAT = [
     ["LP-LP"],                             # campur saja
 ]
 SEED = [42, 7, 2024]
+# Urutan gender dipasangkan ke INDEKS seed, bukan dijadikan sumbu sendiri.
+# Sebagai sumbu ia mengalikan jumlah kasus tiga kali; dipasangkan begini tiap
+# kombinasi roster x court x format tetap mencicipi ketiga keluarga instance
+# dengan jumlah kasus yang persis sama. Kuncinya tetap stabil - urutan
+# ditentukan oleh posisi seed - jadi perbandingan sebelum/sesudah tetap sah.
+URUTAN = ["blok", "selang", "acak"]
 DURASI = 120
 RONDE_MENIT = 8
 
@@ -63,16 +70,50 @@ def lapor(m: str = "") -> None:
     print(m, flush=True)
 
 
-def _roster(n_pria: int, n_putri: int) -> list[Player]:
-    out = []
-    pid = 1
-    for i in range(n_pria):
-        out.append(Player(id=pid, name=f"L{i+1}", rating=2 + i % 4, gender="M"))
-        pid += 1
-    for i in range(n_putri):
-        out.append(Player(id=pid, name=f"P{i+1}", rating=2 + i % 4, gender="F"))
-        pid += 1
-    return out
+def _urutan_gender(n_pria: int, n_putri: int, urutan: str) -> list[str]:
+    """Susunan gender roster. Ini BUKAN detail kosmetik.
+
+    Urutan gender menentukan baris 1-faktorisasi yang terbentuk, jadi dua roster
+    dengan jumlah yang persis sama tapi urutan berbeda adalah dua instance yang
+    sama sekali lain. Sapuan ini dulu membangun semuanya blok - putra dulu, lalu
+    putri - sehingga 324 kasusnya satu keluarga instance saja, dan kebetulan
+    BUKAN keluarga roster host, yang menyelang-nyeling.
+
+    Selisihnya besar, bukan derau: pada 16 putra + 10 putri di 4 court, serobotan
+    berayun 85 (blok) vs 37 (selang) pada seed dan effort yang sama; pada 14
+    putra + 6 putri di 3 court, 26 vs 4.
+    """
+    if urutan == "blok":
+        return ["M"] * n_pria + ["F"] * n_putri
+    if urutan == "selang":
+        out = []
+        i = j = 0
+        while i < n_pria or j < n_putri:
+            if i < n_pria:
+                out.append("M")
+                i += 1
+            if j < n_putri:
+                out.append("F")
+                j += 1
+        return out
+    if urutan == "acak":
+        out = ["M"] * n_pria + ["F"] * n_putri
+        random.Random(9901 + n_pria * 100 + n_putri).shuffle(out)
+        return out
+    raise ValueError(f"urutan tidak dikenal: {urutan}")
+
+
+def _roster(n_pria: int, n_putri: int, urutan: str = "blok") -> list[Player]:
+    """Roster dengan rating melekat pada POSISI, bukan pada orangnya.
+
+    Kalau rating ikut berpindah saat urutan gender berubah, dua efek bercampur
+    dan selisih antar urutan tidak bisa disimpulkan dari apa pun.
+    """
+    return [
+        Player(id=i + 1, name=(f"L{i+1}" if g == "M" else f"P{i+1}"),
+               rating=2 + i % 4, gender=g)
+        for i, g in enumerate(_urutan_gender(n_pria, n_putri, urutan))
+    ]
 
 
 def _giliran(sch) -> dict:
@@ -178,16 +219,22 @@ def main() -> None:
         bandingkan(sys.argv[2], sys.argv[3])
         return
 
-    kombinasi = list(itertools.product(ROSTER, COURT, FORMAT, SEED))
+    kombinasi = list(itertools.product(ROSTER, COURT, FORMAT,
+                                       list(enumerate(SEED))))
     lapor(f"sapuan keadilan giliran: {len(kombinasi)} kasus")
     lapor(f"roster={ROSTER}")
     lapor(f"court={COURT} seed={SEED} durasi={DURASI}m ronde={RONDE_MENIT}m")
     lapor(f"format={[('semua' if f is None else '+'.join(f)) for f in FORMAT]}")
+    lapor(f"urutan gender={URUTAN}, dipasangkan ke indeks seed "
+          f"({', '.join(f'{s}->{URUTAN[i % len(URUTAN)]}' for i, s in enumerate(SEED))})")
     lapor(f"CATATAN cakupan: effort={EFFORT} (default produksi 30000) dan "
           f"attempts={ATTEMPTS} (default 3) supaya sapuan selesai dalam "
-          f"hitungan menit. Mode selain americano, meet bersegmen, partner "
-          f"terkunci, dan preferensi court TIDAK diuji di sini - uji unit "
-          f"tests/ yang menjaganya.")
+          f"hitungan menit. Cacat giliran yang dilaporkan host justru muncul di "
+          f"effort 160.000/attempts=3 - rezim itu disapu terpisah oleh "
+          f"tools/sapu_giliran_dalam.py, bukan di sini. Mode selain americano, "
+          f"meet bersegmen, partner terkunci, dan preferensi court TIDAK diuji "
+          f"di sini - uji unit tests/ yang menjaganya. Tiap kombinasi mencicipi "
+          f"satu urutan gender per seed, bukan ketiganya sekaligus.")
     lapor("")
 
     # Import di sini supaya kegagalan import ikut terlaporkan per kasus, bukan
@@ -196,12 +243,14 @@ def main() -> None:
 
     mulai = time.time()
     n_error = 0
-    for i, ((n_pria, n_putri), court, fmt, seed) in enumerate(kombinasi, 1):
+    for i, ((n_pria, n_putri), court, fmt, (si, seed)) in enumerate(kombinasi, 1):
+        urutan = URUTAN[si % len(URUTAN)]
         label = (f"{n_pria}L+{n_putri}P {court}court "
-                 f"fmt={'semua' if fmt is None else '+'.join(fmt)} seed={seed}")
+                 f"fmt={'semua' if fmt is None else '+'.join(fmt)} "
+                 f"urut={urutan} seed={seed}")
         kunci = f"{n_pria}L{n_putri}P/c{court}/" \
-                f"{'semua' if fmt is None else '+'.join(fmt)}/s{seed}"
-        players = _roster(n_pria, n_putri)
+                f"{'semua' if fmt is None else '+'.join(fmt)}/{urutan}/s{seed}"
+        players = _roster(n_pria, n_putri, urutan)
         rec: dict = {"kunci": kunci, "label": label}
         try:
             cfg = Config(
