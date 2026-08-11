@@ -17,7 +17,12 @@ from collections import Counter
 from itertools import combinations
 
 from padel_scheduler import Config, Player, Segment, build_schedule
-from padel_scheduler.capacity import analyze, shape_budget, shape_totals
+from padel_scheduler.capacity import (
+    analyze,
+    gender_tak_terpakai,
+    shape_budget,
+    shape_totals,
+)
 from padel_scheduler.factorization import (
     mixed_pair_rounds,
     verify_one_factorization,
@@ -1245,6 +1250,89 @@ class TestOpponentCap(unittest.TestCase):
         self.assertAlmostEqual(st.cost_pair, ulang)
 
 
+class TestPesertaTakTerpakai(unittest.TestCase):
+    """Peserta yang formatnya sendiri tidak menyisakan tempat untuknya.
+
+    Roster dengan tepat satu orang dari satu gender adalah kasus yang paling
+    mudah dibuat host tanpa sadar. Satu match yang memuat seorang perempuan di
+    antara para laki-laki berkode LL-LP; pilihan "sesama bentuk saja"
+    melarangnya, dan LP-LP menuntut kedua tim campur - butuh dua perempuan.
+    Yang seorang itu lalu duduk semalaman sementara tidak satu pun angka di
+    ringkasan menyebutkannya.
+    """
+
+    SAMA = ["LL-LL", "LP-LP", "PP-PP"]
+
+    def _roster(self, men, women):
+        return [
+            Player(id=i, name=(f"L{i+1}" if i < men else f"P{i-men+1}"),
+                   rating=float(2 + i % 4),
+                   gender=("M" if i < men else "F"))
+            for i in range(men + women)
+        ]
+
+    def test_satu_gender_tunggal_ditandai(self):
+        """11 putra + 1 putri, format sesama bentuk: si putri tidak muat."""
+        d = gender_tak_terpakai(11, 1, self.SAMA, courts_used=2)
+        self.assertEqual(set(d), {"F"})
+        self.assertIn("LL-LP", d["F"]["penolong"],
+                      "host harus diberi tahu format mana yang menolong")
+        self.assertEqual(d["F"]["tambah"], 1,
+                         "satu peserta perempuan lagi sudah cukup")
+
+    def test_dua_putri_sudah_cukup(self):
+        """Ambangnya di dua, bukan di satu: LP-LP butuh dua tim campur."""
+        self.assertEqual(gender_tak_terpakai(10, 2, self.SAMA, 2), {})
+        self.assertEqual(gender_tak_terpakai(9, 3, self.SAMA, 2), {})
+
+    def test_format_yang_jebol_total_bukan_urusan_di_sini(self):
+        """Kalau tidak ada ronde sah sama sekali, penjadwal melanggar formatnya.
+
+        Keadaan itu sudah punya catatannya sendiri ("match memakai format yang
+        Anda larang") dan semua peserta tetap main. Menandainya di sini berarti
+        dua peringatan untuk satu keadaan, salah satunya keliru.
+        """
+        self.assertEqual(gender_tak_terpakai(11, 1, ["LP-LP"], 2), {})
+
+    def test_yang_menentukan_ronde_penuh_bukan_satu_match(self):
+        """6 putra + 6 putri, hanya putra vs putra: tergantung jumlah court.
+
+        Satu court butuh 4 putra dari 6 - muat, jadi para putri memang tidak
+        kebagian. Dua court butuh 8 sekaligus dan itu tidak ada, jadi formatnya
+        yang jebol, bukan para putri yang terdampar.
+        """
+        self.assertEqual(set(gender_tak_terpakai(6, 6, ["LL-LL"], 1)), {"F"})
+        self.assertEqual(gender_tak_terpakai(6, 6, ["LL-LL"], 2), {})
+
+    def test_cermin_gender_tidak_dibedakan(self):
+        """Aturan yang sama berlaku untuk satu putra di antara para putri."""
+        d = gender_tak_terpakai(1, 11, self.SAMA, courts_used=2)
+        self.assertEqual(set(d), {"M"})
+        self.assertIn("LP-PP", d["M"]["penolong"])
+
+    def test_host_diberi_tahu_di_jadwal_jadi(self):
+        """Yang 0 main harus disebut NAMANYA, bukan cuma jadi angka.
+
+        Sebelumnya catatan yang muncul bicara soal rotasi partner dan
+        menyarankan menambah court - saran yang tidak menyentuh sebabnya sama
+        sekali, karena yang menghalangi formatnya.
+        """
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=20_000, attempts=1, allowed_matchups=self.SAMA)
+        sch = build_schedule(self._roster(11, 1), cfg)
+        main = sch.stats.plays_per_player
+        nol = [pid for pid, v in main.items() if v == 0]
+        self.assertEqual(len(nol), 1, f"harusnya persis satu peserta: {main}")
+
+        semua = " ".join(sch.notes)
+        self.assertIn("tidak kebagian main sama sekali", semua,
+                      f"peserta yang 0 main tidak disebut: {sch.notes}")
+        self.assertIn("P1", semua, "namanya harus disebut, bukan cuma jumlahnya")
+        self.assertIn("format", semua.lower(),
+                      "sebabnya - formatnya - harus ikut dijelaskan")
+
+
 class TestShapeBudget(unittest.TestCase):
     """Kelayakan lawan unik yang sadar gender dan sadar format.
 
@@ -1539,6 +1627,59 @@ class TestGiliranBerurutan(unittest.TestCase):
         self.assertEqual(sch.stats.wait_floor, g["batas_tunggu"])
         self.assertEqual(sch.stats.last_first_play, g["main_pertama_terakhir"])
 
+    def test_babak_terpisah_bukan_giliran_yang_diserobot(self):
+        """Peserta putri di babak putra tidak sedang dilewati - tidak berhak.
+
+        optimizer.turn_skips() sudah menyaring dengan round_eligible, tapi
+        perhitungan yang sama di _build_stats() dulu tidak menyaring apa pun.
+        Akibatnya angka yang dioptimasi dan angka yang dilaporkan ke host adalah
+        dua angka yang berbeda: pada roster ini yang dilaporkan 40 serobotan,
+        tunggu 6 dari batas 1, dan match pertama di ronde 7 - untuk jadwal yang
+        sebenarnya sempurna. Host lalu dapat peringatan untuk keadaan yang tidak
+        ada, plus saran "tambah court" yang tidak menyentuh sebabnya; obat yang
+        benar untuk babak berurutan adalah interleave_segments.
+        """
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=20_000, attempts=1,
+                     segments=[Segment("Putra", 6, "men"),
+                               Segment("Putri", 6, "women")])
+        players = make_players(16, genders=["M"] * 8 + ["F"] * 8)
+        sch = build_schedule(players, cfg)
+
+        # Tiap babak memuat 8 orang untuk 8 slot, jadi semua yang berhak turun
+        # di tiap ronde babaknya. Tidak ada satu pun antrean yang diserobot.
+        self.assertEqual(sch.stats.turn_skips, 0,
+                         f"babak terpisah dilaporkan sebagai serobotan: "
+                         f"{sch.stats.turn_skips}")
+        self.assertEqual(sch.stats.longest_wait, 0,
+                         f"duduk karena babak lain dihitung menunggu: "
+                         f"{sch.stats.longest_wait}")
+        self.assertEqual(sch.stats.last_first_play, 1,
+                         "tiap peserta turun di ronde pertama babaknya sendiri")
+        self.assertNotIn(
+            "Giliran belum sepenuhnya berurutan",
+            " ".join(sch.notes),
+            f"peringatan giliran untuk jadwal yang sempurna: {sch.notes}")
+
+    def test_giliran_di_babak_terbuka_tidak_berubah(self):
+        """Meet tanpa babak: tiap orang berhak di semua ronde, angkanya sama.
+
+        Penyaringan kelayakan tidak boleh diam-diam melonggarkan meet biasa -
+        di situ tidak ada yang tidak berhak, jadi hasilnya harus persis sama
+        dengan hitungan ulang dari isi ronde.
+        """
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=20_000, attempts=1,
+                     segments=[Segment("Open", 12, "open")])
+        sch = build_schedule(make_players(16), cfg)
+        g = hitung_giliran(sch)
+        self.assertEqual(sch.stats.turn_skips, g["terlewat"])
+        self.assertEqual(sch.stats.longest_wait, g["tunggu"])
+        self.assertEqual(sch.stats.wait_floor, g["batas_tunggu"])
+        self.assertEqual(sch.stats.last_first_play, g["main_pertama_terakhir"])
+
     def test_semua_turun_di_putaran_pertama(self):
         """14 orang, 2 court (8 slot): tidak ada yang menunggu sampai ronde 3.
 
@@ -1582,6 +1723,49 @@ class TestGiliranBerurutan(unittest.TestCase):
                     g["tunggu"], g["batas_tunggu"] + 2,
                     f"{pria + wanita} orang / {court} court: tunggu "
                     f"{g['tunggu']} vs batas {g['batas_tunggu']} - {g}")
+
+    def test_keunikan_menang_atas_giliran(self):
+        """Match pertama yang telat adalah HARGA, bukan cacat yang terlewat.
+
+        12 putra + 8 putri di 2 court: peserta terakhir baru turun di ronde 6
+        padahal 3 ronde sudah cukup untuk semua orang. Itu bisa dimajukan - tapi
+        diukur, satu-satunya jalan menaikkan pengulangan lawan dari nol ke tiga
+        pasang, dan _giliran_membaik sengaja melarangnya.
+
+        Uji ini menjaga arah pertukarannya, bukan angka gilirannya. Kalau suatu
+        hari nol itu hilang di sini, seseorang sedang menukar keunikan demi
+        giliran - keputusan yang boleh saja diambil, tapi harus diambil sadar
+        dan bukan sebagai efek samping. Lihat _giliran_membaik untuk
+        pengukurannya lengkap.
+        """
+        # Gender diselang-seling, bukan blok: urutannya menentukan baris
+        # 1-faktorisasi yang terbentuk, jadi "12 putra dulu lalu 8 putri" adalah
+        # instance yang lain dan tidak menunjukkan pertukaran ini.
+        selang = []
+        i = j = 0
+        while i < 12 or j < 8:
+            if i < 12:
+                selang.append("M")
+                i += 1
+            if j < 8:
+                selang.append("F")
+                j += 1
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, mode="americano", seed=42,
+                     effort=30_000, attempts=3, allowed_matchups=self.SAMA)
+        sch = build_schedule(make_players(20, genders=selang), cfg)
+
+        self.assertEqual(sch.stats.opponent_repeat_pairs, 0,
+                         "lawan unik sempurna tidak boleh dibayarkan untuk "
+                         "memajukan match pertama seseorang")
+        self.assertEqual(sch.stats.partner_repeat_pairs, 0,
+                         "partner unik juga tidak boleh jadi korban")
+        # Harganya, dicatat supaya terlihat sebagai harga: peserta terakhir
+        # turun setelah putaran pertama lewat. Batas atas dipasang longgar -
+        # yang dijaga uji ini keunikannya, bukan angka ini.
+        self.assertLessEqual(sch.stats.last_first_play, 7,
+                             f"telatnya jauh melebihi yang pernah diukur: "
+                             f"{sch.stats.last_first_play}")
 
     def test_biaya_tunggu_konveks_memilih_yang_terpecah(self):
         """Satu rentetan panjang harus dinilai lebih mahal dari dua yang pendek.

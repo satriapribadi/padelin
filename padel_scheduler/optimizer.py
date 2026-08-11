@@ -983,6 +983,24 @@ def _giliran_membaik(st: ScheduleState, sebelum: tuple) -> bool:
     tidak pernah membaik. Hitungan pasang adalah angka yang benar-benar
     dipertaruhkan: ia yang dilihat host di ringkasan, dan ia yang dipakai
     _lebih_baik untuk memilih di antara beberapa percobaan.
+
+    APA YANG DIBAYAR OLEH KEPUTUSAN INI, diukur supaya tidak dikira terlewat.
+    Pada 282 kasus lintas roster, urutan gender, dan effort produksi, 98 di
+    antaranya punya peserta yang match pertamanya datang lebih telat daripada
+    yang sebenarnya perlu - 87 telat satu ronde, 9 telat dua, 2 telat tiga.
+    Itu sisa yang tidak bisa dibereskan tanpa menaikkan pengulangan.
+
+    Sudah dicoba dan dibatalkan: sapuan khusus yang menyasar putaran pertama,
+    dengan pagar yang sama persis (pasang berulang tidak naik, biaya menunggu
+    tidak naik). Hasilnya 1 kasus membaik dari 282 - tidak sepadan dengan satu
+    sapuan O(ronde x peserta) tambahan per kandidat gerakan.
+
+    Diagnosisnya jelas dan pagar mana yang mengikat sudah diukur satu per satu:
+    melepas pagar biaya menunggu tidak mengubah apa pun (identik di kelima kasus
+    uji), sedangkan melepas pagar lawan membereskan 3 dari 5 - dan ongkosnya 12
+    putra + 8 putri di 2 court kehilangan rekor nol lawan berulangnya, jadi 3
+    pasang. Jadi telatnya match pertama BUKAN kelemahan sapuan; ia harga dari
+    keputusan di fungsi ini. Dijaga uji test_keunikan_menang_atas_giliran.
     """
     return (st.cost_wait < sebelum[2] - 1e-9
             and st.rep_pc <= sebelum[3]

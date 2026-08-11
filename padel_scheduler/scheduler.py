@@ -1309,32 +1309,54 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     # orang lain yang sedang duduk dan belum kebagian kali ke-k. Dihitung ulang
     # dari jadwal akhir, bukan diambil dari hitungan konstruksi - annealing,
     # perataan, dan sapuan terakhir semuanya menggeser isi ronde sesudahnya.
+    #
+    # Peserta yang memang tidak berhak turun di ronde itu - peserta putri di
+    # babak putra - TIDAK dihitung sedang menunggu: ia bukan sedang dilewati,
+    # ia sedang tidak berhak. Aturan ini sudah dipakai optimizer.turn_skips(),
+    # tapi perhitungan di sini dulu tidak menyaring apa pun, jadi angka yang
+    # dioptimasi dan angka yang dilaporkan ke host adalah dua angka yang
+    # berbeda. Diukur pada 8 putra + 8 putri di 2 court dengan babak putra lalu
+    # babak putri: yang dilaporkan 40 serobotan, tunggu 6 dari batas 1, dan
+    # match pertama di ronde 7 - sementara yang benar-benar terjadi 0
+    # serobotan. Host lalu diberi peringatan untuk keadaan yang tidak ada,
+    # lengkap dengan saran "tambah court" yang tidak menyentuh sebabnya; obat
+    # yang benar untuk babak berurutan adalah interleave_segments.
+    #
+    # Karena itu semuanya dihitung dalam RONDE MILIK PESERTA ITU SENDIRI, yaitu
+    # ronde tempat ia berhak turun. Di meet tanpa babak, tiap orang berhak di
+    # semua ronde dan angkanya persis sama seperti sebelumnya.
     sudah = {pid: 0 for pid in ids}
     turn_skips = 0
     tunggu_max = 0
+    menunggu = {pid: 0 for pid in ids}
+    ronde_berhak = {pid: 0 for pid in ids}
     main_pertama: dict[int, int] = {}
-    sejak = {pid: 0 for pid in ids}
     for r in range(n_rounds):
         turun = {p for q in st.matches[r] for p in q}
+        elig = (st.rules.round_eligible[r]
+                if r < len(st.rules.round_eligible) else None)
+        berhak = [p for p in ids if elig is None or p in elig or p in turun]
         if turun:
-            tertinggal = min((sudah[p] for p in ids if p not in turun),
+            tertinggal = min((sudah[p] for p in berhak if p not in turun),
                              default=None)
             if tertinggal is not None:
                 turn_skips += sum(1 for p in turun if sudah[p] > tertinggal)
         for p in turun:
             sudah[p] += 1
-            main_pertama.setdefault(p, r + 1)
-        for p in ids:
+        for p in berhak:
+            ronde_berhak[p] += 1
             if p in turun:
-                sejak[p] = r + 1
+                menunggu[p] = 0
+                main_pertama.setdefault(p, ronde_berhak[p])
             else:
-                tunggu_max = max(tunggu_max, r + 1 - sejak[p])
+                menunggu[p] += 1
+                tunggu_max = max(tunggu_max, menunggu[p])
     # Yang belum pernah turun sama sekali menunggu sepanjang acara.
     last_first_play = (max(main_pertama.values(), default=0)
                        if len(main_pertama) == len(ids) else n_rounds)
     wait_floor = max(
-        (math.ceil((n_rounds - plays[p]) / (plays[p] + 1))
-         if n_rounds - plays[p] > 0 else 0)
+        (math.ceil((ronde_berhak[p] - plays[p]) / (plays[p] + 1))
+         if ronde_berhak[p] - plays[p] > 0 else 0)
         for p in ids
     ) if ids else 0
 
@@ -1396,9 +1418,8 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
 
     # Keadilan giliran, dua sisi yang berbeda dan dua-duanya perlu: berapa kali
     # antrean diserobot, dan seberapa jauh tunggu terpanjang melewati yang
-    # memang tak terhindarkan. Diambil yang terburuk, bukan dijumlah - satu
-    # peserta yang menunggu empat ronde sudah cukup untuk merusak acara, walau
-    # rata-ratanya rapi.
+    # memang tak terhindarkan.
+    #
     # Dijumlah lalu dibatasi, BUKAN diambil yang terbesar. Dengan max(), yang
     # satu menutupi yang lain: pada 10 peserta di 1 court, tunggu 3 ronde dari
     # batas 2 sudah memberi 0.5, dan serobotan boleh membengkak dari 4 ke 15
@@ -1958,6 +1979,29 @@ def _build_once(players: list[Player], config: Config,
     for issue in cap.sorted_issues():
         if issue.severity in ("error", "warning"):
             notes.append(f"{issue.title}: {issue.detail}")
+
+    # Peserta yang tidak turun sama sekali - fakta terpenting tentang jadwal
+    # ini, dan sebelumnya tidak disebut di mana pun. Yang bersangkutan cuma
+    # hilang dari tiap ronde sementara catatan yang muncul bicara soal rotasi
+    # partner dan menyarankan menambah court.
+    #
+    # Sengaja diperiksa dari jadwal jadi, bukan diserahkan seluruhnya ke
+    # analyze(): model bentuk di sana hanya berlaku kalau gender lengkap dan
+    # semua babak memakai kolam yang sama, jadi meet bersegmen, pool rating,
+    # dan partner terkunci lolos darinya. Sebabnya biar dijelaskan analyze()
+    # yang tahu formatnya; yang wajib ada di sini NAMANYA.
+    nama_peserta = {p.id: p.name for p in players}
+    tidak_main = [nama_peserta.get(pid, str(pid))
+                  for pid, v in sorted(stats.plays_per_player.items())
+                  if v == 0]
+    if tidak_main:
+        notes.append(
+            f"{len(tidak_main)} peserta tidak kebagian main sama sekali: "
+            + ", ".join(tidak_main)
+            + ". Jadwal tetap dibuat supaya sisanya bisa jalan, tapi ini "
+            "hampir selalu berarti setupnya yang perlu diubah - lihat catatan "
+            "lain di daftar ini untuk sebabnya."
+        )
 
     final_players = sorted(players, key=lambda x: x.id)
     if tier_of:

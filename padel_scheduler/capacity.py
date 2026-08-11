@@ -354,6 +354,125 @@ def shape_budget(
     return ShapeBudget(False, None, supply, None, None, kurang[1], kurang[0])
 
 
+# Berapa laki-laki dan perempuan yang dihabiskan satu match dari tiap format.
+# Tim LL = 2 laki-laki, LP = 1 + 1, PP = 2 perempuan, dan satu match dua tim.
+_KEBUTUHAN: dict[str, tuple[int, int]] = {
+    "LL-LL": (4, 0),
+    "LL-LP": (3, 1),
+    "LL-PP": (2, 2),
+    "LP-LP": (2, 2),
+    "LP-PP": (1, 3),
+    "PP-PP": (0, 4),
+}
+
+
+def _gender_seronde(izin: list[str], men: int, women: int,
+                    courts_used: int) -> dict[str, bool] | None:
+    """Gender mana yang bisa muncul di satu ronde PENUH yang sah.
+
+    None kalau ronde penuh tidak mungkin sama sekali dengan format ini.
+
+    Yang ditelusuri himpunan total (laki-laki, perempuan) yang terpakai, bukan
+    daftar komposisinya: jumlah komposisi tumbuh cepat pada meet besar,
+    sedangkan totalnya tidak pernah lebih banyak dari (men+1) x (women+1) - dan
+    analyze() dipanggil ulang tiap kali host mengubah satu angka.
+    """
+    capai: set[tuple[int, int]] = {(0, 0)}
+    for _ in range(max(1, courts_used)):
+        maju: set[tuple[int, int]] = set()
+        for m, w in capai:
+            for c in izin:
+                dm, dw = _KEBUTUHAN[c]
+                if m + dm <= men and w + dw <= women:
+                    maju.add((m + dm, w + dw))
+        capai = maju
+        if not capai:
+            return None
+    return {"M": any(m > 0 for m, _ in capai),
+            "F": any(w > 0 for _, w in capai)}
+
+
+def gender_tak_terpakai(
+    men: int, women: int, allowed_matchups: list[str] | None,
+    courts_used: int = 1,
+) -> dict[str, dict]:
+    """Gender yang tidak muat di komposisi ronde sah mana pun.
+
+    Yang dikembalikan FAKTA TENTANG FORMAT, bukan ramalan tentang jadwalnya, dan
+    perbedaannya penting - lihat di bawah. Kalau sebuah gender ada di sini,
+    salah satu dari dua hal pasti terjadi: peserta gender itu tidak turun sama
+    sekali, atau jadwalnya melanggar format yang dipilih host. Tidak ada
+    kemungkinan ketiga, dan keduanya sama-sama layak diberitahukan.
+
+    Pertanyaannya berbeda dari shape_budget(), dan modul itu tidak bisa
+    menjawabnya. shape_budget bertanya "cukupkah suplai pasangan untuk sekian
+    match"; jawabannya `feasible=False` juga untuk banyak setup yang berjalan
+    mulus - 10 laki-laki + 2 perempuan dinilai tidak layak padahal semua peserta
+    main dan kualitasnya 96,6. Jadi ia tidak bisa dipakai sebagai tanda bahaya.
+
+    Keadaan yang ditangkap terjadi persis pada roster dengan tepat satu orang
+    dari satu gender: satu match yang memuat seorang perempuan di antara para
+    laki-laki berkode LL-LP, dan pilihan "sesama bentuk saja" melarangnya,
+    sedangkan LP-LP menuntut kedua tim campur - butuh dua perempuan. Diukur, 11
+    laki-laki + 1 perempuan di 2 court: yang seorang itu main 0 dari 15 ronde
+    sementara yang lain 11 kali, dan tidak ada satu catatan pun yang
+    menyebutkannya.
+
+    Kenapa ini BUKAN ramalan "tidak akan main". Diadu dengan 28 jadwal betulan,
+    versi yang meramal begitu meleset di 4 kasus - 6L+6P di 1 court, 12L+4P di 3
+    court, 8L+1P di 2 court, 20L+1P di 5 court - dan di keempatnya semua peserta
+    main. Yang terjadi di situ penjadwal memilih melanggar format daripada
+    mendudukkan seseorang semalaman, lalu melaporkannya lewat catatan "match
+    memakai format yang Anda larang". Diperiksa satu per satu, dikotominya
+    persis: keempat kasus itu punya catatan pelanggaran format, dan kedelapan
+    kasus yang memang terdampar tidak punya. Jadi yang dinyatakan di sini
+    percabangannya - yang benar di 28 dari 28 - bukan salah satu cabangnya.
+
+    Yang diperiksa harus RONDE PENUH, bukan satu format saja. 6 laki-laki + 6
+    perempuan dengan hanya "putra vs putra" lolos uji per-format - 4 dari 6
+    laki-laki cukup untuk satu match - tapi dua court menuntut 8 laki-laki
+    sekaligus, dan itu tidak ada.
+
+    Kuncinya "M"/"F"; isinya format yang akan menyelamatkannya kalau diizinkan,
+    dan berapa peserta lagi yang menyelamatkannya tanpa mengubah format.
+    Keduanya diuji dengan penelusuran yang sama, bukan dengan aturan per-format
+    - saran yang tidak benar-benar menolong lebih buruk daripada tidak ada.
+    """
+    izin = [c for c in (allowed_matchups or MATCHUPS) if c in _KEBUTUHAN]
+    punya = {"M": men, "F": women}
+    terpakai = _gender_seronde(izin, men, women, courts_used)
+    if terpakai is None:
+        return {}                        # ronde penuh tidak mungkin sama sekali
+
+    out: dict[str, dict] = {}
+    for g in ("M", "F"):
+        if punya[g] <= 0:
+            continue                     # tidak ada orangnya, tidak ada korban
+        if terpakai[g]:
+            continue                     # gender ini kebagian, aman
+        # Format terlarang mana yang menolong kalau host mengizinkannya.
+        penolong = []
+        for c in MATCHUPS:
+            if c in izin:
+                continue
+            coba = _gender_seronde(izin + [c], men, women, courts_used)
+            if coba is not None and coba[g]:
+                penolong.append(c)
+        # Atau berapa peserta lagi, dengan format apa adanya. Batasnya satu
+        # ronde penuh: kalau menambah sebanyak itu pun tidak menolong, yang
+        # salah bukan jumlahnya.
+        tambah = None
+        for k in range(1, 4 * max(1, courts_used) + 1):
+            coba = _gender_seronde(
+                izin, men + (k if g == "M" else 0),
+                women + (k if g == "F" else 0), courts_used)
+            if coba is not None and coba[g]:
+                tambah = k
+                break
+        out[g] = {"penolong": penolong, "tambah": tambah}
+    return out
+
+
 def analyze(
     n_players: int,
     courts: int,
@@ -438,6 +557,52 @@ def analyze(
                 "Perpanjang sewa, kurangi pemanasan, atau perpendek durasi ronde.",
             )
         )
+
+    # Peserta yang formatnya sendiri melarang turun. Ini kegagalan yang paling
+    # mahal dan paling sunyi di modul ini: jadwalnya tetap jadi, angka-angka
+    # lain tetap terlihat wajar, dan yang bersangkutan duduk semalaman. Sengaja
+    # TIDAK digabung dengan cabang shape.feasible di bawah - cabang itu
+    # dipagari `opponent_blind_ok`, jadi pada roster yang pengulangan lawannya
+    # memang wajib ia tidak pernah menyala, dan itu persis roster-roster tempat
+    # keadaan ini terjadi.
+    if men is not None and women is not None and men + women == n_players:
+        for g, d in sorted(gender_tak_terpakai(
+                men, women, allowed_matchups, courts_used).items()):
+            label = "perempuan" if g == "F" else "laki-laki"
+            jumlah = women if g == "F" else men
+            daftar = ", ".join(MATCHUP_LABELS.get(c, c).lower()
+                               for c in (allowed_matchups or MATCHUPS))
+            saran = []
+            if d["penolong"]:
+                saran.append("izinkan format " + " atau ".join(
+                    MATCHUP_LABELS.get(c, c).lower() for c in d["penolong"]))
+            if d["tambah"]:
+                saran.append(f"ajak {d['tambah']} peserta {label} lagi")
+            if not saran:
+                saran.append("longgarkan format match")
+            obat = ", atau ".join(saran).capitalize() + "."
+            issues.append(
+                Issue(
+                    "error",
+                    f"{jumlah} peserta {label} tidak muat di format yang dipilih",
+                    # Obatnya ikut ditaruh di detail, bukan cuma di `fix`.
+                    # Catatan yang menempel di jadwal dirakit sebagai
+                    # "judul: detail" dan membuang `fix` (scheduler.py), jadi
+                    # host yang membaca jadwal jadi - bukan panel analisa -
+                    # akan tahu keadaannya tanpa tahu jalan keluarnya. Untuk
+                    # temuan ini jalan keluarnya justru bagian terpentingnya.
+                    f"Format dibatasi ke {daftar}. Dengan {men} laki-laki dan "
+                    f"{women} perempuan, tidak ada satu pun susunan ronde yang "
+                    f"sah yang memuat peserta {label} - {courts_used} court "
+                    f"harus terisi sekaligus. Akibatnya salah satu dari dua "
+                    f"hal: mereka duduk sepanjang acara, 0 dari {rounds} "
+                    f"ronde, atau jadwalnya melanggar format yang Anda pilih "
+                    f"supaya mereka tetap kebagian. Menambah court atau "
+                    f"memperpanjang sewa tidak mengubah apa pun; yang "
+                    f"menghalangi formatnya, bukan kapasitasnya. {obat}",
+                    obat,
+                )
+            )
 
     if courts_idle > 0 and n_players >= 4:
         issues.append(
