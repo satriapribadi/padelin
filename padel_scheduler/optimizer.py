@@ -850,6 +850,67 @@ def wait_runs(st: ScheduleState) -> list[int]:
     return out
 
 
+def turn_skips(st: ScheduleState) -> int:
+    """Berapa kali antrean giliran diserobot sepanjang jadwal.
+
+    Satu serobotan = seseorang turun untuk kali ke-(k+1) padahal ada peserta
+    lain yang sedang duduk, boleh turun di ronde itu, dan baru main kurang dari
+    k kali.
+
+    Ini ukuran yang BERBEDA dari panjang rentetan duduk, dan keduanya perlu.
+    Rentetan mengukur berapa lama satu orang menunggu; serobotan mengukur
+    apakah urutannya adil dibanding orang lain. Jadwal bisa punya rentetan
+    pendek merata - tidak ada yang menunggu lebih dari 3 ronde - sambil tetap
+    membiarkan satu orang main di ronde 1 dan 3 sementara orang lain baru turun
+    di ronde 4. Diukur pada satu roster nyata: menaikkan effort dari 30.000 ke
+    160.000 membuat rentetan terpanjang tetap 3 sementara serobotan naik dari 4
+    ke 15, karena tidak ada satu pun tahap yang menilainya.
+
+    Peserta yang memang tidak boleh turun di ronde itu (peserta putri di babak
+    putra) tidak dihitung sedang menunggu - ia tidak sedang dilewati, ia sedang
+    tidak berhak.
+    """
+    sudah = [0] * st.n
+    total = 0
+    for r in range(st.n_rounds):
+        turun = [p for q in st.matches[r] for p in q]
+        if turun:
+            main_r = set(turun)
+            elig = (st.rules.round_eligible[r]
+                    if r < len(st.rules.round_eligible) else None)
+            duduk = [sudah[p] for p in range(st.n)
+                     if p not in main_r and (elig is None or p in elig)]
+            if duduk:
+                paling_tertinggal = min(duduk)
+                total += sum(1 for p in turun if sudah[p] > paling_tertinggal)
+        for p in turun:
+            sudah[p] += 1
+    return total
+
+
+def _terserobot(st: ScheduleState) -> set[int]:
+    """Siapa yang terlibat serobotan: yang menyerobot dan yang diserobot."""
+    sudah = [0] * st.n
+    out: set[int] = set()
+    for r in range(st.n_rounds):
+        turun = [p for q in st.matches[r] for p in q]
+        if turun:
+            main_r = set(turun)
+            elig = (st.rules.round_eligible[r]
+                    if r < len(st.rules.round_eligible) else None)
+            nganggur = [p for p in range(st.n)
+                        if p not in main_r and (elig is None or p in elig)]
+            if nganggur:
+                lo = min(sudah[p] for p in nganggur)
+                lewat = [p for p in turun if sudah[p] > lo]
+                if lewat:
+                    out.update(lewat)
+                    out.update(p for p in nganggur if sudah[p] == lo)
+        for p in turun:
+            sudah[p] += 1
+    return out
+
+
 def _menunggu_lama(st: ScheduleState) -> set[int]:
     """Siapa saja yang menunggu lebih lama daripada yang seharusnya perlu."""
     ambang = wait_thresholds(st)
@@ -865,6 +926,31 @@ def _tolok(st: ScheduleState) -> tuple[float, float, float, int, int]:
     kepala - lihat ScheduleState.rep_pc.
     """
     return (st.cost(), st.cost_pair, st.cost_wait, st.rep_pc, st.rep_oc)
+
+
+def _tolok_serobot(st: ScheduleState) -> tuple:
+    """Patokan untuk sapuan serobotan; hitungan serobotannya ikut dibawa.
+
+    Dipisah dari _tolok karena turn_skips() menyapu seluruh jadwal (O(ronde x
+    peserta)), sedangkan patokan biasa cuma membaca angka yang sudah
+    dipelihara. Hanya sapuan yang memang membutuhkannya yang membayar itu.
+    """
+    return (st.cost(), st.cost_pair, st.cost_wait, st.rep_pc, st.rep_oc,
+            turn_skips(st))
+
+
+def _serobotan_membaik(st: ScheduleState, sebelum: tuple) -> bool:
+    """Terima kalau serobotan berkurang tanpa membayar apa pun.
+
+    Tiga hal dijaga sekaligus, dan semuanya sebagai batas - bukan bobot:
+    jumlah pasang berulang tidak boleh bertambah, dan biaya menunggu tidak
+    boleh naik. Jadi sapuan ini hanya merapikan URUTAN giliran, dan tidak bisa
+    menukarnya dengan keunikan maupun dengan rentetan duduk yang lebih panjang.
+    """
+    return (turn_skips(st) < sebelum[5]
+            and st.rep_pc <= sebelum[3]
+            and st.rep_oc <= sebelum[4]
+            and st.cost_wait <= sebelum[2] + 1e-9)
 
 
 def _biaya_turun(st: ScheduleState, sebelum: tuple) -> bool:
@@ -904,7 +990,8 @@ def _giliran_membaik(st: ScheduleState, sebelum: tuple) -> bool:
 
 
 def _paired_bye_swaps(st: ScheduleState, max_steps: int = 60,
-                      terima=_biaya_turun, panas_fn=_repeating_players) -> int:
+                      terima=_biaya_turun, panas_fn=_repeating_players,
+                      tolok_fn=_tolok) -> int:
     """Tukar dengan yang istirahat, lalu tukar balik di ronde lain.
 
     Ada pengulangan yang tidak bisa dibuang oleh gerakan mana pun di dalam satu
@@ -962,7 +1049,7 @@ def _paired_bye_swaps(st: ScheduleState, max_steps: int = 60,
                             continue
                         if elig1 is not None and masuk not in elig1:
                             continue
-                        before = _tolok(st)
+                        before = tolok_fn(st)
                         undo1 = _try_swap(st, r1, mi, pi, masuk)
                         if not st.rules.quad_ok(st.matches[r1][mi], r1):
                             undo1()
@@ -1218,8 +1305,22 @@ def ratakan_giliran(st: ScheduleState, max_steps: int = 60,
         st.w.long_wait = bobot
         st.recompute_wait()
     try:
-        return _paired_bye_swaps(st, max_steps, terima=_giliran_membaik,
-                                 panas_fn=_menunggu_lama)
+        # Dua sapuan bergantian, karena keduanya mengukur hal yang berbeda:
+        # yang pertama memendekkan rentetan menunggu, yang kedua merapikan
+        # urutan giliran antar peserta. Memperbaiki salah satunya sering membuka
+        # perbaikan yang tadinya tertutup di satu lagi, jadi diulang sampai
+        # keduanya tidak menemukan apa pun.
+        total = 0
+        for _ in range(10):
+            langkah = _paired_bye_swaps(st, max_steps, terima=_giliran_membaik,
+                                        panas_fn=_menunggu_lama)
+            langkah += _paired_bye_swaps(st, max_steps, terima=_serobotan_membaik,
+                                         panas_fn=_terserobot,
+                                         tolok_fn=_tolok_serobot)
+            total += langkah
+            if not langkah:
+                break
+        return total
     finally:
         if st.w.long_wait != bobot_lama:
             st.w.long_wait = bobot_lama

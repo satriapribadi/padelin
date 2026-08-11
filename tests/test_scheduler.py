@@ -1481,6 +1481,14 @@ class TestGiliranBerurutan(unittest.TestCase):
             for i in range(pria + wanita)
         ]
 
+    # Roster host apa adanya, termasuk urutan dan ratingnya. Ini bukan detail
+    # kosmetik: susunan yang sama jumlahnya tapi urutan gendernya berbeda
+    # menghasilkan baris 1-faktorisasi yang berbeda, dan karenanya jadwal yang
+    # sama sekali lain. Memakai roster "6 putra dulu, lalu 4 putri" menguji
+    # instance yang berbeda dari yang dilaporkan.
+    ROSTER_HOST = [(3.0, "F"), (2.0, "M"), (2.0, "M"), (2.0, "F"), (4.0, "M"),
+                   (2.0, "F"), (3.0, "M"), (2.0, "F"), (3.0, "M"), (2.0, "M")]
+
     def test_kasus_host_10_orang_1_court(self):
         """6L/4P, 1 court, 15 ronde: kasus yang dilaporkan host.
 
@@ -1488,10 +1496,12 @@ class TestGiliranBerurutan(unittest.TestCase):
         terpanjang 4 ronde, dan 13 kali antrean diserobot - sementara jumlah
         mainnya 6-6 sehingga tidak ada satu pun angka lama yang menunjukkannya.
         """
+        players = [Player(id=i, name=f"P{i+1}", rating=r, gender=g)
+                   for i, (r, g) in enumerate(self.ROSTER_HOST)]
         cfg = Config(courts=1, duration_minutes=120, round_minutes=8,
                      warmup_minutes=0, mode="americano", seed=42,
                      effort=30_000, attempts=3, allowed_matchups=self.SAMA)
-        sch = build_schedule(self._roster(6, 4), cfg)
+        sch = build_schedule(players, cfg)
         g = hitung_giliran(sch)
         main = sch.stats.plays_per_player
 
@@ -1500,17 +1510,21 @@ class TestGiliranBerurutan(unittest.TestCase):
                          f"jatah main tidak merata lagi: {main}")
         self.assertEqual(sch.stats.partner_repeat_pairs, 0,
                          "partner unik tidak boleh jadi korban")
+        # 10 peserta / 4 slot: dua ronde memuat 8 orang, jadi ronde 3 adalah
+        # yang paling awal semua orang bisa sudah turun. Jadwal lama menahan
+        # satu peserta sampai ronde 5.
+        self.assertLessEqual(
+            g["main_pertama_terakhir"], 3,
+            f"ada peserta yang terlalu lama menunggu match pertamanya: {g}")
         # Tunggu terpanjang mendekati batasnya. 9 ronde duduk di 7 sela berarti
-        # rentetan 2 memang tak terhindarkan; jadwal lama sampai 5, sekarang 3.
+        # rentetan 2 memang tak terhindarkan; jadwal lama sampai 4, sekarang 3.
         # Sisa satu rentetan berlebih itu tidak bisa dibuang tanpa melahirkan
         # lawan berulang baru, dan di situ keunikan yang menang.
         self.assertLessEqual(
             g["tunggu"], g["batas_tunggu"] + 1,
             f"tunggu terpanjang jauh di atas batas yang tak terhindarkan: {g}")
-        # Antrean masih bisa terserobot, tapi tidak sesering dulu (16 kali).
-        # Sisanya lahir dari rotasi partner: baris kombinasi ronde itu kadang
-        # hanya memasangkan yang paling lama menunggu dengan yang baru main.
-        self.assertLessEqual(g["terlewat"], 10,
+        # Antrean nyaris tidak diserobot lagi; jadwal lama 13 kali.
+        self.assertLessEqual(g["terlewat"], 6,
                              f"antrean terlalu sering diserobot: {g}")
 
     def test_stats_setuju_dengan_jadwal(self):

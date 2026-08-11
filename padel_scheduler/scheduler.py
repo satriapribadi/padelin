@@ -1399,9 +1399,15 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     # memang tak terhindarkan. Diambil yang terburuk, bukan dijumlah - satu
     # peserta yang menunggu empat ronde sudah cukup untuk merusak acara, walau
     # rata-ratanya rapi.
+    # Dijumlah lalu dibatasi, BUKAN diambil yang terbesar. Dengan max(), yang
+    # satu menutupi yang lain: pada 10 peserta di 1 court, tunggu 3 ronde dari
+    # batas 2 sudah memberi 0.5, dan serobotan boleh membengkak dari 4 ke 15
+    # tanpa mengubah skor sama sekali. Skor yang tidak bergerak berarti pemilih
+    # antar-percobaan tidak bisa melihat bedanya - dan itu persis bagaimana
+    # menaikkan effort bisa memperburuk giliran tanpa terlihat di mana pun.
     lewat_pen = min(1.0, turn_skips / max(1, sum(play_vals)))
     tunggu_pen = min(1.0, max(0, tunggu_max - wait_floor) / 2.0)
-    giliran_pen = max(lewat_pen, tunggu_pen)
+    giliran_pen = min(1.0, lewat_pen + tunggu_pen)
 
     # 10 poin terakhir dibagi dua antara duduk-beruntun dan keadilan giliran.
     # Jatah partner (45) dan lawan (30) tidak disentuh: keunikan tetap yang
@@ -1514,14 +1520,26 @@ def build_schedule(players: list[Player], config: Config,
     apa yang sedang dikerjakan. Angkanya nyata, bukan animasi.
     """
     percobaan = max(1, config.attempts)
-    # Mengulang cuma masuk akal kalau ada yang dikejar. Saat pengulangan memang
-    # wajib terjadi, tiap percobaan berhenti di sekitar batas bawah yang sama
+    # Dulu percobaan dipangkas jadi satu begitu pengulangan lawan wajib
+    # terjadi, karena tiap percobaan berhenti di sekitar batas bawah yang sama
     # dan bedanya tinggal derau - diukur: 60 orang / 15 court / 20 ronde tetap
-    # 3 pasang berulang setelah 3 percobaan, dan waktunya naik 3.2 -> 9.8 detik.
-    # Setup seperti itu dibiarkan satu percobaan saja.
-    if percobaan > 1 and not _zero_repeats_possible(players, config):
-        percobaan = 1
+    # 3 pasang berulang setelah 3 percobaan, sementara waktunya naik dari 3,2
+    # ke 9,8 detik. Waktu yang dibayar tidak membeli apa pun.
+    #
+    # Itu berhenti benar begitu keadilan giliran ikut dinilai. Giliran BUKAN
+    # derau antar percobaan: pada roster 10 peserta di 1 court, lima nilai
+    # effort menghasilkan 2, 0, 5, 11, dan 4 serobotan dengan pengulangan lawan
+    # yang sama-sama tak terhindarkan. Menjatuhkannya ke satu percobaan berarti
+    # mengambil salah satu angka itu secara acak, dan host tidak punya cara
+    # tahu ia sedang kebagian yang mana. Jadi percobaannya dijalankan, dan
+    # _lebih_baik yang memilih - keunikan tetap lebih dulu, giliran jadi
+    # pemutus di antara yang keunikannya setara.
     terbaik: Schedule | None = None
+    # Berapa ronde yang dibutuhkan supaya semua peserta kebagian match pertama,
+    # kalau tiap slot dipakai untuk orang yang berbeda. Dipakai sebagai syarat
+    # berhenti lebih awal di bawah.
+    slot_per_ronde = 4 * max(1, min(config.courts, len(players) // 4))
+    putaran = math.ceil(len(players) / slot_per_ronde)
 
     for k in range(percobaan):
         # Tiap percobaan dapat lintasan acak yang berbeda, tapi tetap turunan
@@ -1537,7 +1555,26 @@ def build_schedule(players: list[Player], config: Config,
         sch = _build_once(players, cfg, teruskan if progress else None)
         if terbaik is None or _lebih_baik(sch, terbaik):
             terbaik = sch
-        if sch.stats.at_theoretical_floor:
+        # Berhenti lebih awal hanya kalau tidak ada lagi yang bisa dikejar, dan
+        # sejak giliran ikut dinilai itu berarti keunikan DAN putaran pertama
+        # sama-sama sudah di batasnya. Tanpa syarat kedua, percobaan pertama
+        # yang kebetulan menyentuh batas keunikan menghentikan pencarian sambil
+        # membawa giliran yang buruk - persis bagaimana satu roster bisa
+        # berakhir dengan peserta yang baru turun di ronde 4.
+        #
+        # Yang dipakai putaran pertama, bukan jumlah serobotan. Serobotan tidak
+        # punya batas bawah yang bisa dihitung, dan di meet berokupansi tinggi
+        # ia selalu besar tanpa ada yang benar-benar dirugikan - 40 orang di 8
+        # court berarti hampir semua orang turun tiap ronde, jadi batas-batas
+        # putaran terlewati terus-menerus sambil tidak ada yang menunggu lebih
+        # dari 2 ronde. Menuntutnya nol berarti keluar-awal tidak pernah
+        # menyala sama sekali: diukur, itu membuat 26 orang di 4 court naik dari
+        # 2,3 ke 10,3 detik tanpa satu pun perbaikan yang bisa ditunjukkan.
+        #
+        # Putaran pertama tidak punya cacat itu. Dengan `slot` slot per ronde
+        # untuk n peserta, semua orang bisa turun dalam ceil(n / slot) ronde,
+        # dan itu batas yang selalu bisa dicapai dan selalu terasa.
+        if sch.stats.at_theoretical_floor and sch.stats.last_first_play <= putaran:
             break
 
     terbaik.config.seed = config.seed
