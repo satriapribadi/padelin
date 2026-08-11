@@ -239,6 +239,13 @@ def api_economics(payload: dict) -> dict:
         c for c in range(max(1, courts - 2), courts + 3) if c >= 1
     } | {courts})
 
+    # Babak dan komposisi gender menentukan berapa court yang benar-benar bisa
+    # terisi, jadi keduanya ikut - tanpa itu perbandingan biaya menjanjikan
+    # waktu main yang tidak akan terjadi.
+    seg_ekonomi = [(s.rule, s.rounds) for s in cfg.segments]
+    men_e = sum(1 for p in _players_from(payload) if p.gender == "M")
+    women_e = sum(1 for p in _players_from(payload) if p.gender == "F")
+
     options = compare(
         n_players=n,
         econ=econ,
@@ -246,6 +253,9 @@ def api_economics(payload: dict) -> dict:
         hour_options=sorted({1.0, 1.5, 2.0, 2.5, 3.0, round(hours, 2)}),
         round_minutes=cfg.round_minutes,
         warmup_minutes=cfg.warmup_minutes,
+        segments=seg_ekonomi,
+        men=men_e,
+        women=women_e,
     )
     # Skenario yang sedang dipakai tidak boleh terpangkas oleh batas tampilan.
     def _is_current(o):
@@ -257,7 +267,8 @@ def api_economics(payload: dict) -> dict:
         if current is not None:
             shown = [current] + shown[:23]
     up = upgrade_analysis(n, cfg.courts, hours, econ,
-                          cfg.round_minutes, cfg.warmup_minutes)
+                          cfg.round_minutes, cfg.warmup_minutes,
+                          seg_ekonomi, men_e, women_e)
 
     return {
         "current": vars(up["base"]),

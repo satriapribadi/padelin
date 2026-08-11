@@ -17,6 +17,7 @@ from collections import Counter
 from itertools import combinations
 
 from padel_scheduler import Config, Player, Segment, build_schedule
+from padel_scheduler.economics import Economics, upgrade_analysis
 from padel_scheduler.capacity import (
     analyze,
     court_terpakai,
@@ -1307,6 +1308,39 @@ class TestPesertaTakTerpakai(unittest.TestCase):
         # Tanpa babak tidak ada yang perlu direntang.
         self.assertIsNone(duduk_per_ronde(26, 13, 13, 2, [("open", 15)]))
         self.assertIsNone(duduk_per_ronde(26, 13, 13, 2, None))
+
+    def test_court_tambahan_dinilai_per_babak(self):
+        """"Tambah 1 court" tidak menolong babak yang gendernya tidak cukup.
+
+        Ini pertanyaan termahal yang dijawab modul biaya, dan jawabannya dipakai
+        untuk memutuskan sewa. Versi yang buta babak melebihkan manfaatnya 8
+        sampai 20 menit pada lima meet bersegmen yang diukur, dan pada 20 putra
+        + 4 putri ia MEMBALIK sarannya: diramal +20 menit sehingga worth_it,
+        padahal yang benar-benar terjadi +6,7 menit - di bawah ambang 10 menit
+        modul itu sendiri.
+
+        Sebabnya babak putri hanya bisa mengisi satu court dengan empat putri,
+        dan babak mixed dibatasi gender yang paling sedikit; court ketiga cuma
+        menolong babak putra.
+        """
+        econ = Economics(court_price_per_hour=150_000, fee_per_player=75_000)
+        seg = [("men", 5), ("women", 5), ("mixed", 5)]
+        up = upgrade_analysis(24, 2, 2.0, econ, round_minutes=8,
+                              warmup_minutes=0, segments=seg, men=20, women=4)
+        self.assertAlmostEqual(up["extra_play_minutes_per_player"], 6.7,
+                               places=1)
+        self.assertFalse(up["worth_it"],
+                         "court tambahan disarankan padahal manfaatnya di "
+                         "bawah ambang modul ini sendiri")
+
+        # Tanpa babak angkanya tidak boleh bergeser sedikit pun.
+        polos = upgrade_analysis(26, 2, 2.0, econ, round_minutes=8,
+                                 warmup_minutes=0)
+        polos_seg = upgrade_analysis(26, 2, 2.0, econ, round_minutes=8,
+                                     warmup_minutes=0,
+                                     segments=[("open", 15)], men=13, women=13)
+        self.assertEqual(polos["extra_play_minutes_per_player"],
+                         polos_seg["extra_play_minutes_per_player"])
 
     def test_court_terpakai_dibatasi_yang_berhak(self):
         """Court hanya terisi kalau ada cukup orang yang BERHAK mengisinya."""

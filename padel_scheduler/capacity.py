@@ -622,7 +622,34 @@ def analyze(
         else rounds_from_duration(duration_minutes, round_minutes, warmup_minutes)
     )
 
-    total_slots = rounds * slots_per_round
+    # Slot yang benar-benar terpakai, dirata-rata tertimbang lintas babak.
+    #
+    # slots_per_round di atas mengandaikan tiap court bisa diisi siapa saja.
+    # Begitu ada babak putra/putri itu tidak benar - empat putri cuma cukup
+    # untuk satu court berapa pun yang disewa - dan yang paling mahal akibatnya
+    # bukan angka di panel melainkan saran sewa court. Diukur pada 5 meet
+    # bersegmen, upgrade_analysis() melebihkan manfaat court tambahan 8 sampai
+    # 20 menit, dan pada 20 putra + 4 putri sarannya terbalik: diramal +20 menit
+    # sehingga "worth_it", padahal yang benar-benar terjadi +6,7 menit - di
+    # bawah ambang 10 menit modul itu sendiri.
+    #
+    # Ditimbang, bukan dijumlah per babak, supaya rumusnya tetap berlaku berapa
+    # pun `rounds` yang dipakai pemanggil: panel meneruskan jumlah ronde babak
+    # apa adanya, sedangkan perbandingan biaya menyapu durasi sehingga rondenya
+    # dihitung dari lamanya sewa.
+    slot_efektif = float(slots_per_round)
+    if segments and any(r > 0 for _, r in segments):
+        m_, w_ = roster_men or 0, roster_women or 0
+        perlu_gender = any(r in ("men", "women", "mixed", "same_gender")
+                           for r, ron in segments if ron > 0)
+        if not perlu_gender or m_ + w_ == n_players:
+            tot_r = sum(ron for _, ron in segments if ron > 0)
+            slot_efektif = sum(
+                ron * 4 * court_terpakai(rule, m_, w_, n_players, courts)
+                for rule, ron in segments if ron > 0
+            ) / tot_r
+
+    total_slots = rounds * slot_efektif
     avg_plays = (total_slots / n_players) if n_players else 0.0
     rest_ratio = (byes_per_round / n_players) if n_players else 0.0
     playing_minutes = avg_plays * round_minutes
@@ -918,7 +945,9 @@ def analyze(
         rounds=rounds,
         slots_per_round=slots_per_round,
         byes_per_round=byes_per_round,
-        total_slots=total_slots,
+        # Bisa pecahan kalau babaknya mengisi court berbeda-beda; yang
+        # dilaporkan tetap bilangan bulat karena ia jumlah slot.
+        total_slots=int(round(total_slots)),
         avg_plays_per_player=round(avg_plays, 2),
         rest_ratio=round(rest_ratio, 4),
         playing_minutes_per_player=round(playing_minutes, 1),
