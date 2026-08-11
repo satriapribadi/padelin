@@ -425,14 +425,61 @@ def build_html(
     # dan 2 lawan, jadi lawan unik mentok di (N-1)/2 ronde. Batasnya disebut di
     # kartunya sendiri, bukan hanya di catatan yang jauh di bawah.
     n_players = len(schedule.players)
+
+    # Batasnya dihitung dari KOLAM YANG BENAR-BENAR DIHADAPI, per babak, bukan
+    # dari seluruh peserta.
+    #
+    # Babak putra/putri memecah kolamnya: pada 8 putra + 8 putri dengan babak
+    # putra lalu putri, tiap putra cuma pernah berhadapan dengan 7 putra lain,
+    # jadi 6 ronde main sudah jauh melewati batas 3 ronde untuk lawan unik dan
+    # 15 pasang berulang itu WAJIB terjadi. Hitungan lama memakai 24 peserta,
+    # menyimpulkan batasnya 11 ronde, lalu diam - persis di kasus yang paling
+    # butuh penjelasan. Angka pengulangan tanpa konteks terbaca sebagai cacat
+    # jadwal, dan itu justru alasan kedua catatan ini ada.
+    #
+    # Kolamnya diambil dari jadwal jadi, bukan dimodelkan: siapa yang benar-
+    # benar muncul di ronde-ronde babak itu sudah menjawabnya persis, termasuk
+    # untuk babak "sesama gender" dan "mixed" yang aturan komposisinya berbeda.
+    kolam: dict[str, set[int]] = {}
+    main_babak: dict[str, dict[int, int]] = {}
+    for rnd in schedule.rounds:
+        lab = rnd.segment or ""
+        turun = {p for m in rnd.matches for p in m.players()}
+        kolam.setdefault(lab, set()).update(turun)
+        hit = main_babak.setdefault(lab, {})
+        for p in turun:
+            hit[p] = hit.get(p, 0) + 1
+
+    # Babak yang paling mengikat: yang kelebihannya di atas batas paling besar.
     max_partner_rounds = max(0, n_players - 1)
     max_opp_rounds = max(0, (n_players - 1) // 2)
-    played = max(plays)
+    partner_ketat = opp_ketat = None
+    for lab, anggota in kolam.items():
+        if not anggota:
+            continue
+        r = max(main_babak[lab].values(), default=0)
+        b_partner = max(0, len(anggota) - 1)
+        b_opp = max(0, (len(anggota) - 1) // 2)
+        if r > b_partner and (partner_ketat is None
+                              or r - b_partner > partner_ketat[1]):
+            partner_ketat = (lab, r - b_partner, b_partner)
+        if r > b_opp and (opp_ketat is None or r - b_opp > opp_ketat[1]):
+            opp_ketat = (lab, r - b_opp, b_opp)
 
-    partner_note = ("pasang" if played <= max_partner_rounds
-                    else f"pasang · batas {max_partner_rounds} ronde")
-    opp_note = ("pasang" if played <= max_opp_rounds
-                else f"pasang · batas matematis {max_opp_rounds} ronde")
+    played = max(plays)
+    banyak_babak = len([k for k, v in kolam.items() if v]) > 1
+
+    def _catatan(ketat, batas_umum, satuan):
+        if ketat is not None:
+            lab, _, batas = ketat
+            di_babak = f" di babak {lab}" if banyak_babak and lab else ""
+            return f"pasang · batas matematis {batas} ronde{di_babak}"
+        if played > batas_umum:
+            return f"pasang · {satuan} {batas_umum} ronde"
+        return "pasang"
+
+    partner_note = _catatan(partner_ketat, max_partner_rounds, "batas")
+    opp_note = _catatan(opp_ketat, max_opp_rounds, "batas matematis")
 
     tiles = []
 
@@ -440,9 +487,23 @@ def build_html(
     # laporannya dibagikan. Keterangannya memakai harga per menit main, bukan
     # per acara - peserta menilai harga dari waktu di lapangan.
     if fee and fee > 0:
-        minutes = min(plays) * cfg.round_minutes
-        sub = (f"{_rupiah(fee / minutes)} / menit main" if minutes
-               else "per peserta")
+        # Rentang, bukan satu angka, kalau jatah mainnya memang berbeda-beda.
+        # Dulu dipakai min(plays) saja: pada 20 putra + 4 putri dengan babak
+        # putra/putri/mixed itu berbunyi "Rp 3.125 / menit", benar untuk para
+        # putra yang main 3 ronde tapi 3,3 kali lipat dari yang sebenarnya
+        # dibayar para putri, yang main 10. Satu angka untuk dua kelompok yang
+        # membayar fee sama tapi mendapat waktu lapangan yang jauh berbeda.
+        menit_lama = max(plays) * cfg.round_minutes
+        menit_sedikit = min(plays) * cfg.round_minutes
+        if menit_sedikit and menit_lama != menit_sedikit:
+            # "Rp" ditulis sekali; mengulangnya di ujung kedua cuma memanjangkan
+            # baris kecil yang sudah sempit di cetakan.
+            atas = _rupiah(fee / menit_sedikit).removeprefix("Rp ")
+            sub = f"{_rupiah(fee / menit_lama)}-{atas} / menit main"
+        elif menit_sedikit:
+            sub = f"{_rupiah(fee / menit_sedikit)} / menit main"
+        else:
+            sub = "per peserta"
         tiles.append(("Fee per peserta", _rupiah(fee), sub))
 
     tiles += [

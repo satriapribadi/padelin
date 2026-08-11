@@ -8,7 +8,14 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from padel_scheduler import Config, Economics, Player, build_schedule, storage
+from padel_scheduler import (
+    Config,
+    Economics,
+    Player,
+    Segment,
+    build_schedule,
+    storage,
+)
 from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_analysis
 from padel_scheduler.html_report import build_html
 from padel_scheduler.report import to_csv, to_dict, to_personal_text, to_text
@@ -294,6 +301,64 @@ class TestExports(unittest.TestCase):
         h = build_html(sch)
         self.assertNotIn("batas matematis", h,
                          "batas disebut padahal tidak ada pengulangan paksa")
+
+    def test_html_batas_dihitung_dari_kolam_babaknya(self):
+        """Batas keunikan harus dari kolam yang benar-benar dihadapi.
+
+        8 putra + 8 putri dengan babak putra lalu putri: tiap putra cuma pernah
+        berhadapan dengan 7 putra lain, jadi 6 ronde main sudah jauh melewati
+        batas 3 ronde dan pengulangannya wajib terjadi. Hitungan lama memakai 16
+        peserta, menyimpulkan batasnya 7 ronde, lalu DIAM - persis di kasus yang
+        paling butuh penjelasan, dan angka "15 pasang" tanpa konteks terbaca
+        sebagai cacat jadwal oleh peserta yang membaca laporannya.
+        """
+        players = [Player(id=i, name=f"P{i}",
+                          gender=("M" if i < 8 else "F")) for i in range(16)]
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, effort=4000, attempts=1,
+                     segments=[Segment("Putra", 6, "men"),
+                               Segment("Putri", 6, "women")])
+        sch = build_schedule(players, cfg)
+        h = build_html(sch, title="Uji")
+
+        self.assertGreater(sch.stats.opponent_repeat_pairs, 0,
+                           "prasyarat: pengulangan lawan memang terjadi")
+        self.assertIn("batas matematis 3 ronde", h,
+                      "batas dihitung dari seluruh peserta, bukan dari kolam "
+                      "babaknya")
+        self.assertIn("di babak", h, "babak yang mengikat tidak disebut")
+
+    def test_html_tidak_menyebut_babak_di_meet_biasa(self):
+        """Meet tanpa babak: tidak ada kolam terpisah, jadi jangan sebut babak."""
+        players = [Player(id=i, name=f"P{i}", gender="F") for i in range(8)]
+        sch = build_schedule(players, Config(courts=1, duration_minutes=120))
+        h = build_html(sch, title="Uji")
+        self.assertIn("batas matematis 3 ronde", h)
+        self.assertNotIn("di babak", h,
+                         "menyebut babak padahal meetnya tidak berbabak")
+
+    def test_html_fee_per_menit_jadi_rentang_kalau_main_beda(self):
+        """Satu angka menyesatkan kalau jatah mainnya terbelah.
+
+        20 putra + 4 putri: para putra main 3 ronde dan para putri 10, tapi
+        fee-nya sama. min(plays) saja memberi harga per menit versi putra -
+        3,3 kali lipat dari yang sebenarnya dibayar para putri.
+        """
+        players = [Player(id=i, name=f"P{i}",
+                          gender=("M" if i < 20 else "F")) for i in range(24)]
+        cfg = Config(courts=2, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, effort=4000, attempts=1,
+                     segments=[Segment("Putra", 5, "men"),
+                               Segment("Putri", 5, "women"),
+                               Segment("Mixed", 5, "mixed")])
+        sch = build_schedule(players, cfg)
+        main = sch.stats.plays_per_player
+        self.assertGreater(max(main.values()) - min(main.values()), 1,
+                           "prasyarat: jatah mainnya memang terbelah")
+        h = build_html(sch, title="Uji", fee=75_000)
+        self.assertRegex(
+            h, r"Rp [\d.]+-[\d.]+ / menit main",
+            "fee per menit masih satu angka padahal jatah mainnya terbelah")
 
     def test_html_shows_fee_per_player(self):
         """Fee itu hal pertama yang dicari peserta saat laporan dibagikan."""
