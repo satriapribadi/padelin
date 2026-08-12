@@ -195,6 +195,18 @@ class Config:
     # Kalau True, durasi per ronde dihitung otomatis dari total ronde segmen
     # agar pas dengan jam sewa.
     fit_rounds_to_duration: bool = True
+    # Court yang dilepas di tengah acara, untuk sewa yang tidak sama panjang:
+    # court kedua cuma dibayar dua jam sementara acaranya tiga jam.
+    #   courts_after      -> berapa court yang tersisa setelah dilepas
+    #   courts_from_round -> ronde pertama (1-based) yang sudah memakai jumlah itu
+    # Kosong dua-duanya = jumlah court sama sepanjang acara (perilaku bawaan).
+    #
+    # Disimpan sebagai ATURAN, bukan daftar court per ronde, karena jumlah ronde
+    # dihitung dari durasi dan menit-per-ronde: daftar sepanjang 15 angka jadi
+    # salah panjang begitu host mengubah durasinya, dan yang paling sering
+    # terjadi berikutnya adalah jadwal ditolak tanpa host tahu sebabnya.
+    courts_after: int | None = None
+    courts_from_round: int | None = None
     # Format match yang boleh muncul, dilihat dari susunan gender kedua tim.
     # Kosong/None = semua boleh (perilaku lama, dan tetap jadi default).
     #
@@ -207,6 +219,29 @@ class Config:
     def __post_init__(self) -> None:
         if self.courts < 1:
             raise ValueError("Jumlah court minimal 1.")
+        # Court berkurang: dua field yang cuma berarti berpasangan. Yang setengah
+        # terisi ditolak, bukan ditebak - menebaknya berarti host mengira court
+        # sudah dikurangi padahal jadwalnya memakai jumlah penuh.
+        if (self.courts_after is None) != (self.courts_from_round is None):
+            raise ValueError(
+                "Court berkurang butuh dua angka: jadi berapa court, dan mulai "
+                "ronde berapa. Salah satunya masih kosong.")
+        if self.courts_after is not None:
+            if self.courts_after < 1:
+                raise ValueError("Setelah dikurangi, court minimal 1.")
+            if self.courts_after > self.courts:
+                raise ValueError(
+                    f"Court setelah dikurangi ({self.courts_after}) tidak boleh "
+                    f"lebih banyak daripada court awal ({self.courts}).")
+            if self.courts_from_round < 2:
+                raise ValueError(
+                    "Court berkurang paling cepat mulai ronde 2; kalau memang "
+                    "sejak ronde 1, kurangi saja jumlah court-nya.")
+            # Tidak berkurang sama sekali - dinormalkan supaya seluruh sisa kode
+            # cuma perlu memeriksa satu hal: apakah plan-nya seragam.
+            if self.courts_after == self.courts:
+                self.courts_after = None
+                self.courts_from_round = None
         if self.allowed_matchups is not None:
             tidak_dikenal = set(self.allowed_matchups) - set(MATCHUPS)
             if tidak_dikenal:
@@ -225,6 +260,38 @@ class Config:
 
     def total_segment_rounds(self) -> int:
         return sum(s.rounds for s in self.segments)
+
+    def court_plan(self, total_rounds: int) -> list[int]:
+        """Court yang tersedia di tiap ronde, satu angka per ronde.
+
+        Semuanya sama kalau tidak ada court yang dilepas. Panjangnya selalu
+        total_rounds, jadi pemanggil tidak perlu tahu apakah host memakai fitur
+        ini atau tidak.
+        """
+        plan = [self.courts] * max(0, total_rounds)
+        if self.courts_after is not None:
+            for r in range(self.courts_from_round - 1, len(plan)):
+                plan[r] = self.courts_after
+        return plan
+
+    def court_hours(self, round_minutes: int | None = None) -> float:
+        """Court-jam yang benar-benar disewa, untuk hitungan biaya.
+
+        Bukan court x durasi. Kalau court kedua dilepas di tengah acara, yang
+        dibayar cuma sampai saat itu - dan itu justru alasan host memakai fitur
+        ini. Batas waktunya dihitung dari ronde tempat court berkurang:
+        pemanasan + (ronde-1) x menit per ronde.
+
+        Sisa waktu sewa di luar ronde (pemanasan, dan menit yang tidak cukup
+        untuk satu ronde penuh) tetap dihitung: jam sewanya tetap dibayar
+        walaupun tidak ada match yang berjalan di situ.
+        """
+        menit = max(0, self.duration_minutes)
+        if self.courts_after is None:
+            return self.courts * menit / 60.0
+        rm = round_minutes if round_minutes is not None else self.round_minutes
+        awal = min(menit, self.warmup_minutes + (self.courts_from_round - 1) * rm)
+        return (self.courts * awal + self.courts_after * (menit - awal)) / 60.0
 
 
 @dataclass

@@ -443,6 +443,42 @@ function effortSetting() {
   return { effort, attempts: attempts || 3 };
 }
 
+/**
+ * Berapa ronde yang muat di jam sewa. Sama dengan hitungan server
+ * (capacity.rounds_from_duration): sisa waktu yang tidak cukup untuk satu ronde
+ * penuh tidak dipakai.
+ */
+function rondeMuat() {
+  const pakai = (+$('duration').value || 0) - (+$('warmup').value || 0);
+  const per = +$('round_min').value || 0;
+  return per > 0 ? Math.max(0, Math.floor(pakai / per)) : 0;
+}
+
+/**
+ * Court yang dilepas di tengah acara, dalam bentuk yang dikirim ke server.
+ *
+ * Dikirim null-null kalau tidak dipakai, BUKAN dihilangkan dari payload: acara
+ * tersimpan yang dulu punya pengurangan lalu dimatikan host harus ikut
+ * terhapus saat disimpan ulang, dan field yang hilang tidak menghapus apa pun.
+ *
+ * Ronde mulai dijepit ke jumlah ronde yang benar-benar ada. Tanpa itu, host yang
+ * memperpendek durasi setelah mengisi "mulai ronde 11" mengirim rencana di luar
+ * acara, dan yang ia lihat cuma jadwal yang court-nya tidak pernah berkurang.
+ */
+function courtDropPayload() {
+  if (!$('courts_drop').checked) {
+    return { courts_after: null, courts_from_round: null };
+  }
+  const ronde = rondeMuat();
+  const mulai = Math.min(Math.max(2, +$('courts_from_round').value || 2),
+                         Math.max(2, ronde));
+  return {
+    courts_after: Math.min(Math.max(1, +$('courts_after').value || 1),
+                           +$('courts').value || 1),
+    courts_from_round: mulai,
+  };
+}
+
 function buildPayload() {
   const opt = effortSetting();
   return {
@@ -453,6 +489,7 @@ function buildPayload() {
     venue: $('venue').value,
     start_clock: $('start_clock').value,
     courts: +$('courts').value,
+    ...courtDropPayload(),
     duration_minutes: +$('duration').value,
     round_minutes: +$('round_min').value,
     warmup_minutes: +$('warmup').value,
@@ -504,7 +541,21 @@ function renderSetupEconomics(report) {
 
   if (n < 4 || (!price && !fee)) { host.textContent = ''; return; }
 
-  const cost = courts * hours * price + other;
+  // Court-jam yang benar-benar dibayar. Court yang dilepas di tengah acara
+  // memotongnya, dan itu justru alasan host memakai fitur itu - kartu biaya yang
+  // tetap menagih court penuh membuat penghematannya tidak terlihat di mana pun.
+  const drop = courtDropPayload();
+  let courtHours = courts * hours;
+  let hoursLabel = `${courts} court x ${hours} jam`;
+  if (drop.courts_after) {
+    const menitAwal = (+$('warmup').value || 0)
+      + (drop.courts_from_round - 1) * (+$('round_min').value || 0);
+    const menit = +$('duration').value || 0;
+    const awal = Math.min(menit, menitAwal);
+    courtHours = (courts * awal + drop.courts_after * (menit - awal)) / 60;
+    hoursLabel = `${(+courtHours.toFixed(2))} court-jam, court berkurang`;
+  }
+  const cost = courtHours * price + other;
   const revenue = n * fee;
   const profit = revenue - cost;
   const margin = revenue > 0 ? (profit / revenue) * 100 : 0;
@@ -522,7 +573,7 @@ function renderSetupEconomics(report) {
   const state = profit < 0 ? 'bad' : impas ? 'good' : margin < 15 ? 'warn' : 'good';
 
   host.innerHTML = '<div class="stat-grid" style="margin-top:12px">'
-    + statTileHTML('Biaya total', rp(cost), `${courts} court x ${hours} jam`)
+    + statTileHTML('Biaya total', rp(cost), hoursLabel)
     + statTileHTML('Pemasukan', rp(revenue), `${n} x ${rp(fee)}`)
     + (impas
       ? statTileHTML('Untung', 'Impas', `sisa pembulatan ${rp(profit)}`, 'good')
@@ -562,15 +613,22 @@ async function runAnalyze() {
       grid.appendChild(tile('Main / orang', r.avg_plays_per_player,
         `${r.playing_minutes_per_player} menit`));
     }
-    // Babak bisa membuat jumlah duduk berayun: 4 putri cuma cukup untuk satu
-    // court, jadi babak putri mendudukkan lebih banyak orang daripada babak
-    // putra. Satu angka di situ selalu ujung yang paling ramai - dan host
-    // memakai kartu ini untuk memutuskan berapa court disewa.
+    // Jumlah duduk bisa berayun karena DUA sebab yang berbeda, dan sebabnya
+    // ikut disebut - kalau tidak, host membaca "berayun antar babak" untuk acara
+    // satu babak yang court-nya berkurang, lalu mencari babak yang tidak ada.
+    //   babak: 4 putri cuma cukup untuk satu court, jadi babak putri
+    //     mendudukkan lebih banyak orang daripada babak putra
+    //   court berkurang: tempatnya yang menyusut, bukan yang berhak turun
+    // Satu angka di situ selalu ujung yang paling lengang - dan host memakai
+    // kartu ini untuk memutuskan berapa court disewa.
     if (r.byes_per_round_max) {
+      const sebab = $('courts_drop').checked
+        ? (r.groups ? ' · berayun antar babak & court' : ' · court berkurang')
+        : ' · berayun antar babak';
       grid.appendChild(tile('Duduk / ronde',
         `${r.byes_per_round}-${r.byes_per_round_max}`,
         `${pct(r.rest_ratio)}-${pct(r.byes_per_round_max / r.n_players)}`
-          + ' · berayun antar babak', restCls));
+          + sebab, restCls));
     } else {
       grid.appendChild(tile('Duduk / ronde', r.byes_per_round,
         pct(r.rest_ratio), restCls));
@@ -601,12 +659,68 @@ async function runAnalyze() {
 }
 
 ['courts', 'duration', 'round_min', 'warmup', 'mode', 'tier_count', 'referees',
- 'ballboys', 'court_price', 'fee', 'other_costs']
+ 'ballboys', 'court_price', 'fee', 'other_costs',
+ 'courts_after', 'courts_from_round']
   .forEach((id) => $(id).addEventListener('input', scheduleAnalyze));
 
 $('mode').addEventListener('change', () => {
   $('tier-row').style.display = $('mode').value === 'tiered' ? '' : 'none';
 });
+
+/**
+ * Terjemahkan "sisa 1 court mulai ronde 11" jadi kalimat yang bisa diperiksa
+ * host: blok rondenya, jam sewa yang dibayar, dan slot main yang tersisa.
+ *
+ * Ada alasannya kenapa ini kalimat dan bukan cuma dua kotak angka: dua kotak itu
+ * tidak memperlihatkan bahwa mengurangi court memotong jatah main semua orang.
+ * Host membatasi court demi margin, jadi yang ia butuh lihat bersamaan adalah
+ * penghematannya DAN harganya.
+ */
+function renderCourtDrop() {
+  const on = $('courts_drop').checked;
+  $('courts-drop-row').style.display = on ? '' : 'none';
+  const box = $('courts-drop-hint');
+  if (!on) { box.textContent = ''; return; }
+
+  const ronde = rondeMuat();
+  const p = courtDropPayload();
+  const courts = +$('courts').value || 1;
+  const per = +$('round_min').value || 0;
+  const n = players.length;
+
+  if (ronde < 2) {
+    box.textContent = 'Jam sewa ini cuma memuat ' + ronde
+      + ' ronde - belum ada ronde kedua untuk mengurangi court.';
+    return;
+  }
+  const sisaRonde = ronde - p.courts_from_round + 1;
+  const menitAwal = (+$('warmup').value || 0) + (p.courts_from_round - 1) * per;
+  const jam = (courts * menitAwal
+    + p.courts_after * Math.max(0, (+$('duration').value || 0) - menitAwal)) / 60;
+  const hemat = (courts * ((+$('duration').value || 0) / 60) - jam)
+    * (+$('court_price').value || 0);
+
+  const bit = [
+    `Ronde 1-${p.courts_from_round - 1} pakai ${courts} court, `
+      + `ronde ${p.courts_from_round}-${ronde} pakai ${p.courts_after} court `
+      + `(${sisaRonde} ronde).`,
+    `Sewa jadi ${(+jam.toFixed(2))} court-jam`
+      + (hemat > 0 ? `, hemat ${rp(hemat)}.` : '.'),
+  ];
+  if (n >= 4) {
+    const slot = 4 * (Math.min(courts, Math.floor(n / 4))
+      * (p.courts_from_round - 1)
+      + Math.min(p.courts_after, Math.floor(n / 4)) * sisaRonde);
+    bit.push(`Slot main ${slot} untuk ${n} peserta `
+      + `= rata-rata ${(slot / n).toFixed(1)} ronde main per orang.`);
+  }
+  box.textContent = bit.join('\n');
+}
+
+['courts_drop', 'courts_after', 'courts_from_round', 'courts',
+ 'duration', 'round_min', 'warmup', 'court_price']
+  .forEach((id) => $(id).addEventListener('input', renderCourtDrop));
+renderCourtDrop();
 
 // ---------------------------------------------------------------------------
 // Generate
@@ -1100,7 +1214,12 @@ function debugSnapshot() {
   const payload = buildPayload();
   const lines = [
     '--- INFO DEBUG PADELIN ---',
-    `court=${payload.courts} durasi=${payload.duration_minutes}m `
+    // Court berkurang WAJIB ikut: ia mengubah jumlah match seluruh acara, jadi
+    // jatah main, keunikan, dan tunggu terpanjang semuanya bergeser. Laporan
+    // tanpa barisnya tidak bisa direproduksi - setupnya terbaca identik.
+    `court=${payload.courts}${payload.courts_after
+      ? ` (jadi ${payload.courts_after} dari ronde ${payload.courts_from_round})`
+      : ''} durasi=${payload.duration_minutes}m `
       + `ronde=${payload.round_minutes}m pemanasan=${payload.warmup_minutes}m`,
     `mode=${payload.mode} pool_rating=${payload.tier_count} `
       + `wasit=${payload.referees_per_court} ballboy=${payload.ballboys_per_court}`,
@@ -1437,6 +1556,13 @@ function applyRequest(req) {
     if (pas) $('effort').value = pas.value;
   }
   $('tier-row').style.display = req.mode === 'tiered' ? '' : 'none';
+  // Court berkurang. Acara lama tidak punya field ini, dan itu harus dipulihkan
+  // sebagai "tidak dipakai" - bukan dibiarkan mewarisi centang dari acara yang
+  // dibuka sebelumnya.
+  $('courts_drop').checked = !!(req.courts_after && req.courts_from_round);
+  if (req.courts_after) $('courts_after').value = req.courts_after;
+  if (req.courts_from_round) $('courts_from_round').value = req.courts_from_round;
+  renderCourtDrop();
   $('segments').innerHTML = '';
   $('interleave').checked = !!req.interleave_segments;
   (req.segments || []).forEach((s) => addSeg(s.label, s.rounds, s.rule));

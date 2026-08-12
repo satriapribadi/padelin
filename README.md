@@ -80,6 +80,31 @@ daripada "1 orang mengulang 4×".
   4 laki-laki. Boleh sebagian — peserta lain tetap rotasi bebas
 - 4–26+ pemain, meet satu gender penuh juga didukung
 
+**Court berkurang di tengah acara**
+Untuk sewa yang tidak sama panjang: 2 court dua jam, lalu 1 court sejam lagi.
+Centang di *Setup lapangan*, isi sisa court dan mulai ronde berapa — dan yang
+ikut menyesuaikan bukan cuma jadwalnya:
+
+- **jatah main tetap rata.** Ronde 1 court hanya butuh separuh pasangan, jadi
+  rencana slot gender ikut dihitung ulang. Ini bukan detail: dengan format match
+  dibatasi ke sesama-bentuk, menukar seorang putri dengan seorang putra ditolak
+  batas format, sehingga kerataan yang tidak lahir saat konstruksi tidak bisa
+  ditebus belakangan
+- **biaya mengikuti court-jam nyata**, bukan court × jam. 2 court × 120 menit +
+  1 court × 60 menit = 5 court-jam, bukan 6
+- **batas keunikan dan jumlah yang duduk ikut turun/berayun.** Court yang lebih
+  sedikit berarti lebih sedikit ronde main per orang — yang justru memperbaiki
+  keunikan partner & lawan — dan yang duduk jadi rentang (2–6 orang), bukan satu
+  angka
+- **tunggu terpanjang yang dipaksa kapasitas tidak didenda.** Dengan 1 court, 6
+  dari 10 orang duduk; dua ronde berurutan menyediakan 12 tempat duduk untuk 10
+  orang, jadi minimal 2 orang duduk dua kali beruntun. Batas yang dilaporkan
+  menghitungnya, sehingga skor kualitas tidak menghukum jadwal untuk sesuatu
+  yang tidak bisa ia perbaiki
+
+Pola yang lebih rumit daripada satu kali pengurangan (mis. `2x8, 1x4, 2x3`)
+belum ada di UI; pakai `tools/laporan_court_turun.py`.
+
 **Wasit & ballboy**
 Diambil dari yang sedang istirahat dan dirotasi adil - rata per peran, bukan
 cuma totalnya. Di rekap pemain kolomnya aditif: main + wasit + ballboy +

@@ -397,7 +397,24 @@ def build_html(
     plays = list(st.plays_per_player.values()) or [0]
     meta_bits = [b for b in (format_date_id(event_date), venue) if b]
     meta_bits.append(f"{len(schedule.players)} peserta")
-    meta_bits.append(f"{cfg.courts} court")
+    # Court yang benar-benar dipakai tiap ronde, bukan yang tercatat di config.
+    # Acara yang melepas court kedua di tengah jalan harus terbaca di kepala
+    # laporan; kalau tidak, pembaca melihat ronde-ronde belakang cuma punya satu
+    # match dan mengira ada yang hilang dari cetakannya.
+    court_ronde = [len(r.matches) for r in schedule.rounds]
+    if court_ronde and len(set(court_ronde)) > 1:
+        # Ronde tempat court pertama kali berkurang - hanya disebut kalau
+        # urutannya memang menurun terus. Pola naik-turun tidak punya satu
+        # "ronde berkurang" yang benar, jadi yang ditulis cuma rentangnya.
+        turun = next((r for r in range(1, len(court_ronde))
+                      if court_ronde[r] < court_ronde[r - 1]), None)
+        menurun = all(b <= a for a, b in zip(court_ronde, court_ronde[1:]))
+        meta_bits.append(
+            f"{max(court_ronde)} court, {min(court_ronde)} dari ronde {turun + 1}"
+            if menurun and turun is not None
+            else f"{min(court_ronde)}-{max(court_ronde)} court")
+    else:
+        meta_bits.append(f"{cfg.courts} court")
     meta_bits.append(f"{cfg.duration_minutes} menit")
 
     parts: list[str] = []
@@ -738,8 +755,17 @@ def build_html(
                 # Kalau yang belum pernah PERSIS sebanyak yang mustahil, jadwal
                 # ini sudah mentok baik - dan "99 belum pernah, 99 di antaranya
                 # mustahil" adalah cara paling berbelit untuk mengatakannya.
-                sebab = (f", karena {len(schedule.rounds)} ronde di "
-                         f"{cfg.courts} court hanya memuat {muat} pertemuan")
+                # Disebut dari match yang BENAR-BENAR ada, bukan dari ronde x
+                # cfg.courts. Court yang disewa belum tentu court yang terpakai -
+                # 10 peserta di 4 court cuma mengisi 2 - dan pada acara yang
+                # court-nya berkurang di tengah jalan, "15 ronde di 2 court"
+                # menjanjikan 30 match untuk jadwal yang berisi 25.
+                per_ronde = sorted({len(r.matches) for r in schedule.rounds})
+                dasar = (f"{len(schedule.rounds)} ronde x {per_ronde[0]} court"
+                         if len(per_ronde) == 1
+                         else f"{len(schedule.rounds)} ronde berisi "
+                              f"{n_matches} match")
+                sebab = f", karena {dasar} hanya memuat {muat} pertemuan"
                 bit += (f" - semuanya memang mustahil{sebab}"
                         if belum <= mustahil
                         else f" - {mustahil} di antaranya mustahil{sebab}")

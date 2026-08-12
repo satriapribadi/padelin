@@ -565,7 +565,19 @@ def save_event(conn, request: dict, schedule: dict,
     hours = float(cfg.get("duration_minutes", 0)) / 60.0
     courts = int(cfg.get("courts", 0))
     n_players = len(schedule.get("players", []))
-    total_cost = (courts * hours * float(econ.get("court_price_per_hour") or 0)
+    # Court-jam yang benar-benar disewa. Bukan court x jam: acara yang melepas
+    # court kedua di tengah jalan membayar lebih sedikit, dan angka inilah yang
+    # muncul di daftar acara dan rekap klub - salah di sini berarti laporan laba
+    # klub ikut salah, jauh setelah acaranya lewat.
+    court_hours = courts * hours
+    if cfg.get("courts_after") and cfg.get("courts_from_round"):
+        menit = float(cfg.get("duration_minutes", 0))
+        rm = float(cfg.get("round_minutes", 0) or 0)
+        awal = min(menit, float(cfg.get("warmup_minutes", 0) or 0)
+                   + (int(cfg["courts_from_round"]) - 1) * rm)
+        court_hours = (courts * awal
+                       + int(cfg["courts_after"]) * (menit - awal)) / 60.0
+    total_cost = (court_hours * float(econ.get("court_price_per_hour") or 0)
                   + float(econ.get("other_costs") or 0))
     revenue = n_players * float(econ.get("fee_per_player") or 0)
 

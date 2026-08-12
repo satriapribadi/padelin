@@ -33,6 +33,7 @@ from padel_scheduler import (
     build_schedule,
 )
 from padel_scheduler import storage
+from padel_scheduler.capacity import rounds_from_duration
 from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_analysis
 from padel_scheduler.html_report import build_html
 from padel_scheduler.models import COURT_PREFERENCES, MATCHUP_LABELS, MATCHUPS
@@ -121,6 +122,14 @@ def _config_from(payload: dict) -> Config:
         if int(s.get("rounds", 0)) > 0
     ]
     ro = payload.get("rounds_override")
+    # Court berkurang di tengah acara. Dua field yang cuma berarti berpasangan;
+    # kalau salah satu kosong, dua-duanya diabaikan - payload lama tidak punya
+    # field ini sama sekali, dan itu harus tetap terbaca sebagai "tidak ada".
+    after = payload.get("courts_after")
+    from_round = payload.get("courts_from_round")
+    kurang = (None, None)
+    if after not in (None, "", 0) and from_round not in (None, "", 0):
+        kurang = (int(after), int(from_round))
     return Config(
         courts=int(payload.get("courts", 1)),
         duration_minutes=int(payload.get("duration_minutes", 120)),
@@ -137,6 +146,8 @@ def _config_from(payload: dict) -> Config:
         segments=segs,
         interleave_segments=bool(payload.get("interleave_segments", False)),
         allowed_matchups=_matchups_from(payload),
+        courts_after=kurang[0],
+        courts_from_round=kurang[1],
     )
 
 
@@ -191,6 +202,16 @@ def api_analyze(payload: dict) -> dict:
     seragam = all(s.rule == "open" for s in cfg.segments)
     lengkap = n > 0 and men + women == n and seragam
 
+    # Court yang berkurang mengubah jumlah match seluruh acara, dan dari situlah
+    # batas keunikan dihitung. Tanpa ini panel menjanjikan ronde main yang tidak
+    # akan terjadi - dan angkanya dipakai host untuk memutuskan setup.
+    matches_per_round = None
+    if cfg.courts_after is not None and n >= 4:
+        ronde_panel = rounds_override or rounds_from_duration(
+            cfg.duration_minutes, round_minutes, cfg.warmup_minutes)
+        matches_per_round = [min(c, n // 4)
+                             for c in cfg.court_plan(ronde_panel)]
+
     rep = analyze(
         n_players=n,
         courts=cfg.courts,
@@ -209,6 +230,7 @@ def api_analyze(payload: dict) -> dict:
         segments=[(s.rule, s.rounds) for s in cfg.segments],
         roster_men=men,
         roster_women=women,
+        matches_per_round=matches_per_round,
     )
 
     return {
@@ -267,9 +289,27 @@ def api_economics(payload: dict) -> dict:
         current = next((o for o in options if _is_current(o)), None)
         if current is not None:
             shown = [current] + shown[:23]
+    # Court yang dilepas di tengah acara: ongkos DAN waktu main dua-duanya turun,
+    # jadi dua-duanya dikoreksi. Skenario pembanding "tambah 1 court" memakai pola
+    # sewa yang sama plus satu court sepanjang acara - court tambahan yang ikut
+    # dilepas di tengah bukan sesuatu yang bisa ditebak dari sini.
+    ch = chp = mpr = mpr_plus = None
+    if cfg.courts_after is not None and n >= 4:
+        ronde_e = cfg.rounds_override or cfg.total_segment_rounds() \
+            or rounds_from_duration(cfg.duration_minutes, cfg.round_minutes,
+                                    cfg.warmup_minutes)
+        plan_e = cfg.court_plan(ronde_e)
+        ch = cfg.court_hours()
+        chp = ch + hours
+        mpr = [min(c, n // 4) for c in plan_e]
+        mpr_plus = [min(c + 1, n // 4) for c in plan_e]
+
     up = upgrade_analysis(n, cfg.courts, hours, econ,
                           cfg.round_minutes, cfg.warmup_minutes,
-                          seg_ekonomi, men_e, women_e)
+                          seg_ekonomi, men_e, women_e,
+                          court_hours=ch, matches_per_round=mpr,
+                          court_hours_plus=chp,
+                          matches_per_round_plus=mpr_plus)
 
     return {
         "current": vars(up["base"]),

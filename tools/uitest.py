@@ -461,6 +461,89 @@ def main() -> int:
                         " + ' peringatan'")
         check("Analisa kelayakan terisi otomatis", analyze)
 
+        # --- 2b. court berkurang di tengah acara --------------------------
+        # Kotak centang ini mengubah jumlah match seluruh acara, jadi yang
+        # diperiksa bukan cuma "kotaknya muncul": kalimat bantuannya harus
+        # menyebut blok ronde dan court-jam yang benar, kartu biaya harus ikut
+        # turun, dan angkanya harus benar-benar terkirim. Yang terakhir dibaca
+        # lewat info debug - app.js module, jadi buildPayload tidak global, dan
+        # yang perlu diuji memang apa yang dikirim.
+        def court_drop():
+            semula = b.js(
+                "JSON.stringify(['courts','duration','round_min','warmup',"
+                "'court_price'].map(i => document.getElementById(i).value))")
+            b.js("""(() => {
+              const set = (id, v) => { const e = document.getElementById(id);
+                e.value = v; e.dispatchEvent(new Event('input', {bubbles:true})); };
+              set('courts', 2); set('duration', 180); set('warmup', 0);
+              set('round_min', 12); set('court_price', 200000);
+              return true; })()""")
+            tersembunyi = b.js("getComputedStyle(document.getElementById("
+                               "'courts-drop-row')).display")
+            assert tersembunyi == "none", \
+                f"baris court berkurang tampil padahal belum dicentang: {tersembunyi}"
+
+            b.js("""(() => {
+              const c = document.getElementById('courts_drop');
+              c.checked = true;
+              c.dispatchEvent(new Event('input', {bubbles:true}));
+              const set = (id, v) => { const e = document.getElementById(id);
+                e.value = v; e.dispatchEvent(new Event('input', {bubbles:true})); };
+              set('courts_after', 1); set('courts_from_round', 11);
+              return true; })()""")
+            assert b.js("getComputedStyle(document.getElementById("
+                        "'courts-drop-row')).display") != "none", \
+                "baris court berkurang tetap tersembunyi setelah dicentang"
+
+            b.wait_for("document.getElementById('courts-drop-hint')"
+                       ".textContent.includes('court-jam')",
+                       timeout=5, label="kalimat court berkurang")
+            hint = b.js("document.getElementById('courts-drop-hint').textContent")
+            # 180 menit / 12 = 15 ronde; turun di ronde 11 berarti 5 ronde
+            # terakhir 1 court, dan sewanya 2x120m + 1x60m = 5 court-jam.
+            for perlu in ("Ronde 1-10 pakai 2 court",
+                          "ronde 11-15 pakai 1 court", "5 ronde",
+                          "5 court-jam", "hemat"):
+                assert perlu in hint, f"kalimat tanpa '{perlu}': {hint!r}"
+
+            # Kartu biaya memakai court-jam nyata, bukan court x jam. 6 court-jam
+            # akan memberi 1.200.000; yang benar 5 court-jam = 1.000.000.
+            b.wait_for("document.getElementById('setup-econ')"
+                       ".textContent.includes('court berkurang')",
+                       timeout=8, label="kartu biaya court berkurang")
+            econ = b.js("document.getElementById('setup-econ').textContent")
+            assert "1.000.000" in econ, \
+                f"biaya tidak memakai court-jam nyata: {econ[:160]!r}"
+            assert "1.200.000" not in econ, \
+                f"biaya masih menagih court penuh: {econ[:160]!r}"
+
+            b.js("document.getElementById('copy-debug').click(); true")
+            b.wait_for("document.getElementById('debug-out').value.length > 50",
+                       timeout=5, label="teks debug")
+            dbg = b.js("document.getElementById('debug-out').value")
+            assert "(jadi 1 dari ronde 11)" in dbg, \
+                f"info debug tidak menyebut court berkurang: {dbg[:120]!r}"
+
+            # Dimatikan lagi + nilai semula dipulihkan, supaya skenario
+            # berikutnya tidak mewarisi acara 3 jam yang court-nya berkurang.
+            b.js("""(() => {
+              const c = document.getElementById('courts_drop');
+              c.checked = false;
+              c.dispatchEvent(new Event('input', {bubbles:true}));
+              document.getElementById('debug-out').style.display = 'none';
+              return true; })()""")
+            b.js("(() => { const v = " + semula + ";"
+                 "['courts','duration','round_min','warmup','court_price']"
+                 ".forEach((id, i) => { const e = document.getElementById(id);"
+                 " e.value = v[i];"
+                 " e.dispatchEvent(new Event('input', {bubbles:true})); });"
+                 "return true; })()")
+            assert b.js("document.getElementById('courts-drop-hint')"
+                        ".textContent") == "", \
+                "kalimat court berkurang tertinggal setelah centang dilepas"
+            return "15 ronde -> 5 court-jam, biaya Rp 1.000.000, terkirim"
+        check("Court berkurang di tengah acara", court_drop)
+
         # --- 3. generate jadwal -------------------------------------------
         def generate():
             b.js("document.getElementById('referees').value='1';"

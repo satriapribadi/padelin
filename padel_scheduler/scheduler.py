@@ -509,12 +509,13 @@ def _spread_dari_slot(male_slots: int, total_slots: int,
 _MAX_KEADAAN_SLOT = 4000
 
 
-def _slot_terjangkau(options: list[list[tuple[int, ...]]],
-                     rows: list[int], ideal: float) -> set[int]:
+def _slot_terjangkau(opsi: dict[int, list[list[tuple[int, ...]]]],
+                     needs: list[int], rows: list[int],
+                     ideal: float) -> set[int]:
     """Semua total slot laki-laki yang bisa dicapai urutan baris ini."""
     sums = {0}
-    for i in rows:
-        opts = options[i]
+    for k, i in enumerate(rows):
+        opts = opsi[needs[k]][i]
         if not opts:
             return set()
         nxt = {s + _gender_slots(o)[0] for s in sums for o in opts}
@@ -524,22 +525,23 @@ def _slot_terjangkau(options: list[list[tuple[int, ...]]],
     return sums
 
 
-def _spread_terbaik(options: list[list[tuple[int, ...]]], rows: list[int],
+def _spread_terbaik(opsi: dict[int, list[list[tuple[int, ...]]]],
+                    needs: list[int], rows: list[int],
                     total_slots: int, n_men: int, n_women: int) -> int | None:
     """Spread jatah main terbaik yang masih mungkin dari urutan baris ini."""
     ideal = total_slots * (n_men / (n_men + n_women)) if n_men + n_women else 0.0
     kandidat = [
         s for s in (
             _spread_dari_slot(v, total_slots, n_men, n_women)
-            for v in _slot_terjangkau(options, rows, ideal)
+            for v in _slot_terjangkau(opsi, needs, rows, ideal)
         ) if s is not None
     ]
     return min(kandidat) if kandidat else None
 
 
 def _balanced_rows(
-    options: list[list[tuple[int, ...]]], n_rounds: int,
-    n_men: int, n_women: int, need: int
+    opsi: dict[int, list[list[tuple[int, ...]]]], needs: list[int],
+    n_men: int, n_women: int
 ) -> tuple[list[int], list[int]] | None:
     """Baris kandidat mana yang dipakai tiap ronde, supaya jatah main merata.
 
@@ -549,6 +551,13 @@ def _balanced_rows(
     dua pemain ditukar sekaligus, sedangkan gerakannya satu pemain dan keadaan
     antaranya ilegal - round_legal() menolaknya. Jadi komposisi format praktis
     ditentukan seluruhnya di sini, bukan di optimizer.
+
+    `needs` berisi berapa PASANGAN yang turun di tiap ronde, satu angka per
+    ronde. Biasanya sama di semua ronde, tapi tidak wajib: acara yang court-nya
+    berkurang di tengah jalan menurunkan lebih sedikit pasangan di ronde-ronde
+    terakhir. `opsi[need][baris]` adalah komposisi bentuk tim yang sah untuk
+    baris itu pada kebutuhan sebanyak itu - dipisah per `need` karena komposisi
+    yang sah untuk 4 pasangan bukan komposisi yang sah untuk 2.
 
     Contoh nyata: 5 laki-laki + 3 perempuan, 12 ronde, 1 court, format sesama
     bentuk. Baris faktorisasi bergantian 6 baris yang cuma bisa LP-LP dan 6
@@ -567,52 +576,64 @@ def _balanced_rows(
 
     None kalau tidak ada susunan yang lebih baik daripada urutan apa adanya.
     """
-    if not options or n_rounds <= 0 or n_men + n_women == 0:
+    n_rounds = len(needs)
+    baris_semua = next(iter(opsi.values()), [])
+    if not baris_semua or n_rounds <= 0 or n_men + n_women == 0:
         return None
-    total_slots = n_rounds * 2 * need
+    total_slots = 2 * sum(needs)
     ideal = total_slots * (n_men / (n_men + n_women))
 
-    bawaan = [i % len(options) for i in range(n_rounds)]
-    spread_bawaan = _spread_terbaik(options, bawaan, total_slots, n_men, n_women)
+    bawaan = [i % len(baris_semua) for i in range(n_rounds)]
+    spread_bawaan = _spread_terbaik(opsi, needs, bawaan, total_slots,
+                                    n_men, n_women)
 
     # Nilai slot laki-laki yang bisa diturunkan satu ronde, dan baris mana saja
     # yang sanggup. Baris boleh dipakai berulang: dengan roster gender timpang,
     # komposisi merata sering menuntut lebih banyak ronde campuran daripada
     # baris campuran yang berbeda - pengulangannya tak terhindarkan, dan
     # menolaknya justru mengunci ketimpangan.
-    baris_untuk: dict[int, list[int]] = {}
-    for i, opts in enumerate(options):
-        for o in opts:
-            baris_untuk.setdefault(_gender_slots(o)[0], []).append(i)
-    if not baris_untuk:
+    #
+    # Didaftar per `need`, bukan sekali untuk seluruh acara: ronde 1 court dan
+    # ronde 2 court tidak menawarkan nilai slot yang sama, dan menyatukannya
+    # akan menjanjikan nilai yang ronde bersangkutan tidak sanggup menurunkan.
+    baris_untuk: dict[int, dict[int, list[int]]] = {}
+    for need, options in opsi.items():
+        per: dict[int, list[int]] = {}
+        for i, opts in enumerate(options):
+            for o in opts:
+                per.setdefault(_gender_slots(o)[0], []).append(i)
+        baris_untuk[need] = {v: sorted(set(rows)) for v, rows in per.items()}
+    if any(not baris_untuk.get(nd) for nd in needs):
         return None
-    for v in baris_untuk:
-        baris_untuk[v] = sorted(set(baris_untuk[v]))
 
-    nilai = sorted(baris_untuk)
+    nilai = [sorted(baris_untuk[nd]) for nd in needs]
     # jangkau[r] = {total slot laki-laki: nilai yang dipakai di ronde ke-r}
     jangkau: list[dict[int, int]] = [{} for _ in range(n_rounds + 1)]
     jangkau[0][0] = -1
     for r in range(n_rounds):
-        sisa = n_rounds - r
         for s in jangkau[r]:
-            for v in nilai:
+            for v in nilai[r]:
                 jangkau[r + 1].setdefault(s + v, v)
         if len(jangkau[r + 1]) > _MAX_KEADAAN_SLOT:
-            # Sisa ronde masih bisa menambah antara min*sisa dan max*sisa slot,
-            # jadi yang dinilai adalah jarak ke ideal pada akhir nanti.
-            tengah = ideal - (nilai[0] + nilai[-1]) / 2 * (sisa - 1)
+            # Ronde yang belum dilewati masih bisa menambah antara min dan max
+            # slot masing-masing, jadi yang dinilai adalah jarak ke ideal pada
+            # akhir nanti, bukan jarak ke ideal sekarang.
+            sisa_min = sum(p[0] for p in nilai[r + 1:])
+            sisa_max = sum(p[-1] for p in nilai[r + 1:])
+            tengah = ideal - (sisa_min + sisa_max) / 2
             terpilih = sorted(jangkau[r + 1], key=lambda s: abs(s - tengah))
             jangkau[r + 1] = {s: jangkau[r + 1][s] for s in terpilih[:_MAX_KEADAAN_SLOT]}
+        if not jangkau[r + 1]:
+            return None
 
-    def runut(s: int) -> dict[int, int]:
-        """Berapa ronde memakai tiap nilai slot, untuk total akhir s."""
-        jml: dict[int, int] = {}
+    def runut(s: int) -> list[int]:
+        """Nilai slot yang dipakai tiap ronde, untuk total akhir s."""
+        urut = [0] * n_rounds
         for r in range(n_rounds, 0, -1):
             v = jangkau[r][s]
-            jml[v] = jml.get(v, 0) + 1
+            urut[r - 1] = v
             s -= v
-        return jml
+        return urut
 
     terbaik = None
     for s in jangkau[n_rounds]:
@@ -634,32 +655,45 @@ def _balanced_rows(
     if spread_bawaan is None or spread_baru >= spread_bawaan:
         return None
 
-    jumlah = terbaik[2]
-
     # Sebar merata sepanjang acara, bukan berblok. Runutan DP cenderung
     # mengelompokkan ronde sejenis berurutan, dan blok "6 ronde putra" berarti
     # para perempuan duduk enam kali beruntun - persis yang didenda b2b_pen.
     # Posisi pecahan (k+0.5)/jumlah menyebar tiap kelompok serata mungkin.
-    urut_nilai = [
-        v for _, v in sorted(
-            ((k + 0.5) / jumlah[v], v)
-            for v in jumlah for k in range(jumlah[v])
-        )
-    ]
+    #
+    # Penyebarannya di dalam ronde yang `need`-nya sama, bukan lintas seluruh
+    # acara. Ronde dengan need yang sama menawarkan pilihan nilai yang sama
+    # persis, jadi menukar nilai antar mereka selalu sah; menukarnya dengan ronde
+    # ber-need lain tidak - nilai 6 slot putra tidak bisa dipindah ke ronde yang
+    # cuma menurunkan 2 pasangan.
+    urut_nilai = [0] * n_rounds
+    for need in dict.fromkeys(needs):
+        posisi = [r for r, nd in enumerate(needs) if nd == need]
+        jumlah: dict[int, int] = {}
+        for r in posisi:
+            jumlah[terbaik[2][r]] = jumlah.get(terbaik[2][r], 0) + 1
+        tersebar = [
+            v for _, v in sorted(
+                ((k + 0.5) / jumlah[v], v)
+                for v in jumlah for k in range(jumlah[v])
+            )
+        ]
+        for r, v in zip(posisi, tersebar):
+            urut_nilai[r] = v
 
     # Baris untuk tiap nilai, dipakai bergiliran supaya pengulangan tersebar
     # rata alih-alih menumpuk di satu baris.
-    pakai: dict[int, int] = {}
+    pakai: dict[tuple[int, int], int] = {}
     hasil: list[int] = []
-    for v in urut_nilai:
-        kandidat = baris_untuk[v]
-        hasil.append(kandidat[pakai.get(v, 0) % len(kandidat)])
-        pakai[v] = pakai.get(v, 0) + 1
+    for r, v in enumerate(urut_nilai):
+        kandidat = baris_untuk[needs[r]][v]
+        kunci = (needs[r], v)
+        hasil.append(kandidat[pakai.get(kunci, 0) % len(kandidat)])
+        pakai[kunci] = pakai.get(kunci, 0) + 1
     return hasil, urut_nilai
 
 
-def _slot_plan(options: list[list[tuple[int, ...]]], rows: list[int],
-               n_men: int, n_women: int, need: int) -> list[int] | None:
+def _slot_plan(opsi: dict[int, list[list[tuple[int, ...]]]], needs: list[int],
+               rows: list[int], n_men: int, n_women: int) -> list[int] | None:
     """Berapa slot laki-laki yang harus turun di tiap ronde, urut ronde.
 
     Kenapa ini perlu terpisah dari _balanced_rows: yang menentukan jatah main
@@ -687,13 +721,15 @@ def _slot_plan(options: list[list[tuple[int, ...]]], rows: list[int],
     """
     if not rows or n_men == 0 or n_women == 0:
         return None
-    total_slots = len(rows) * 2 * need
+    total_slots = 2 * sum(needs)
     ideal = total_slots * (n_men / (n_men + n_women))
 
-    # nilai[k] = slot putra yang bisa diturunkan ronde ke-k, dari barisnya.
+    # nilai[k] = slot putra yang bisa diturunkan ronde ke-k, dari barisnya. Yang
+    # dibaca opsi untuk `need` ronde itu: baris yang sama menawarkan komposisi
+    # yang berbeda saat yang diminta 4 pasangan dan saat yang diminta 2.
     nilai: list[list[int]] = []
-    for i in rows:
-        opts = options[i]
+    for k, i in enumerate(rows):
+        opts = opsi[needs[k]][i]
         if not opts:
             return None
         nilai.append(sorted({_gender_slots(o)[0] for o in opts}))
@@ -1338,11 +1374,13 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     ronde_berhak = {pid: 0 for pid in ids}
     main_pertama: dict[int, int] = {}
     duduk_berhak: list[set[int]] = []
+    berhak_set: list[set[int]] = []
     for r in range(n_rounds):
         turun = {p for q in st.matches[r] for p in q}
         elig = (st.rules.round_eligible[r]
                 if r < len(st.rules.round_eligible) else None)
         berhak = [p for p in ids if elig is None or p in elig or p in turun]
+        berhak_set.append(set(berhak))
         duduk_berhak.append({p for p in berhak if p not in turun})
         if turun:
             tertinggal = min((sudah[p] for p in berhak if p not in turun),
@@ -1362,11 +1400,51 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     # Yang belum pernah turun sama sekali menunggu sepanjang acara.
     last_first_play = (max(main_pertama.values(), default=0)
                        if len(main_pertama) == len(ids) else n_rounds)
+    # Tunggu terpanjang yang tak terhindarkan. Dua sebab yang sama sekali
+    # berbeda, dan yang berlaku adalah yang terbesar.
+    #
+    # (1) Per orang: dengan `plays` kali main, ronde duduknya bisa dipecah ke
+    #     paling banyak plays+1 rentetan, jadi rentetan terpanjangnya minimal
+    #     sebanyak itu.
     wait_floor = max(
         (math.ceil((ronde_berhak[p] - plays[p]) / (plays[p] + 1))
          if ronde_berhak[p] - plays[p] > 0 else 0)
         for p in ids
     ) if ids else 0
+
+    # (2) Kapasitas ronde, lewat pigeonhole. Kalau di dua ronde berurutan yang
+    #     duduk 6 dan 6 orang sedangkan yang berhak turun cuma 10, minimal 2
+    #     orang duduk di kedua-duanya - berapa pun pintarnya penjadwal. Sebabnya
+    #     bukan rotasi: ronde berikutnya hanya punya 4 tempat untuk 6 orang yang
+    #     baru saja duduk.
+    #
+    #     Rumus (1) tidak melihat ini. Ia mengandaikan ronde duduk seseorang
+    #     boleh disebar ke mana saja sepanjang acara, padahal slot per ronde
+    #     yang membatasi. Pada acara yang court-nya berkurang di tengah jalan
+    #     bedanya nyata dan langsung terbaca host: 10 peserta, ronde 11-15 turun
+    #     ke 1 court, rumus (1) memberi batas 1 ronde sehingga jadwal yang
+    #     tunggu terpanjangnya 2 dituduh gagal - padahal 2 memang tak
+    #     terhindarkan, dan skor kualitasnya ikut kena denda yang tidak ia
+    #     sebabkan.
+    #
+    #     Untuk jendela L ronde berurutan: yang berhak di SEMUANYA sebanyak |U|,
+    #     dan kalau jumlah yang duduk di tiap ronde (dihitung di dalam U) melebihi
+    #     (L-1)*|U|, ada minimal satu orang yang duduk di seluruh L ronde itu.
+    #     Batasnya tidak naik lagi begitu ia jadi <= 0 - tiap ronde tambahan
+    #     menambah paling banyak |U| dan mengurangi tepat |U| - jadi
+    #     perpanjangannya bisa dihentikan di situ, bukan diteruskan sampai habis.
+    for awal in range(n_rounds):
+        L = 2
+        while awal + L <= n_rounds:
+            U = set.intersection(*berhak_set[awal:awal + L])
+            if not U:
+                break
+            bersama = (sum(len(duduk_berhak[k] & U) for k in range(awal, awal + L))
+                       - (L - 1) * len(U))
+            if bersama <= 0:
+                break
+            wait_floor = max(wait_floor, L)
+            L += 1
 
     gaps = []
     for r in range(n_rounds):
@@ -1469,6 +1547,21 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     b2b_floor = sum(max(0, (ronde_berhak[p] - plays[p]) - (plays[p] + 1))
                     for p in ids)
     b2b_ceil = sum(max(0, (ronde_berhak[p] - plays[p]) - 1) for p in ids)
+    # Duduk beruntun yang dipaksa kapasitas, dengan pigeonhole yang sama seperti
+    # di wait_floor: di tiap pasangan ronde bersebelahan, yang duduk di
+    # kedua-duanya minimal sebanyak kelebihan tempat duduk atas jumlah orang yang
+    # berhak. Rumus per-orang di atas buta terhadap ini dan melaporkan batas 0
+    # untuk acara 1 court yang b2b-nya justru sudah mentok - lalu jadwalnya kena
+    # denda penuh untuk sesuatu yang tidak bisa dikurangi sama sekali.
+    b2b_paksa = 0
+    for r in range(n_rounds - 1):
+        U = berhak_set[r] & berhak_set[r + 1]
+        if U:
+            b2b_paksa += max(0, len(duduk_berhak[r] & U)
+                             + len(duduk_berhak[r + 1] & U) - len(U))
+    # Tetap di bawah atap: penyebut denda memakai selisih atap-lantai, dan lantai
+    # yang melewati atap membuatnya negatif.
+    b2b_floor = min(max(b2b_floor, b2b_paksa), b2b_ceil)
     b2b_pen = min(1.0, max(0, b2b - b2b_floor) / max(1, b2b_ceil - b2b_floor))
 
     # Keadilan giliran, dua sisi yang berbeda dan dua-duanya perlu: berapa kali
@@ -1532,7 +1625,8 @@ def pair_matrix(st: ScheduleState, players: list[Player]) -> list[PairStat]:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def _zero_repeats_possible(players: list[Player], config: Config) -> bool:
+def _zero_repeats_possible(players: list[Player], config: Config,
+                           courts_per_round: list[int] | None = None) -> bool:
     """Mungkinkah jadwal ini sama sekali tanpa pertemuan berulang?
 
     Dua lapis. Yang umum: tiap ronde seorang pemain dapat 2 lawan, jadi lawan
@@ -1546,14 +1640,21 @@ def _zero_repeats_possible(players: list[Player], config: Config) -> bool:
     n = len(players)
     if total_rounds <= 0 or n < 4:
         return False
-    courts_used = min(config.courts, n // 4)
-    if math.ceil(total_rounds * 4 * courts_used / n) > (n - 1) // 2:
+    # Jumlah match seluruh acara, dihitung dari court yang benar-benar dipakai
+    # tiap ronde. Acara yang court-nya berkurang di tengah jalan memberi lebih
+    # sedikit ronde main per orang, dan itu bisa mengubah jawabannya: yang
+    # menentukan mustahil-tidaknya adalah berapa kali orang turun, bukan berapa
+    # court yang pernah tersedia.
+    matches = (sum(min(c, n // 4) for c in courts_per_round)
+               if courts_per_round else
+               total_rounds * min(config.courts, n // 4))
+    if math.ceil(matches * 4 / n) > (n - 1) // 2:
         return False
     men = sum(1 for p in players if p.gender == "M")
     women = sum(1 for p in players if p.gender == "F")
     if config.allowed_matchups and men + women == n:
         return shape_budget(
-            men, women, total_rounds * courts_used,
+            men, women, matches,
             sorted(set(config.allowed_matchups)),
         ).feasible is not False
     return True
@@ -1594,7 +1695,8 @@ def _lebih_baik(a: Schedule, b: Schedule) -> bool:
 
 
 def build_schedule(players: list[Player], config: Config,
-                   progress=None) -> Schedule:
+                   progress=None,
+                   courts_per_round: list[int] | None = None) -> Schedule:
     """Bangun jadwal lengkap. Ini fungsi yang dipanggil UI.
 
     Penjadwalan diulang beberapa kali dengan seed turunan, lalu diambil yang
@@ -1614,6 +1716,11 @@ def build_schedule(players: list[Player], config: Config,
 
     `progress(frac, pesan)` opsional: dipanggil di tiap tahap supaya host tahu
     apa yang sedang dikerjakan. Angkanya nyata, bukan animasi.
+
+    `courts_per_round` opsional: berapa court yang tersedia di tiap ronde, satu
+    angka per ronde, untuk acara yang court-nya tidak sama sepanjang jam sewa
+    (mis. court kedua dilepas setelah dua jam). Kosong = config.courts untuk
+    semua ronde, dan hasilnya identik dengan sebelum parameter ini ada.
     """
     percobaan = max(1, config.attempts)
     # Dulu percobaan dipangkas jadi satu begitu pengulangan lawan wajib
@@ -1648,8 +1755,14 @@ def build_schedule(players: list[Player], config: Config,
     # Berapa ronde yang dibutuhkan supaya semua peserta kebagian match pertama,
     # kalau tiap slot dipakai untuk orang yang berbeda. Dipakai sebagai syarat
     # berhenti lebih awal di bawah.
-    slot_per_ronde = 4 * max(1, min(config.courts, len(players) // 4))
-    putaran = math.ceil(len(players) / slot_per_ronde)
+    # Dihitung ronde demi ronde, bukan dibagi rata: kalau court-nya berkurang di
+    # tengah acara, slot per ronde tidak satu angka.
+    urut_court = list(courts_per_round) if courts_per_round else [config.courts]
+    putaran, terisi = 0, 0
+    while terisi < len(players):
+        c = urut_court[min(putaran, len(urut_court) - 1)]
+        terisi += 4 * max(1, min(c, len(players) // 4))
+        putaran += 1
 
     for k in range(percobaan):
         # Tiap percobaan dapat lintasan acak yang berbeda, tapi tetap turunan
@@ -1662,7 +1775,8 @@ def build_schedule(players: list[Player], config: Config,
                 label = msg if percobaan == 1 else f"[{k + 1}/{percobaan}] {msg}"
                 progress(awal + frac / percobaan, label)
 
-        sch = _build_once(players, cfg, teruskan if progress else None)
+        sch = _build_once(players, cfg, teruskan if progress else None,
+                          courts_per_round)
         if terbaik is None or _lebih_baik(sch, terbaik):
             terbaik = sch
         # Berhenti lebih awal hanya kalau tidak ada lagi yang bisa dikejar, dan
@@ -1695,7 +1809,8 @@ def build_schedule(players: list[Player], config: Config,
 
 
 def _build_once(players: list[Player], config: Config,
-                progress=None) -> Schedule:
+                progress=None,
+                courts_per_round: list[int] | None = None) -> Schedule:
     """Satu kali penjadwalan utuh, dari validasi sampai jadwal jadi."""
     def say(frac, msg):
         if progress is not None:
@@ -1713,6 +1828,26 @@ def _build_once(players: list[Player], config: Config,
 
     round_minutes = _resolve_round_minutes(config, total_rounds) \
         if config.segments else config.round_minutes
+
+    # Court yang tersedia di tiap ronde. Satu angka untuk semua ronde adalah
+    # keadaan biasa; daftar yang berbeda-beda dipakai acara yang melepas court di
+    # tengah jam sewa. Diselesaikan di sini, sebelum ada yang membacanya, supaya
+    # tidak ada satu pun hitungan yang memakai jumlah court yang salah.
+    # Aturan di Config dulu; daftar eksplisit dari pemanggil menimpanya. Yang
+    # dipakai UI adalah aturannya, dan daftar itu bentuk umum untuk skrip yang
+    # butuh pola di luar "berkurang sekali".
+    courts_r = config.court_plan(total_rounds)
+    if courts_per_round is not None:
+        if len(courts_per_round) != total_rounds:
+            raise ScheduleError(
+                f"Rencana court berisi {len(courts_per_round)} angka, sedangkan "
+                f"acaranya {total_rounds} ronde. Keduanya harus sama panjang."
+            )
+        if any(c < 1 for c in courts_per_round):
+            raise ScheduleError("Tiap ronde minimal punya 1 court.")
+        courts_r = list(courts_per_round)
+    courts = max(courts_r)
+    court_seragam = len(set(courts_r)) == 1
 
     rng = random.Random(config.seed)
     # Ruang id dibuat rapat 0..n-1 agar count matrix tetap kecil.
@@ -1765,7 +1900,7 @@ def _build_once(players: list[Player], config: Config,
     # 5 kali sementara pasangan lain belum pernah.
     n_men = sum(1 for p in local_players if p.gender == "M")
     n_women = sum(1 for p in local_players if p.gender == "F")
-    if not _zero_repeats_possible(players, config):
+    if not _zero_repeats_possible(players, config, courts_r):
         weights.opponent_cap = 0.0
 
     rules = Rules(
@@ -1789,7 +1924,6 @@ def _build_once(players: list[Player], config: Config,
     st = ScheduleState(n, ratings, weights, total_rounds, rules)
 
     notes: list[str] = []
-    courts = config.courts
 
     # Anggaran bentuk tim hanya berlaku kalau seluruh meet memakai satu kolam
     # peserta dengan satu aturan. Babak putra/putri, pool rating, dan partner
@@ -1829,7 +1963,12 @@ def _build_once(players: list[Player], config: Config,
         cand_cache[id(seg)] = cands
 
     # --- Anggaran bentuk tim se-meet ------------------------------------
-    if pakai_kuota and total_rounds <= len(cand_cache[id(segments[0])]):
+    # Hanya untuk acara yang jumlah court-nya sama sepanjang jalan: seluruh model
+    # anggaran ini dibangun di atas satu angka "berapa tim per ronde", dan
+    # memakainya saat angkanya berbeda-beda berarti menyusun jatah dari
+    # kebutuhan yang tidak pernah ada. Pemerataan di blok berikutnya tetap jalan.
+    if (pakai_kuota and court_seragam
+            and total_rounds <= len(cand_cache[id(segments[0])])):
         seg = segments[0]
         cands = cand_cache[id(seg)]
         need = 2 * min(courts, n // 4)
@@ -1870,22 +2009,29 @@ def _build_once(players: list[Player], config: Config,
     if quota is None and pakai_kuota:
         seg = segments[0]
         cands = cand_cache[id(seg)]
-        need = 2 * min(courts, n // 4)
+        # Berapa PASANGAN yang turun di tiap ronde. Beda-beda kalau court-nya
+        # berkurang di tengah acara, dan komposisi yang sah ikut berbeda - jadi
+        # opsinya didaftar per nilai `need`, bukan sekali untuk seluruh acara.
+        needs = [2 * min(c, n // 4) for c in courts_r]
         memo_b: dict[tuple[int, ...], bool] = {}
-        options_b = [_round_options(stok, need, frozenset(izin), memo_b)
-                     for stok in _shape_supply(cands, rules.gender)]
-        rencana = _balanced_rows(options_b, total_rounds, n_men, n_women, need)
+        stok_baris = _shape_supply(cands, rules.gender)
+        options_b = {
+            nd: [_round_options(stok, nd, frozenset(izin), memo_b)
+                 for stok in stok_baris]
+            for nd in sorted(set(needs))
+        }
+        rencana = _balanced_rows(options_b, needs, n_men, n_women)
         # Urutan baris hanya digeser kalau TERBUKTI lebih merata (lihat
         # _balanced_rows); rencana slotnya dipasang apa pun urutannya. Keduanya
         # dipisah karena ongkosnya beda: menggeser baris menukar kekayaan
         # rotasi partner, sedangkan menepati rencana slot tidak mengorbankan
         # apa pun - komposisi itu toh harus dipilih, tinggal dipilih yang mana.
         urutan = rencana[0] if rencana else [
-            i % len(options_b) for i in range(total_rounds)
+            i % len(stok_baris) for i in range(total_rounds)
         ]
         if rencana:
             cand_cache[id(seg)] = [cands[i] for i in urutan]
-        slot_pria = _slot_plan(options_b, urutan, n_men, n_women, need)
+        slot_pria = _slot_plan(options_b, needs, urutan, n_men, n_women)
         if slot_pria:
             rencana_slot[id(seg)] = slot_pria
 
@@ -1904,7 +2050,8 @@ def _build_once(players: list[Player], config: Config,
         group_of = ({p.id: (p.gender or "?") for p in local_players}
                     if seg.rule == "same_gender" else None)
         slot_seg = rencana_slot.get(id(seg))
-        quads = _build_round(row, st, courts, tier_of, rng, weights.rating,
+        quads = _build_round(row, st, courts_r[r_global], tier_of, rng,
+                             weights.rating,
                              r_global, group_of=group_of, quota=quota,
                              slot_target=(slot_seg[i % len(slot_seg)]
                                           if slot_seg else None))
@@ -1917,6 +2064,33 @@ def _build_once(players: list[Player], config: Config,
         playing = {p for q in quads for p in q}
         byes = sorted(set(range(n)) - playing)
         st.place_round(r_global, quads, byes)
+
+    # Court yang berkurang di tengah acara adalah fakta paling menentukan tentang
+    # jadwal seperti ini, dan tidak terbaca dari angka mana pun di ringkasan -
+    # yang tercatat cuma jumlah court terbanyak. Tanpa kalimat ini host melihat
+    # ronde-ronde belakang cuma punya satu match dan mengira penjadwalnya gagal
+    # mengisi court kedua.
+    if not court_seragam:
+        blok: list[tuple[int, int, int]] = []
+        for r, c in enumerate(courts_r):
+            if blok and blok[-1][2] == c:
+                blok[-1] = (blok[-1][0], r + 1, c)
+            else:
+                blok.append((r + 1, r + 1, c))
+        rincian = ", ".join(
+            (f"ronde {a} pakai {c} court" if a == b
+             else f"ronde {a}-{b} pakai {c} court")
+            for a, b, c in blok
+        )
+        duduk = {c: n - 4 * min(c, n // 4) for c in sorted(set(courts_r))}
+        notes.append(
+            f"Jumlah court tidak sama sepanjang acara: {rincian}. Yang duduk tiap "
+            "ronde ikut berubah - "
+            + ", ".join(f"{v} orang saat {k} court" for k, v in duduk.items())
+            + ". Jadi tunggu terpanjang di bagian yang court-nya lebih sedikit "
+            "memang lebih besar, dan itu batas kapasitas, bukan hasil "
+            "penjadwalan. Jatah main tetap diratakan untuk seluruh acara."
+        )
 
     for seg in segments:
         eligible = set(_eligible_for(seg.rule, local_players))
@@ -2099,6 +2273,9 @@ def _build_once(players: list[Player], config: Config,
         segments=[(s.rule, s.rounds) for s in segments],
         roster_men=n_men,
         roster_women=n_women,
+        # Dihitung dari jadwal yang sudah jadi, bukan dari ronde x court: itu satu-
+        # satunya angka yang benar kalau court-nya berkurang di tengah acara.
+        matches_per_round=[len(st.matches[r]) for r in range(total_rounds)],
     )
     for issue in cap.sorted_issues():
         if issue.severity in ("error", "warning"):
@@ -2166,6 +2343,19 @@ def _build_once(players: list[Player], config: Config,
                     "ubah jumlah ronde tiap babak, atau ubah komposisi peserta."
                 )
 
+    # Aturan court yang BENAR-BENAR dipakai, diturunkan dari plan-nya - jadi ia
+    # betul baik saat datang dari Config maupun dari daftar eksplisit sebuah
+    # skrip. Plan yang bukan "berkurang sekali lalu tetap" tidak bisa diwakili
+    # satu aturan, dan di situ field-nya dibiarkan kosong: laporan tetap membaca
+    # court per ronde dari jadwalnya, jadi yang hilang cuma ringkasan biayanya,
+    # bukan jadwalnya.
+    titik = [r for r in range(1, total_rounds) if courts_r[r] != courts_r[r - 1]]
+    aturan_court: tuple[int | None, int | None] = (None, None)
+    if (len(titik) == 1 and courts_r[0] == config.courts
+            and courts_r[titik[0]] < courts_r[0]
+            and len(set(courts_r[titik[0]:])) == 1):
+        aturan_court = (courts_r[titik[0]], titik[0] + 1)
+
     final_players = sorted(players, key=lambda x: x.id)
     if tier_of:
         tmap = {inv[k]: v for k, v in tier_of.items()}
@@ -2189,6 +2379,8 @@ def _build_once(players: list[Player], config: Config,
         fit_rounds_to_duration=config.fit_rounds_to_duration,
         allowed_matchups=config.allowed_matchups,
         attempts=config.attempts,
+        courts_after=aturan_court[0],
+        courts_from_round=aturan_court[1],
     )
 
     # Format match yang dilarang tapi tetap muncul. Bisa terjadi kalau susunan
@@ -2327,12 +2519,19 @@ def _build_once(players: list[Player], config: Config,
         # orang, tapi dua match cuma bisa menghabiskan (8,0), (6,2), atau (4,4)
         # putra-putri - tidak ada yang (5,3). Satu peserta PASTI baru turun di
         # ronde ketiga, dan memperpendek ronde tidak mengubahnya sedikit pun.
-        slot_r = 4 * max(1, min(config.courts, n // 4))
-        putaran_min = math.ceil(n / slot_r) if slot_r else 1
+        # Dihitung dari court ronde-ronde AWAL, bukan dari court terbanyak: yang
+        # ditanya adalah berapa ronde sampai semua orang kebagian match pertama,
+        # dan itu diputuskan di awal acara. Pada acara yang court-nya berkurang
+        # belakangan keduanya kebetulan sama; pada yang bertambah tidak.
+        putaran_min, terisi_min = 0, 0
+        while terisi_min < n:
+            c = courts_r[min(putaran_min, total_rounds - 1)]
+            terisi_min += 4 * max(1, min(c, n // 4))
+            putaran_min += 1
         format_mengikat = (
             nilai_bentuk
             and stats.last_first_play > putaran_min
-            and not bisa_liput_semua(n_men, n_women, config.courts,
+            and not bisa_liput_semua(n_men, n_women, courts_r[0],
                                      putaran_min, config.allowed_matchups)
         )
         if format_mengikat:

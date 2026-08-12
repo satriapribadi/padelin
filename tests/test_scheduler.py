@@ -2175,5 +2175,139 @@ class TestDeterminism(unittest.TestCase):
         )
 
 
+class TestCourtBerkurang(unittest.TestCase):
+    """Court yang dilepas di tengah acara.
+
+    Kasus nyata host: 2 court disewa 2 jam, 1 court dilanjut 1 jam lagi. Yang
+    diuji bukan cuma jumlah match per ronde, tapi juga hal yang paling mudah
+    diam-diam salah: jatah main tetap rata walau format match dibatasi, dan
+    angka yang dilaporkan ke host mengikuti court yang benar-benar dipakai.
+    """
+
+    SAMA = ["LL-LL", "LP-LP", "PP-PP"]
+
+    def _cfg(self, **kw):
+        dasar = dict(courts=2, duration_minutes=180, round_minutes=12,
+                     warmup_minutes=0, mode="americano", seed=42, effort=8000,
+                     attempts=1, courts_after=1, courts_from_round=11)
+        dasar.update(kw)
+        return Config(**dasar)
+
+    def _roster(self, pria, putri):
+        return make_players(pria + putri,
+                            genders=["M"] * pria + ["F"] * putri)
+
+    def test_court_plan_dan_court_hours(self):
+        cfg = self._cfg()
+        self.assertEqual(cfg.court_plan(15), [2] * 10 + [1] * 5)
+        # 2 court x 120 menit + 1 court x 60 menit = 5 court-jam, bukan 2 x 3.
+        self.assertEqual(cfg.court_hours(), 5.0)
+        self.assertEqual(Config(courts=2, duration_minutes=180).court_hours(),
+                         6.0)
+
+    def test_match_per_ronde_mengikuti_rencana(self):
+        sch = build_schedule(self._roster(6, 4), self._cfg())
+        assert_structurally_valid(self, sch)
+        self.assertEqual([len(r.matches) for r in sch.rounds],
+                         [2] * 10 + [1] * 5)
+
+    def test_jatah_main_tetap_rata_walau_format_dibatasi(self):
+        """Ini yang paling mudah rusak: rebalance_plays tidak bisa menebusnya.
+
+        Dengan 6 putra + 4 putri dan format sesama-bentuk saja, menukar seorang
+        putri dengan seorang putra mengubah bentuk tim dan ditolak batas format.
+        Jadi kerataannya harus lahir dari rencana slot gender, dan rencana itu
+        harus tahu bahwa 5 ronde terakhir cuma butuh 2 pasangan, bukan 4.
+        """
+        sch = build_schedule(self._roster(6, 4),
+                             self._cfg(allowed_matchups=self.SAMA))
+        main = sch.stats.plays_per_player
+        # 10 ronde x 8 slot + 5 ronde x 4 slot = 100 slot / 10 orang = 10 pas.
+        self.assertEqual((min(main.values()), max(main.values())), (10, 10),
+                         f"jatah main tidak rata: {sorted(main.values())}")
+
+    def test_tunggu_terpanjang_yang_dipaksa_kapasitas_tidak_didenda(self):
+        """1 court berarti 6 dari 10 duduk; dua ronde berurutan punya 12 tempat
+        duduk untuk 10 orang, jadi minimal 2 orang duduk dua kali beruntun.
+        Tunggu 2 ronde tak terhindarkan, dan batas yang dilaporkan harus
+        mengatakannya - kalau tidak, jadwal kena denda untuk sesuatu yang tidak
+        bisa ia perbaiki, dan catatannya menuduh penjadwal.
+        """
+        sch = build_schedule(self._roster(6, 4),
+                             self._cfg(allowed_matchups=self.SAMA))
+        self.assertGreaterEqual(sch.stats.wait_floor, 2,
+                                "batas tunggu masih mengabaikan kapasitas ronde")
+        self.assertEqual(sch.stats.longest_wait, sch.stats.wait_floor)
+        # b2b yang dipaksa juga tidak boleh dihitung sebagai kelalaian.
+        self.assertGreaterEqual(sch.stats.back_to_back_byes, 8)
+
+    def test_catatan_menyebut_court_berkurang(self):
+        sch = build_schedule(self._roster(6, 4), self._cfg())
+        gabung = " ".join(sch.notes).lower()
+        self.assertIn("court tidak sama", gabung)
+        self.assertIn("ronde 11-15", gabung)
+
+    def test_aturan_ikut_terbawa_ke_config_hasil(self):
+        sch = build_schedule(self._roster(6, 4), self._cfg())
+        self.assertEqual(sch.config.courts_after, 1)
+        self.assertEqual(sch.config.courts_from_round, 11)
+
+    def test_daftar_court_eksplisit_juga_dilayani(self):
+        """Pola di luar 'berkurang sekali' - dipakai skrip, bukan UI."""
+        cfg = Config(courts=2, duration_minutes=180, round_minutes=12,
+                     warmup_minutes=0, mode="americano", seed=42, effort=8000,
+                     attempts=1)
+        plan = [2] * 8 + [1] * 4 + [2] * 3
+        sch = build_schedule(make_players(10), cfg, courts_per_round=plan)
+        self.assertEqual([len(r.matches) for r in sch.rounds], plan)
+        # Bukan satu kali pengurangan, jadi tidak ada aturan yang mewakilinya.
+        self.assertIsNone(sch.config.courts_after)
+
+    def test_panjang_rencana_harus_pas(self):
+        cfg = Config(courts=2, duration_minutes=180, round_minutes=12,
+                     warmup_minutes=0, effort=2000, attempts=1)
+        with self.assertRaises(ScheduleError):
+            build_schedule(make_players(10), cfg, courts_per_round=[2] * 3)
+
+    def test_config_menolak_pasangan_yang_tak_masuk_akal(self):
+        for kw in ({"courts_after": 1},                       # tanpa ronde
+                   {"courts_from_round": 5},                  # tanpa jumlah
+                   {"courts_after": 3, "courts_from_round": 5},   # naik
+                   {"courts_after": 0, "courts_from_round": 5},   # nol court
+                   {"courts_after": 1, "courts_from_round": 1}):  # ronde 1
+            with self.assertRaises(ValueError, msg=f"diterima: {kw}"):
+                Config(courts=2, duration_minutes=180, **kw)
+
+    def test_sama_dengan_court_awal_dianggap_tidak_ada(self):
+        cfg = Config(courts=2, duration_minutes=180, courts_after=2,
+                     courts_from_round=5)
+        self.assertIsNone(cfg.courts_after)
+        self.assertIsNone(cfg.courts_from_round)
+
+    def test_analisa_memakai_match_yang_benar_benar_ada(self):
+        """analyze() harus memakai ronde main yang nyata, bukan ronde x court."""
+        rep = analyze(n_players=10, courts=2, duration_minutes=180,
+                      round_minutes=12, warmup_minutes=0,
+                      matches_per_round=[2] * 10 + [1] * 5)
+        self.assertAlmostEqual(rep.avg_plays_per_player, 10.0, places=2)
+        # Yang duduk berayun 2 (2 court) sampai 6 (1 court).
+        self.assertEqual(rep.byes_per_round, 2)
+        self.assertEqual(rep.byes_per_round_max, 6)
+
+    def test_tanpa_pengurangan_hasilnya_tidak_berubah(self):
+        """Jalur lama harus identik - fitur ini tidak boleh menggeser apa pun."""
+        dasar = dict(courts=2, duration_minutes=120, round_minutes=8,
+                     warmup_minutes=0, mode="americano", seed=42, effort=8000,
+                     attempts=1, allowed_matchups=self.SAMA)
+        a = build_schedule(self._roster(6, 4), Config(**dasar))
+        b = build_schedule(self._roster(6, 4),
+                           Config(**dasar, courts_after=None,
+                                  courts_from_round=None))
+        self.assertEqual(
+            [[m.players() for m in r.matches] for r in a.rounds],
+            [[m.players() for m in r.matches] for r in b.rounds])
+        self.assertEqual(a.stats.quality_score, b.stats.quality_score)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

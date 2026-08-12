@@ -75,6 +75,8 @@ def evaluate(
     segments: list[tuple[str, int]] | None = None,
     men: int | None = None,
     women: int | None = None,
+    court_hours: float | None = None,
+    matches_per_round: list[int] | None = None,
 ) -> Option:
     """Hitung satu skenario: berapa main, berapa untung.
 
@@ -83,6 +85,13 @@ def evaluate(
     siapa saja, dan justru pertanyaan termahal host - "kalau saya tambah 1
     court, peserta dapat tambahan berapa menit?" - yang paling salah dijawab.
     Lihat capacity.court_terpakai() untuk angkanya.
+
+    `court_hours` dan `matches_per_round` untuk acara yang court-nya dilepas di
+    tengah jam sewa: yang pertama court-jam yang benar-benar dibayar, yang kedua
+    match yang berjalan di tiap ronde. Keduanya harus diberikan bersama - court
+    yang berkurang menurunkan ongkos DAN waktu main sekaligus, dan mengoreksi
+    satu saja menghasilkan harga-per-menit yang lebih menyesatkan daripada
+    sebelum dikoreksi.
     """
     duration = int(round(hours * 60))
     cap = analyze(
@@ -94,9 +103,11 @@ def evaluate(
         segments=segments,
         roster_men=men,
         roster_women=women,
+        matches_per_round=matches_per_round,
     )
 
-    court_cost = courts * hours * econ.court_price_per_hour
+    court_cost = (court_hours if court_hours is not None else courts * hours) \
+        * econ.court_price_per_hour
     total_cost = court_cost + econ.other_costs
     revenue = n_players * econ.fee_per_player
     profit = revenue - total_cost
@@ -218,6 +229,10 @@ def upgrade_analysis(
     segments: list[tuple[str, int]] | None = None,
     men: int | None = None,
     women: int | None = None,
+    court_hours: float | None = None,
+    matches_per_round: list[int] | None = None,
+    court_hours_plus: float | None = None,
+    matches_per_round_plus: list[int] | None = None,
 ) -> dict:
     """Berapa harga sebenarnya dari menambah satu court?
 
@@ -230,11 +245,23 @@ def upgrade_analysis(
     +20 menit sehingga worth_it, padahal yang benar-benar terjadi +6,7 menit.
     Court tambahan tidak menolong babak yang gendernya memang tidak cukup untuk
     mengisinya.
+
+    Empat parameter court_hours/matches_per_round untuk acara yang court-nya dilepas
+    di tengah jam sewa: sepasang untuk setup host apa adanya, sepasang untuk
+    setup yang sama plus satu court. Pemanggil yang menghitungnya, bukan fungsi
+    ini - ia tidak tahu pola sewanya, dan menebaknya ("court tambahan disewa
+    penuh") akan mencampur dua perubahan sekaligus ke dalam satu selisih menit
+    yang lalu dibaca host sebagai manfaat court saja.
     """
+    # Skenario host apa adanya, termasuk court yang dilepas di tengah acara.
     base = evaluate(n_players, courts, hours, econ, round_minutes,
-                    warmup_minutes, segments, men, women)
+                    warmup_minutes, segments, men, women,
+                    court_hours=court_hours,
+                    matches_per_round=matches_per_round)
     plus = evaluate(n_players, courts + 1, hours, econ, round_minutes,
-                    warmup_minutes, segments, men, women)
+                    warmup_minutes, segments, men, women,
+                    court_hours=court_hours_plus,
+                    matches_per_round=matches_per_round_plus)
 
     extra_cost = plus.total_cost - base.total_cost
     extra_minutes = plus.play_minutes_per_player - base.play_minutes_per_player

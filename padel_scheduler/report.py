@@ -203,8 +203,21 @@ def to_text(schedule: Schedule, start_clock: str | None = None,
     out: list[str] = []
 
     out.append(f"*{title}*")
+    # Court yang benar-benar dipakai tiap ronde. Teks ini yang ditempel ke grup
+    # peserta, jadi "2 court" untuk acara yang ronde belakangnya cuma satu court
+    # akan langsung dibantah oleh daftar ronde di bawahnya.
+    court_ronde = [len(r.matches) for r in schedule.rounds]
+    court_txt = f"{cfg.courts} court"
+    if court_ronde and len(set(court_ronde)) > 1:
+        turun = next((i for i in range(1, len(court_ronde))
+                      if court_ronde[i] < court_ronde[i - 1]), None)
+        court_txt = (
+            f"{max(court_ronde)} court (jadi {min(court_ronde)} dari ronde "
+            f"{turun + 1})" if turun is not None
+            and all(b <= a for a, b in zip(court_ronde, court_ronde[1:]))
+            else f"{min(court_ronde)}-{max(court_ronde)} court")
     out.append(
-        f"{len(schedule.players)} pemain | {cfg.courts} court | "
+        f"{len(schedule.players)} pemain | {court_txt} | "
         f"{cfg.duration_minutes} menit | {len(schedule.rounds)} ronde "
         f"@ {cfg.round_minutes} menit"
     )

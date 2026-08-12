@@ -641,8 +641,23 @@ def analyze(
     segments: list[tuple[str, int]] | None = None,
     roster_men: int | None = None,
     roster_women: int | None = None,
+    matches_per_round: list[int] | None = None,
 ) -> CapacityReport:
-    """Hitung kapasitas + batas matematis + rekomendasi konkret."""
+    """Hitung kapasitas + batas matematis + rekomendasi konkret.
+
+    `matches_per_round` opsional: berapa match yang benar-benar berjalan di tiap
+    ronde, kalau pemanggil sudah tahu dan angkanya tidak sama dengan ronde x
+    court. Dipakai acara yang jumlah court-nya berkurang di tengah jalan, dan ia
+    memperbaiki dua hal yang dua-duanya sampai ke host sebagai angka:
+
+      - batas keunikan, yang dihitung dari ronde main per orang. Tanpa ini
+        catatannya menyebut "~12 ronde main per orang" untuk jadwal yang
+        memberi 10.
+      - berapa orang duduk tiap ronde, yang jadi RENTANG begitu court-nya
+        berubah: 2 orang saat 2 court, 6 orang saat 1 court. Satu angka di situ
+        selalu ujung yang paling lengang, dan itu ujung yang salah untuk
+        memutuskan sewa court.
+    """
 
     issues: list[Issue] = []
 
@@ -686,7 +701,8 @@ def analyze(
                 for rule, ron in segments if ron > 0
             ) / tot_r
 
-    total_slots = rounds * slot_efektif
+    total_slots = 4 * sum(matches_per_round) if matches_per_round \
+        else rounds * slot_efektif
     avg_plays = (total_slots / n_players) if n_players else 0.0
     rest_ratio = (byes_per_round / n_players) if n_players else 0.0
     playing_minutes = avg_plays * round_minutes
@@ -710,7 +726,10 @@ def analyze(
     # mustahil justru di setup yang menurut hitungan buta gender aman.
     shape = None
     if men is not None and women is not None and men + women == n_players:
-        shape = shape_budget(men, women, rounds * courts_used, allowed_matchups)
+        shape = shape_budget(
+            men, women,
+            sum(matches_per_round) if matches_per_round else rounds * courts_used,
+            allowed_matchups)
     opponent_ok = opponent_blind_ok and (shape is None or shape.feasible is not False)
 
     # Jatah main per kelompok gender. Dihitung dari aturan babak, bukan dari
@@ -733,6 +752,16 @@ def analyze(
     rentang_duduk = duduk_per_ronde(n_players, roster_men or 0,
                                     roster_women or 0, courts, segments)
     byes_max = rentang_duduk[1] if rentang_duduk else None
+    # Court yang berkurang membuat yang duduk berayun juga, dan sebabnya berbeda
+    # dari babak: bukan siapa yang berhak turun, melainkan berapa tempat yang
+    # tersedia. Dua-duanya berujung di angka yang sama, jadi yang dipakai yang
+    # terbesar - host memutuskan sewa court dari ujung yang paling ramai.
+    if matches_per_round:
+        duduk_plan = [max(0, n_players - 4 * m) for m in matches_per_round]
+        if max(duduk_plan) > min(duduk_plan):
+            byes_per_round = min(duduk_plan)
+            rest_ratio = (byes_per_round / n_players) if n_players else 0.0
+            byes_max = max(byes_max or 0, max(duduk_plan))
 
     # --- Rekomendasi -----------------------------------------------------
     ideal_players = 4 * courts
@@ -931,7 +960,14 @@ def analyze(
             issues.append(
                 Issue(
                     "info",
-                    f"{byes_per_round} pemain istirahat tiap ronde",
+                    # Rentang, bukan satu angka, kalau jumlahnya memang berayun -
+                    # sama seperti cabang warning di atas. "2 pemain istirahat
+                    # tiap ronde" untuk acara yang mendudukkan 6 orang di
+                    # sepertiga rondenya salah dua kali: angkanya, dan kata
+                    # "tiap".
+                    (f"{byes_per_round}-{byes_max} pemain istirahat tiap ronde"
+                     if byes_max and byes_max > byes_per_round else
+                     f"{byes_per_round} pemain istirahat tiap ronde"),
                     f"Rotasi istirahat dibuat merata: tiap orang main "
                     f"~{avg_plays:.1f} dari {rounds} ronde. Generator juga "
                     f"menghindari duduk dua ronde berturut-turut.",
