@@ -179,6 +179,14 @@ Perhatikan baris 6 court: 13 ronde punya LEBIH BANYAK pengulangan lawan
 daripada 12 ronde (13 lawan 4) tapi mutunya jauh lebih tinggi. Pembagian yang
 rata menggerakkan kualitas lebih besar daripada keunikan lawan.
 
+Host tidak perlu menghitung ini sendiri. Panel *Analisa kelayakan* memeriksanya
+sebelum Generate dan menyebut menit per ronde yang mendaratkan acara di angka
+yang membagi rata — angka itu diverifikasi lewat `rounds_from_duration`, bukan
+dibagi lalu diharapkan pas, karena saran yang meleset satu ronde justru
+mengulang masalah yang mau diperbaiki. Sarannya diam sendiri kalau setupnya
+sudah rata, kalau tidak ada yang duduk, atau kalau acaranya bersegmen (kolam
+pesertanya pecah, jadi rumus di atas tidak berlaku).
+
 **Court berkurang di tengah acara**
 Untuk sewa yang tidak sama panjang: 2 court dua jam, lalu 1 court sejam lagi.
 Centang di *Setup lapangan*, isi sisa court dan mulai ronde berapa — dan yang
@@ -280,7 +288,7 @@ web/
 tools/
   uitest.py                 uji interaksi UI lewat DevTools Protocol
   banding_cpsat.py          adu annealing lawan solver eksak pada setup yang sama
-tests/                      170 tes unit
+tests/                      175 tes unit
 ```
 
 ## Aplikasi desktop (Electron)
@@ -392,7 +400,7 @@ menyalin foldernya tidak ikut membawa data siapa pun.
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 170 tes unit
+python -m unittest discover -s tests    # 175 tes unit
 python tools/uitest.py                  # 27 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 ```

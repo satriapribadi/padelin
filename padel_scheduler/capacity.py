@@ -628,6 +628,29 @@ def bisa_liput_semua(men: int, women: int, courts: int, putaran: int,
     return (men, women) in capai
 
 
+def ronde_membagi_rata(n_players: int, slots_per_round: int, sekitar: int,
+                       jangkauan: int = 8) -> list[int]:
+    """Jumlah ronde yang membuat jatah main habis dibagi rata, terdekat dulu.
+
+    Slot main seluruh acara = slot per ronde x ronde. Kalau angka itu tidak
+    habis dibagi jumlah peserta, sisanya jadi orang-orang yang main satu ronde
+    lebih banyak - dan bersama itu istirahat jadi timpang dan antrean giliran
+    kacau.
+
+    Yang setara distance dipilih yang LEBIH KECIL lebih dulu: ronde lebih
+    sedikit selalu muat di sewa yang sama, sedangkan yang lebih banyak belum
+    tentu.
+    """
+    if n_players <= 0 or slots_per_round <= 0 or sekitar <= 0:
+        return []
+    out: list[int] = []
+    for d in range(jangkauan + 1):
+        for r in ((sekitar,) if d == 0 else (sekitar - d, sekitar + d)):
+            if r >= 1 and (slots_per_round * r) % n_players == 0:
+                out.append(r)
+    return out
+
+
 def analyze(
     n_players: int,
     courts: int,
@@ -999,6 +1022,76 @@ def analyze(
                 "Cek panel Biaya & Margin: kadang menaikkan fee sedikit untuk "
                 "menambah court lebih diterima peserta daripada fee murah "
                 "dengan banyak menunggu.",
+            )
+        )
+
+    # --- Jatah main yang tidak habis dibagi rata -------------------------
+    # Diukur, dan selisihnya jauh lebih besar daripada yang diduga: pada 26
+    # peserta di 4 court, 13 ronde memberi mutu 97,2 sementara 14 ronde 91,7 -
+    # dua-duanya NOL pengulangan partner maupun lawan. Yang membedakan cuma
+    # pembagian: 13 x 16 = 208 slot habis dibagi 26 (semua main 8, duduk 5),
+    # sedangkan 14 x 16 = 224 menyisakan 16, jadi 16 orang main sembilan kali
+    # dan sisanya delapan. Serobotan antrean melonjak 10-22 jadi 26-56.
+    #
+    # Di 6 court efeknya bahkan membalik urutan yang "masuk akal": 13 ronde
+    # punya LEBIH BANYAK lawan berulang daripada 12 ronde (13 lawan 4) tapi
+    # mutunya 98,6 lawan 94,5. Pembagian yang rata menggerakkan kualitas lebih
+    # besar daripada keunikan lawan, dan itu satu-satunya tuas di panel ini yang
+    # tidak berbiaya - tidak perlu tambah court, tidak perlu tambah jam.
+    #
+    # Hanya dihitung untuk acara satu kolam dengan slot seragam. Babak
+    # putra/putri memecah kolamnya sendiri, dan court yang berkurang di tengah
+    # membuat "slot per ronde" bukan satu angka; di dua keadaan itu rumusnya
+    # tidak berlaku dan lebih baik diam daripada menyarankan yang salah.
+    seragam = (
+        not matches_per_round or len(set(matches_per_round)) == 1
+    ) and abs(slot_efektif - slots_per_round) < 1e-9
+    if (seragam and n_players >= 4 and rounds > 0 and byes_per_round > 0
+            and rounds_override is None
+            and (slots_per_round * rounds) % n_players != 0):
+        lebih = (slots_per_round * rounds) % n_players
+        # Menit per ronde yang benar-benar mendaratkan acara di ronde itu.
+        # Dihitung lewat rounds_from_duration, bukan dibagi lalu diharapkan
+        # pas - pembulatan ke bawah bisa meleset satu ronde, dan saran yang
+        # meleset satu ronde justru mengulang masalah yang mau diperbaiki.
+        usul: tuple[int, int] | None = None
+        for r in ronde_membagi_rata(n_players, slots_per_round, rounds):
+            if r == rounds:
+                continue
+            for menit in range(max(1, round_minutes - 8), round_minutes + 9):
+                if rounds_from_duration(duration_minutes, menit,
+                                        warmup_minutes) == r:
+                    usul = (r, menit)
+                    break
+            if usul:
+                break
+        if usul:
+            r_usul, menit_usul = usul
+            saran = (
+                f"Ubah menit per ronde jadi {menit_usul} - itu memberi "
+                f"{r_usul} ronde, dan {slots_per_round} x {r_usul} = "
+                f"{slots_per_round * r_usul} slot habis dibagi {n_players} "
+                f"peserta, jadi semua orang main "
+                f"{slots_per_round * r_usul // n_players} ronde dan duduk "
+                f"{r_usul - slots_per_round * r_usul // n_players} ronde."
+            )
+        else:
+            saran = (
+                "Geser menit per ronde atau lama sewa sampai jumlah ronde "
+                "berubah; tidak ada angka di sekitar setup ini yang membagi "
+                "rata."
+            )
+        issues.append(
+            Issue(
+                "info",
+                "Jatah main tidak habis dibagi rata",
+                f"{rounds} ronde x {slots_per_round} slot = "
+                f"{slots_per_round * rounds} slot main untuk {n_players} "
+                f"peserta, jadi {lebih} orang kebagian satu ronde lebih banyak "
+                f"daripada sisanya. Istirahat ikut timpang dan antrean giliran "
+                f"lebih sering terlewat - diukur, ini menurunkan skor kualitas "
+                f"lebih besar daripada beberapa pasang lawan yang berulang.",
+                saran,
             )
         )
 

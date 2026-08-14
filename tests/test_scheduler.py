@@ -24,6 +24,7 @@ from padel_scheduler.capacity import (
     court_terpakai,
     duduk_per_ronde,
     gender_tak_terpakai,
+    ronde_membagi_rata,
     shape_budget,
     shape_totals,
 )
@@ -1660,6 +1661,75 @@ class TestCapacity(unittest.TestCase):
         rep = analyze(8, courts=2, duration_minutes=10, round_minutes=12)
         self.assertEqual(rep.rounds, 0)
         self.assertEqual(rep.verdict, "error")
+
+
+class TestRondeMembagiRata(unittest.TestCase):
+    """Saran jumlah ronde yang membuat jatah main habis dibagi rata.
+
+    Tuas ini tidak berbiaya - tidak menambah court, tidak menambah jam - dan
+    diukur ia menggerakkan kualitas lebih besar daripada keunikan lawan: pada 26
+    peserta di 4 court, 13 ronde memberi mutu 97,2 sementara 14 ronde 91,7,
+    padahal dua-duanya nol pengulangan partner MAUPUN lawan.
+    """
+
+    def _saran(self, rep):
+        return [i for i in rep.issues if i.title.startswith("Jatah main")]
+
+    def test_menyarankan_13_ronde_untuk_26_peserta(self):
+        # 4 court -> 16 slot. 14 x 16 = 224, sisa 16 dari 26.
+        rep = analyze(26, courts=4, duration_minutes=180, round_minutes=12)
+        self.assertEqual(rep.rounds, 14)
+        saran = self._saran(rep)
+        self.assertEqual(len(saran), 1, "saran pemerataan tidak muncul")
+        self.assertIn("13 ronde", saran[0].fix)
+        self.assertIn("main 8 ronde", saran[0].fix)
+
+    def test_diam_kalau_sudah_rata(self):
+        rep = analyze(26, courts=4, duration_minutes=179, round_minutes=13)
+        self.assertEqual(rep.rounds, 13)
+        self.assertEqual(self._saran(rep), [])
+
+    def test_diam_kalau_tidak_ada_yang_duduk(self):
+        """16 peserta di 4 court: semua main tiap ronde, jadi selalu rata."""
+        rep = analyze(16, courts=4, duration_minutes=180, round_minutes=12)
+        self.assertEqual(rep.byes_per_round, 0)
+        self.assertEqual(self._saran(rep), [])
+
+    def test_saran_benar_benar_mendarat_di_ronde_itu(self):
+        """Menit yang disarankan harus SUNGGUH memberi ronde yang dijanjikan.
+
+        Membagi durasi lalu berharap pas tidak cukup - pembulatan ke bawah bisa
+        meleset satu ronde, dan saran yang meleset satu ronde justru mengulang
+        masalah yang mau diperbaiki.
+        """
+        import re
+        for n, courts, durasi in ((26, 4, 180), (26, 6, 180), (22, 3, 150),
+                                  (30, 5, 165), (18, 4, 200)):
+            rep = analyze(n, courts=courts, duration_minutes=durasi,
+                          round_minutes=12)
+            saran = self._saran(rep)
+            if not saran:
+                continue
+            with self.subTest(n=n, courts=courts, durasi=durasi):
+                m = re.search(r"menit per ronde jadi (\d+)", saran[0].fix)
+                if m is None:
+                    continue  # tidak ada angka yang membagi rata di sekitarnya
+                ulang = analyze(n, courts=courts, duration_minutes=durasi,
+                                round_minutes=int(m.group(1)))
+                self.assertEqual(
+                    self._saran(ulang), [],
+                    f"menit {m.group(1)} yang disarankan ternyata masih timpang")
+
+    def test_kandidat_terdekat_dan_yang_kecil_dulu(self):
+        # 26 peserta, 16 slot: hanya kelipatan 13 yang membagi rata, dan cuma 13
+        # yang masuk jangkauan +-8 dari 14. Kelipatan berikutnya (26) di luar
+        # jangkauan, dan itu memang disengaja - menyarankan acara dua kali lebih
+        # panjang bukan jalan keluar bagi host yang jam sewanya sudah tetap.
+        self.assertEqual(ronde_membagi_rata(26, 16, 14), [13])
+        self.assertEqual(ronde_membagi_rata(26, 16, 20), [26, 13])
+        # Yang setara jaraknya: yang lebih kecil lebih dulu, karena ronde lebih
+        # sedikit selalu muat di sewa yang sama.
+        self.assertEqual(ronde_membagi_rata(12, 8, 4), [3, 6, 9, 12])
 
 
 class TestPemerataanGenderTimpang(unittest.TestCase):
