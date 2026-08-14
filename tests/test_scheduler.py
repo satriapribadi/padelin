@@ -1753,6 +1753,95 @@ class TestCourtMenganggurKarenaAturanBabak(unittest.TestCase):
         self.assertEqual(self._peringatan(rep), [])
 
 
+class TestKomposisiSaatUnikMustahil(unittest.TestCase):
+    """Mustahil sempurna bukan alasan berhenti memilih komposisi.
+
+    Roster host: 26 peserta (18 putra, 8 putri), 4 court, 13 ronde, format
+    dibatasi ke sesama bentuk. Tidak ada komposisi yang muat penuh - stok
+    pasangan lawan putri-vs-putri cuma 28 - jadi shape_budget melapor
+    feasible=False. Dulu penjadwal lalu tidak mengarahkan apa pun, dan
+    komposisi yang keluar memaksa 12 pasang lawan berulang padahal ada yang
+    hanya memaksa 4.
+    """
+
+    SAMA = ["LL-LL", "LP-LP", "PP-PP"]
+    L, P = 18, 8
+    RONDE, COURT = 13, 4
+
+    # Gender dan rating roster yang benar-benar dilaporkan, bukan pola sintetis.
+    # Bedanya bukan kosmetik: roster dengan gender berblok dan rating berpola
+    # sudah memilih komposisi yang baik sendiri, sehingga tidak menguji apa pun.
+    GENDER = "FMFMFMMMFFMMMMMFMMMMMFMFMM"
+    RATING = [3, 3, 3, 4, 3, 3, 2, 2, 2, 2, 3, 3, 4,
+              5, 2, 3, 3, 4, 3, 3, 3, 3, 3, 3, 3, 3]
+
+    def _pemain(self):
+        return [Player(id=i, name=f"P{i+1}", rating=self.RATING[i],
+                       gender=self.GENDER[i])
+                for i in range(self.L + self.P)]
+
+    def _jadwal(self, izin=None, effort=20000, attempts=3):
+        cfg = Config(courts=self.COURT, duration_minutes=self.RONDE * 9,
+                     round_minutes=9, warmup_minutes=0, mode="americano",
+                     tier_count=2, referees_per_court=1, ballboys_per_court=1,
+                     seed=42, effort=effort, attempts=attempts,
+                     allowed_matchups=izin or self.SAMA)
+        return build_schedule(self._pemain(), cfg)
+
+    def _komposisi(self, sch):
+        jk = {p.id: p.gender for p in sch.players}
+        c = Counter()
+        for r in sch.rounds:
+            for m in r.matches:
+                c[matchup_code(team_shape(jk[m.team_a[0]], jk[m.team_a[1]]),
+                               team_shape(jk[m.team_b[0]], jk[m.team_b[1]]))] += 1
+        return c
+
+    def test_budget_menamai_komposisi_walau_tidak_ada_yang_muat(self):
+        b = shape_budget(self.L, self.P, self.RONDE * self.COURT, self.SAMA)
+        self.assertIs(b.feasible, False)
+        # Dulu None di sini - itu yang membuat penjadwal menyerah mengarahkan.
+        self.assertIsNotNone(b.target, "komposisi paling sedikit rugi dibuang")
+        self.assertEqual(b.binding, "PP")
+        self.assertEqual(b.shortfall, 4)
+
+    def test_komposisi_yang_dinamai_memang_yang_paling_sedikit_rugi(self):
+        """Batasnya bentuk tertutup, jadi bisa dibandingkan dengan hitungan.
+
+        Slot putra dan putri terpatok, jadi seluruh ruang komposisi punya satu
+        parameter bebas: PP-PP = t, LP-LP = 32 - 2t, LL-LL = 20 + t. Tuntutan
+        pasangan lawan putri-vs-putri = 32 + 2t, dan stoknya 28 - jadi yang
+        terpaksa berulang = 4 + 2t, terkecil di t = 0.
+        """
+        b = shape_budget(self.L, self.P, self.RONDE * self.COURT, self.SAMA)
+        self.assertEqual(b.target.get("PP-PP", 0), 0, b.target)
+        self.assertEqual(b.target.get("LP-LP", 0), 32, b.target)
+        self.assertEqual(b.target.get("LL-LL", 0), 20, b.target)
+        self.assertEqual(b.supply["PP"], self.P * (self.P - 1) // 2)
+
+    def test_jadwal_mendarat_di_batas_aritmetika_bukan_di_atasnya(self):
+        sch = self._jadwal()
+        komposisi = self._komposisi(sch)
+        # Komposisi yang dipilih tidak memakai kolam yang langka sama sekali.
+        self.assertEqual(komposisi.get("PP-PP", 0), 0, dict(komposisi))
+        # Batas aritmetikanya 4 (= 32 tuntutan - 28 stok) dan tercapai pada
+        # effort penuh. Di sini effortnya dipendekkan supaya tesnya cepat, jadi
+        # yang dijaga ambang yang tetap membedakan: kode lama menghasilkan 11-12
+        # pada roster ini di tiap seed yang dicoba.
+        self.assertLessEqual(sch.stats.opponent_repeat_pairs, 8,
+                             f"komposisi {dict(komposisi)}")
+        self.assertEqual(sch.stats.partner_repeat_pairs, 0)
+        # Yang dibayar untuk itu harus NOL: jatah main tetap rata.
+        pv = list(sch.stats.plays_per_player.values())
+        self.assertEqual(max(pv) - min(pv), 0, "jatah main jadi timpang")
+
+    def test_meet_yang_masih_bisa_unik_tidak_terganggu(self):
+        """Jalur feasible=True tidak boleh berubah perilakunya."""
+        b = shape_budget(20, 20, 40, self.SAMA)
+        self.assertIs(b.feasible, True)
+        self.assertIsNotNone(b.target)
+
+
 class TestCourtTerbuangPerRonde(unittest.TestCase):
     """Court yang dilepas di tengah acara: jawabannya tergantung ronde.
 

@@ -172,6 +172,13 @@ class ShapeBudget:
     # Tanpa `cap` ini optimum di atas kertas - penjadwal memanggil ulang dengan
     # cap dari rotasi partner yang benar-benar tersedia, dan hasilnya bisa
     # berbeda. Yang di sini untuk dilaporkan ke host, bukan untuk dieksekusi.
+    #
+    # Terisi juga saat feasible False, dan di situ artinya berbeda: bukan
+    # komposisi yang muat (tidak ada), melainkan yang PALING SEDIKIT jebol. Itu
+    # tetap keputusan yang berarti - selisih 12 lawan berulang versus 4 pada
+    # roster yang sama - jadi periksa `feasible` kalau perlu membedakan
+    # "sempurna" dari "paling tidak rugi", bukan untuk memutuskan apakah target
+    # ini layak dipakai.
     target: dict[str, int] | None
     supply: dict[str, int]
     demand_partner: dict[str, int] | None
@@ -343,18 +350,45 @@ def shape_budget(
     # Tidak ada komposisi yang muat. Cari yang paling sedikit kekurangannya
     # supaya host dapat angka konkret, bukan sekadar "tidak bisa". Kali ini
     # tanpa pemangkasan suplai - justru kelebihannya yang mau diukur.
-    kurang = None
+    #
+    # Komposisinya IKUT dikembalikan, bukan cuma angka kekurangannya. Dulu ia
+    # dibuang, dan akibatnya mahal: penjadwal memasang kuota komposisi hanya
+    # kalau ada yang muat penuh, sehingga begitu mustahil ia tidak mengarahkan
+    # apa pun dan komposisinya jadi apa adanya. Terukur pada 26 peserta (18
+    # putra, 8 putri) di 4 court dengan format dibatasi sesama bentuk: yang
+    # terpilih 24/24/4 (LL-LL / LP-LP / PP-PP) yang memaksa 12 pasang lawan
+    # berulang, padahal 20/32/0 hanya memaksa 4 - dan keduanya sama-sama
+    # menghabiskan slot yang persis sama. Mustahil sempurna bukan alasan
+    # berhenti memilih; yang hilang cuma kesempurnaannya, bukan pilihannya.
+    kurang = None      # kekurangan terkecil, tanpa syarat apa pun
+    terjangkau = None  # yang terkecil DI ANTARA yang cap-nya masih sanggup
 
     def ukur(counts, par, opp):
-        nonlocal kurang
+        nonlocal kurang, terjangkau
         # Kolam paling jebol pada komposisi ini menentukan kekurangannya;
         # yang dicari lalu komposisi dengan kekurangan terkecil.
-        worst = max(
-            (max(par[k], opp[k]) - supply[kind], kind)
-            for k, kind in enumerate(_KINDS)
-        )
+        lebih = [(max(par[k], opp[k]) - supply[kind], kind)
+                 for k, kind in enumerate(_KINDS)]
+        worst = max(lebih)
         if kurang is None or worst[0] < kurang[0]:
             kurang = worst
+
+        # Target yang dikembalikan harus bisa DIKERJAKAN, bukan sekadar benar
+        # di atas kertas: kalau rotasi partner tidak sanggup menyediakan tim
+        # sebanyak itu, penjadwal melesetinya tiap ronde dan hasilnya lebih
+        # buruk daripada tanpa target. Angka kekurangan di atas sengaja tidak
+        # ikut disaring cap, supaya yang dilaporkan ke host tetap batas
+        # aritmetika yang sesungguhnya.
+        if cap is not None:
+            tim = shape_totals(dict(zip(codes, counts)))
+            if any(tim[kind] > cap.get(kind, 0) for kind in _KINDS):
+                return
+        # Seri diputus oleh total kelebihan di semua kolam: dua komposisi bisa
+        # sama-sama jebol 4 di kolam terparah, tapi yang satu juga mepet di
+        # kolam lain.
+        key = (worst[0], sum(max(0, v) for v, _ in lebih))
+        if terjangkau is None or key < terjangkau[0]:
+            terjangkau = (key, dict(zip(codes, counts)))
 
     for e in range(lo, hi + 1):
         if not _walk(codes, matches, men * base + e, supply, False, ukur):
@@ -362,7 +396,10 @@ def shape_budget(
 
     if kurang is None:
         return ShapeBudget(False, None, supply, None, None)
-    return ShapeBudget(False, None, supply, None, None, kurang[1], kurang[0])
+    target = None
+    if terjangkau is not None:
+        target = {c: n for c, n in terjangkau[1].items() if n}
+    return ShapeBudget(False, target, supply, None, None, kurang[1], kurang[0])
 
 
 # Berapa laki-laki dan perempuan yang dihabiskan satu match dari tiap format.

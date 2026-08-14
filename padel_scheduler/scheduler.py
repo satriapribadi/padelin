@@ -1815,6 +1815,11 @@ def build_schedule(players: list[Player], config: Config,
     # pencarian 30 detik dari titik awal terbaik mengalahkan tiga pencarian 10
     # detik dari titik awal yang sebagian memang lebih buruk.
     cfg_terbaik: Config | None = None
+    # Strategi komposisi milik percobaan yang memimpin. Ikut disimpan supaya
+    # putaran CP-SAT di bawah mengulang percobaan yang SAMA - tanpa ini ia
+    # mengulang dengan strategi bawaan dan mendarat di jadwal lain sebelum
+    # solvernya mulai, sehingga titik awalnya bukan lagi yang menang.
+    kuota_terbaik = False
     # Berapa bagian dari batang kemajuan yang dipegang rangkaian percobaan.
     # Mode CP-SAT menambahkan satu putaran lagi setelah semuanya selesai, jadi
     # kalau percobaan tetap memakai seluruh batang, batangnya penuh lalu mundur
@@ -1843,10 +1848,28 @@ def build_schedule(players: list[Player], config: Config,
                 label = msg if percobaan == 1 else f"[{k + 1}/{percobaan}] {msg}"
                 progress(awal + frac / percobaan * bagian, label)
 
+        # Mengarahkan komposisi format saat lawan unik MUSTAHIL adalah taruhan,
+        # bukan perbaikan pasti, jadi ia diadu di sini alih-alih dipaksakan.
+        #
+        # Ia menang besar ketika komposisi yang dipilih sendiri oleh penjadwal
+        # memang boros terhadap kolam pasangan yang langka - pada 26 peserta
+        # (18 putra, 8 putri) di 4 court: 11-12 pasang lawan berulang turun ke
+        # 4, batas aritmetikanya, di tiga seed yang dicoba. Tapi ia kalah
+        # ketika komposisi itu sudah bagus tanpa diarahkan, karena memasang
+        # kuota ikut mempersempit ronde kandidat yang boleh dipakai annealer.
+        # Disapu pada 12 kombinasi roster: 7 menang, 4 kalah, 1 seri.
+        #
+        # Karena itu keputusannya diserahkan ke multi-start, yang memang ada
+        # untuk ini. Percobaan ke-0 memakai perilaku lama persis, jadi
+        # attempts=1 tidak berubah sama sekali; sisanya berselang-seling, dan
+        # _lebih_baik() memungut yang menang. Hasilnya tidak pernah lebih buruk
+        # daripada salah satu strategi sendirian.
+        kuota_mustahil = k % 2 == 1
         sch = _build_once(players, cfg, teruskan if progress else None,
-                          courts_per_round)
+                          courts_per_round, kuota_mustahil=kuota_mustahil)
         if terbaik is None or _lebih_baik(sch, terbaik):
             terbaik, cfg_terbaik = sch, cfg
+            kuota_terbaik = kuota_mustahil
         # Berhenti lebih awal hanya kalau tidak ada lagi yang bisa dikejar, dan
         # sejak giliran ikut dinilai itu berarti keunikan DAN putaran pertama
         # sama-sama sudah di batasnya. Tanpa syarat kedua, percobaan pertama
@@ -1881,7 +1904,8 @@ def build_schedule(players: list[Player], config: Config,
 
         terbaik = _build_once(players, cfg_terbaik,
                               teruskan_akhir if progress else None,
-                              courts_per_round, pakai_cpsat=True)
+                              courts_per_round, pakai_cpsat=True,
+                              kuota_mustahil=kuota_terbaik)
 
     terbaik.config.seed = config.seed
     terbaik.config.attempts = config.attempts
@@ -1893,7 +1917,8 @@ def build_schedule(players: list[Player], config: Config,
 def _build_once(players: list[Player], config: Config,
                 progress=None,
                 courts_per_round: list[int] | None = None,
-                pakai_cpsat: bool = False) -> Schedule:
+                pakai_cpsat: bool = False,
+                kuota_mustahil: bool = False) -> Schedule:
     """Satu kali penjadwalan utuh, dari validasi sampai jadwal jadi.
 
     `pakai_cpsat` memasang solver eksak di ujung rangkaian. Dipisah dari
@@ -2078,7 +2103,16 @@ def _build_once(players: list[Player], config: Config,
                 n_men, n_women, R * (need // 2), sorted(izin),
                 _supply_caps([options[i] for i in subset], R),
             )
-            if not (budget.feasible and budget.target):
+            # Saat lawan 100% unik masih mungkin, kuota selalu dipasang - itu
+            # perilaku yang sudah terbukti. Saat MUSTAHIL, mengarahkan komposisi
+            # ke yang paling sedikit rugi (24/24/4 -> 20/32/0 pada roster 18
+            # putra + 8 putri, 12 pasang lawan berulang -> 4) menang di sebagian
+            # roster dan kalah di sebagian lain, jadi ia dijalankan sebagai
+            # strategi yang diadu antar percobaan - lihat build_schedule().
+            #
+            # _reachable() di bawah tetap penjaganya: target yang tak terjangkau
+            # rotasi partner tetap ditolak, muat penuh atau tidak.
+            if not budget.target or not (budget.feasible or kuota_mustahil):
                 break
             target = shape_totals(budget.target)
             subset = _pick_candidate_rounds(options, target, R)
