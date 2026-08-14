@@ -154,6 +154,15 @@ input[type=date],input[type=time]{color-scheme:dark}
 .stat .s{font-size:11px;color:var(--dim)}
 .stat.good .v{color:var(--good)} .stat.warn .v{color:var(--warn)} .stat.bad .v{color:var(--bad)}
 
+/* Kartu saran fee: angka yang bisa dipakai, bukan cuma dibaca. Bedanya harus
+   terlihat SEBELUM diklik - kartu statistik lain di panel yang sama tidak bisa
+   diklik, jadi tanpa penanda host tidak punya alasan mencobanya. Penandanya
+   tepi --accent, bukan warna status: memakai good/warn di sini akan berarti
+   "margin ini bagus", padahal yang dikatakan cuma "kartu ini bisa ditekan". */
+.stat-pick{cursor:pointer;border-color:var(--accent-dim)}
+.stat-pick:hover{border-color:var(--accent);background:var(--accent-dim)}
+.stat-pick:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
 .issue{border-radius:8px;padding:10px 13px;margin-bottom:8px;border-left:3px solid}
 .issue .t{font-weight:700;font-size:13px;margin-bottom:3px}
 .issue .d{font-size:12.5px;color:var(--muted)}

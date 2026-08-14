@@ -19,6 +19,8 @@ from itertools import combinations
 from padel_scheduler import Config, Player, Segment, build_schedule
 from padel_scheduler.economics import Economics, upgrade_analysis
 from padel_scheduler.capacity import (
+    _shape_budget_cache,
+    _shape_budget_hitung,
     analyze,
     bisa_liput_semua,
     court_kurang_terpakai,
@@ -1751,6 +1753,57 @@ class TestCourtMenganggurKarenaAturanBabak(unittest.TestCase):
         self.assertEqual(rep.courts_idle, 2)
         self.assertTrue(any(i.title == "2 court menganggur" for i in rep.issues))
         self.assertEqual(self._peringatan(rep), [])
+
+
+class TestShapeBudgetDiingat(unittest.TestCase):
+    """shape_budget diingat, karena ia mahal dan ditanyai berulang.
+
+    Ia dipanggil ulang tiap kali host mengetik satu huruf (lewat /api/analyze)
+    dan juga di dalam loop ronde analyze() sendiri. Tanpa format dibatasi,
+    penyisirannya 246 ms pada 26 peserta dan 2,7 detik pada 32 - padahal
+    mengubah nama peserta tidak mengubah satu pun argumennya.
+    """
+
+    def test_jawabannya_sama_dengan_yang_dihitung_langsung(self):
+        for args in ((18, 8, 52, ["LL-LL", "LP-LP", "PP-PP"], None),
+                     (15, 11, 52, None, None),
+                     (14, 6, 40, None, None)):
+            self.assertEqual(shape_budget(*args), _shape_budget_hitung(*args),
+                             f"cache mengubah jawaban untuk {args}")
+
+    def test_panggilan_kedua_diambil_dari_ingatan(self):
+        args = (17, 9, 48, ["LL-LL", "LP-LP", "PP-PP"], None)
+        shape_budget(*args)
+        sebelum = _shape_budget_cache.cache_info().hits
+        shape_budget(*args)
+        self.assertEqual(_shape_budget_cache.cache_info().hits, sebelum + 1)
+
+    def test_hasilnya_salinan_bukan_isi_cache(self):
+        """Satu pemanggil yang mengubah hasilnya tidak boleh merusak yang lain.
+
+        Tidak ada pemanggil yang melakukannya hari ini. Tapi cache yang
+        membagikan dict yang sama membuat mutasi sekecil apa pun muncul sebagai
+        jawaban salah jauh dari tempat sebabnya, dan itu kelas bug yang paling
+        mahal dilacak.
+        """
+        args = (16, 10, 44, None, None)
+        a = shape_budget(*args)
+        a.supply["PP"] = -999
+        if a.target is not None:
+            a.target.clear()
+        b = shape_budget(*args)
+        self.assertNotEqual(b.supply["PP"], -999, "isi cache ikut berubah")
+        self.assertEqual(b, _shape_budget_hitung(*args))
+
+    def test_cap_yang_berbeda_tidak_tertukar(self):
+        """cap ikut jadi kunci - kalau tidak, penjadwal dapat target orang lain."""
+        dasar = (18, 8, 52, ["LL-LL", "LP-LP", "PP-PP"])
+        longgar = shape_budget(*dasar, {"LL": 999, "LP": 999, "PP": 999})
+        sempit = shape_budget(*dasar, {"LL": 40, "LP": 64, "PP": 0})
+        self.assertEqual(longgar, _shape_budget_hitung(
+            *dasar, {"LL": 999, "LP": 999, "PP": 999}))
+        self.assertEqual(sempit, _shape_budget_hitung(
+            *dasar, {"LL": 40, "LP": 64, "PP": 0}))
 
 
 class TestKomposisiSaatUnikMustahil(unittest.TestCase):

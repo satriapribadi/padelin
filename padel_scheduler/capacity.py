@@ -18,7 +18,8 @@ lewat allowed_matchups. Lihat shape_budget() di bawah.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
+from functools import lru_cache
 
 from .models import MATCHUP_LABELS, MATCHUPS, SEGMENT_RULE_LABELS
 
@@ -254,7 +255,7 @@ def shape_totals(target: dict[str, int]) -> dict[str, int]:
     return tot
 
 
-def shape_budget(
+def _shape_budget_hitung(
     men: int,
     women: int,
     matches: int,
@@ -400,6 +401,62 @@ def shape_budget(
     if terjangkau is not None:
         target = {c: n for c, n in terjangkau[1].items() if n}
     return ShapeBudget(False, target, supply, None, None, kurang[1], kurang[0])
+
+
+@lru_cache(maxsize=512)
+def _shape_budget_cache(men, women, matches, allowed, cap):
+    """Pembungkus yang bisa di-cache: seluruh argumennya hashable."""
+    return _shape_budget_hitung(
+        men, women, matches,
+        list(allowed) if allowed is not None else None,
+        dict(cap) if cap is not None else None,
+    )
+
+
+def shape_budget(
+    men: int,
+    women: int,
+    matches: int,
+    allowed: list[str] | None = None,
+    cap: dict[str, int] | None = None,
+) -> ShapeBudget:
+    """Lihat _shape_budget_hitung(). Yang ditambahkan di sini cuma ingatan.
+
+    Ia fungsi murni dari kelima argumennya, tapi jauh dari murah: penyisiran
+    komposisinya membengkak begitu format TIDAK dibatasi, karena ruangnya
+    tumbuh dari 3 kode ke 6. Diukur lewat /api/analyze, yang dipanggil ulang
+    tiap kali host mengetik satu huruf:
+
+        peserta   semua format   format dibatasi
+             12         115 ms              0 ms
+             26         246 ms              6 ms
+             32       2.714 ms              8 ms
+             40       2.249 ms              7 ms
+
+    Dan hampir semua panggilan itu menanyakan hal yang sama persis: mengubah
+    nama atau rating peserta tidak mengubah satu pun dari (putra, putri, match,
+    format, cap). analyze() sendiri juga memanggilnya berulang di dalam loop
+    ronde. Jadi yang mahal bukan pertanyaannya, melainkan mengulanginya.
+
+    Hasilnya disalin sebelum dikembalikan. Tidak ada pemanggil yang mengubah
+    isinya hari ini, tapi cache yang membagikan dict yang sama membuat mutasi
+    sekecil apa pun merusak jawaban untuk semua pemanggil berikutnya - dan
+    kerusakan seperti itu muncul jauh dari sebabnya.
+    """
+    hasil = _shape_budget_cache(
+        men, women, matches,
+        tuple(allowed) if allowed is not None else None,
+        tuple(sorted(cap.items())) if cap is not None else None,
+    )
+    return replace(
+        hasil,
+        target=dict(hasil.target) if hasil.target is not None else None,
+        supply=dict(hasil.supply),
+        demand_partner=(dict(hasil.demand_partner)
+                        if hasil.demand_partner is not None else None),
+        demand_opponent=(dict(hasil.demand_opponent)
+                         if hasil.demand_opponent is not None else None),
+    )
 
 
 # Berapa laki-laki dan perempuan yang dihabiskan satu match dari tiap format.

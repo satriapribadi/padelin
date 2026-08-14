@@ -80,9 +80,10 @@ const STATE_MARK = {
 
 /** Bentuk HTML-nya dipisah supaya panel yang merakit string bisa memakai ulang
  *  kartu yang sama - kalau tidak, panel itu diam-diam kehilangan glif status. */
-function statTileHTML(k, v, sub, state) {
+function statTileHTML(k, v, sub, state, extra) {
   const mark = STATE_MARK[state];
-  return `<div class="stat${state ? ' ' + state : ''}">` +
+  const kelas = (state ? ' ' + state : '') + (extra?.cls ? ' ' + extra.cls : '');
+  return `<div class="stat${kelas}"${extra?.attrs ? ' ' + extra.attrs : ''}>` +
     `<div class="k">${esc(k)}</div>` +
     `<div class="v">${mark ? `<span class="ico" aria-hidden="true">${mark.icon}</span>` : ''}${esc(v)}</div>` +
     `<div class="s">${esc(sub)}${mark ? ` <span class="state-word">· ${mark.word}</span>` : ''}</div>` +
@@ -159,6 +160,9 @@ function renderPlayers() {
     `<span>Putri <b>${women}</b></span><span>Partner tetap <b>${locked}</b></span>`;
 
   scheduleAnalyze();
+  // Biaya dibagi jumlah peserta, jadi menambah atau menghapus satu orang
+  // mengubah seluruh panel biaya - termasuk saran fee per margin.
+  scheduleEconomics();
 }
 
 $('ptable').addEventListener('input', (e) => {
@@ -2246,8 +2250,22 @@ $('load-roster').onclick = async () => {
 // ---------------------------------------------------------------------------
 // Ekonomi
 // ---------------------------------------------------------------------------
-$('calc-econ').onclick = async () => {
-  if (players.length < 4) return toast('Butuh minimal 4 peserta');
+/**
+ * Panel biaya, digambar ulang dari server.
+ *
+ * Dulu ini cuma jalan lewat tombol "Hitung ulang", dan itu membuat seluruh
+ * panel BOHONG diam-diam: host mengubah harga court atau jumlah peserta, semua
+ * angka di layar tetap angka lama, dan yang paling menyesatkan adalah "Fee
+ * untuk target margin" - empat angka bulat yang tidak bergerak persis seperti
+ * nilai yang ditulis mati di kode. Panel Analisa kelayakan di sebelahnya sejak
+ * awal memperbarui diri tiap ketikan, jadi ketidakkonsistenannya sendiri yang
+ * membuat panel ini terbaca rusak.
+ *
+ * Aman dipanggil sesering itu: /api/economics tidak menjalankan penjadwalan,
+ * dan diukur 1-29 ms untuk 12 sampai 40 peserta.
+ */
+async function renderEconomics() {
+  if (players.length < 4) return;
   try {
     const d = await api('/api/economics', buildPayload());
     const c = d.current;
@@ -2277,9 +2295,21 @@ $('calc-econ').onclick = async () => {
       tile('Fee jaga margin', rp(u.fee_to_keep_same_margin), 'margin tetap sama') +
       '</div>';
 
-    let fs = '<div style="font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px">Fee untuk target margin</div><div class="stat-grid">';
+    // Kartunya bisa diklik untuk memakai angkanya. Tanpa itu host membaca
+    // "margin 30% berarti Rp 90.000", lalu menyalinnya sendiri ke kolom fee -
+    // dan salah ketik di situ tidak terlihat, karena panelnya lalu menghitung
+    // margin dari angka yang salah tanpa ada yang janggal.
+    let fs = '<div style="font-size:11px;color:var(--muted);font-weight:700;'
+      + 'text-transform:uppercase;letter-spacing:.07em;margin-bottom:8px">'
+      + 'Fee untuk target margin <span class="hint" style="text-transform:none;'
+      + 'letter-spacing:0;font-weight:400">klik untuk memakainya</span></div>'
+      + '<div class="stat-grid">';
     Object.entries(d.fee_suggestions).forEach(([m, f]) => {
-      fs += tile(`Margin ${m}%`, rp(f), 'per peserta');
+      fs += tile(`Margin ${m}%`, rp(f), 'per peserta', '', {
+        cls: 'stat-pick',
+        attrs: `role="button" tabindex="0" data-fee="${f}" `
+          + `title="Pakai ${rp(f)} sebagai fee per peserta"`,
+      });
     });
     $('fee-suggest').innerHTML = fs + '</div>';
 
@@ -2306,7 +2336,53 @@ $('calc-econ').onclick = async () => {
   } catch (e) {
     $('econ-now').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
   }
+}
+
+let econTimer = null;
+function scheduleEconomics() {
+  clearTimeout(econTimer);
+  econTimer = setTimeout(renderEconomics, 250);
+}
+
+// Tombolnya tetap ada: kalau panelnya pernah gagal (server sibuk menyusun
+// jadwal), host butuh cara memaksa tanpa harus mengubah isian dulu.
+$('calc-econ').onclick = () => {
+  if (players.length < 4) return toast('Butuh minimal 4 peserta');
+  renderEconomics();
 };
+
+// Semua isian yang benar-benar mengubah hitungan biaya. Jumlah peserta ikut
+// lewat renderPlayers(), yang memanggil scheduleEconomics() sendiri.
+['court_price', 'fee', 'other_costs', 'courts', 'duration',
+ 'courts_after', 'courts_from_round', 'courts_drop']
+  .forEach((id) => {
+    const e = $(id);
+    if (e) {
+      e.addEventListener('input', scheduleEconomics);
+      e.addEventListener('change', scheduleEconomics);
+    }
+  });
+
+/** Pakai satu saran fee sebagai fee per peserta. */
+function pakaiFee(node) {
+  const nilai = +node.dataset.fee;
+  if (!nilai) return;
+  $('fee').value = nilai;
+  $('fee').dispatchEvent(new Event('input', { bubbles: true }));
+  toast(`Fee per peserta jadi ${rp(nilai)}`);
+}
+
+$('fee-suggest').addEventListener('click', (e) => {
+  const t = e.target.closest('.stat-pick');
+  if (t) pakaiFee(t);
+});
+// Bisa dicapai keyboard juga - kartunya role="button", jadi ia harus benar-benar
+// bekerja seperti tombol, bukan cuma terbaca sebagai tombol oleh pembaca layar.
+$('fee-suggest').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter' && e.key !== ' ') return;
+  const t = e.target.closest('.stat-pick');
+  if (t) { e.preventDefault(); pakaiFee(t); }
+});
 
 async function loadClubSummary() {
   const cid = currentClubId();
