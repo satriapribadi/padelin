@@ -2331,12 +2331,21 @@ class TestCpsatMode(unittest.TestCase):
     def test_tidak_pernah_kalah_dari_americano(self):
         """Janji utama mode ini, dan yang paling mudah rusak diam-diam.
 
-        Solver memakai model yang tidak persis sama dengan fungsi biaya
-        optimizer (denda jarak pengulangan match tidak ikut dimodelkan), jadi
-        hasilnya WAJIB dibandingkan ulang dengan ukuran yang sebenarnya dipakai
-        menilai jadwal - kalau tidak, solver bisa "menang" menurut modelnya
-        sendiri sambil menyerahkan jadwal yang lebih buruk kepada host.
+        Dibandingkan dengan KUNCI LENGKAP yang dipakai _lebih_baik() - termasuk
+        skor kualitas - bukan cuma jumlah pengulangan. Bedanya nyata dan sudah
+        pernah terjadi: model CP-SAT tidak memuat "giliran" (berapa kali antrean
+        main diserobot, dan tunggu terpanjang), sementara skor kualitas
+        memuatnya. Dengan penjaga yang buta giliran, solver menurunkan biaya
+        modelnya sendiri sambil merusak giliran dan hasilnya tetap diterima:
+        pada 26 orang / 4 court kualitas turun 96,8 -> 96,5 padahal partner dan
+        lawan sama-sama sudah nol - persis kasus yang lolos dari versi tes ini
+        yang hanya memeriksa dua angka pengulangan.
         """
+        def kunci(sch):
+            return (sch.stats.partner_repeat_pairs,
+                    sch.stats.opponent_repeat_pairs,
+                    -sch.stats.quality_score)
+
         for n, courts in ((8, 2), (12, 2), (14, 3)):
             with self.subTest(n=n, courts=courts):
                 dasar = {**self.DASAR, "courts": courts}
@@ -2345,12 +2354,11 @@ class TestCpsatMode(unittest.TestCase):
                 eksak = build_schedule(make_players(n),
                                        Config(mode="americano_cpsat", **dasar))
                 self.assertLessEqual(
-                    (eksak.stats.partner_repeat_pairs,
-                     eksak.stats.opponent_repeat_pairs),
-                    (biasa.stats.partner_repeat_pairs,
-                     biasa.stats.opponent_repeat_pairs),
+                    kunci(eksak), kunci(biasa),
                     f"{n} orang / {courts} court: CP-SAT menyerahkan jadwal "
-                    f"yang lebih buruk daripada Americano biasa")
+                    f"yang lebih buruk daripada Americano biasa "
+                    f"(mutu {eksak.stats.quality_score} vs "
+                    f"{biasa.stats.quality_score})")
 
     def test_menghormati_batas_keras(self):
         """Aturan gender, format match, dan partner terkunci tetap ditegakkan.

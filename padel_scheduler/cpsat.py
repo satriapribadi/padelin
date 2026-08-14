@@ -13,11 +13,14 @@ Bedanya dengan simulated annealing:
     optimal - atau membuktikan nol pengulangan memang mustahil - tapi waktunya
     tidak bisa diramalkan.
 
-Karena itu keduanya dipakai bersama, bukan bergantian: konstruksi greedy yang
-sudah ada tetap jalan lebih dulu, hasilnya dipakai sebagai HINT sekaligus
-jaring pengaman. CP-SAT mulai dari jadwal yang sudah layak, jadi seburuk apa
-pun batas waktunya, hasil akhirnya tidak pernah lebih buruk daripada tanpa
-mesin ini.
+Karena itu keduanya dipakai bersama, bukan bergantian: SELURUH rangkaian yang
+sudah ada tetap jalan lebih dulu sampai selesai, dan hasilnya dipakai dua kali -
+sebagai HINT supaya solver mulai dari tempat yang bagus, dan sebagai pembanding
+di akhir. Kalau hasil solver tidak melampauinya, jadwal lama yang dipertahankan.
+
+Pembanding itulah yang memegang janji "tidak pernah lebih buruk", dan janjinya
+hanya sekuat UKURAN yang dipakai membandingkan - lihat parameter `nilai` di
+optimize(). Model di file ini tidak memuat semua yang dinilai host.
 
 
 MODEL
@@ -176,21 +179,43 @@ def _kombinasi_bentuk_sah(st, r: int) -> list[tuple[int, int, int, int]]:
     return out
 
 
+def _nilai_bawaan(st) -> tuple:
+    """Ukuran cadangan kalau pemanggil tidak menyediakan penilainya sendiri.
+
+    Sengaja bukan yang dipakai scheduler - lihat catatan pada parameter `nilai`
+    di optimize() untuk kenapa ukuran ini saja tidak cukup.
+    """
+    return (st.rep_pc, st.rep_oc, st.cost())
+
+
 def optimize(st, courts_r: list[int], *,
              time_limit: float = 30.0,
              workers: int = 8,
+             nilai=None,
              progress=None) -> Hasil:
     """Cari jadwal terbaik untuk `st`, lalu tulis hasilnya kembali ke `st`.
 
-    `st` harus SUDAH berisi jadwal layak hasil konstruksi. Jadwal itu dipakai
-    dua kali: sebagai hint supaya solver mulai dari tempat yang bagus, dan
-    sebagai pembanding di akhir - kalau CP-SAT tidak berhasil melampauinya,
-    jadwal lama yang dipertahankan.
+    `st` harus SUDAH berisi jadwal layak. Jadwal itu dipakai dua kali: sebagai
+    hint supaya solver mulai dari tempat yang bagus, dan sebagai pembanding di
+    akhir - kalau hasil solver tidak melampauinya, jadwal lama yang dipertahankan.
+
+    `nilai(st)` mengembalikan kunci pembanding (makin kecil makin baik), dan
+    HARUS ukuran yang sama dengan yang dipakai memilih jadwal di tempat lain.
+
+    Itu bukan formalitas. Model di sini tidak memuat "giliran" - berapa kali
+    antrean main diserobot, dan seberapa jauh tunggu terpanjang melewati yang
+    tak terhindarkan - sementara skor kualitas yang dilihat host memuatnya.
+    Dengan pembanding bawaan (yang juga buta giliran), solver bisa menurunkan
+    biaya modelnya sendiri sambil merusak giliran, dan hasilnya tetap diterima:
+    diukur pada 26 orang / 4 court, kualitas turun 96,8 -> 96,5 padahal partner
+    dan lawan sama-sama sudah nol. Jadi janji "tidak pernah lebih buruk" hanya
+    berlaku sejauh ukuran yang dipakai di sini.
 
     `courts_r` cuma dipakai untuk melaporkan; jumlah court yang dipakai model
     diambil dari jadwal yang sudah ada, supaya jumlah slot main tidak berubah
     diam-diam dari yang sudah disepakati tahap sebelumnya.
     """
+    nilai = nilai or _nilai_bawaan
     hasil = Hasil()
     try:
         from ortools.sat.python import cp_model
@@ -293,14 +318,14 @@ def optimize(st, courts_r: list[int], *,
         if meja[r] > 1:
             lead = []
             for t in range(meja[r]):
-                nilai = []
+                indeks = []
                 for p in range(n):
                     v = m.new_int_var(0, n, f"lead{r}_{t}_{p}")
                     m.add(v == p).only_enforce_if(at[r][t][p])
                     m.add(v == n).only_enforce_if(at[r][t][p].negated())
-                    nilai.append(v)
+                    indeks.append(v)
                 lo = m.new_int_var(0, n, f"min{r}_{t}")
-                m.add_min_equality(lo, nilai)
+                m.add_min_equality(lo, indeks)
                 lead.append(lo)
             for t in range(meja[r] - 1):
                 m.add(lead[t] < lead[t + 1])
@@ -570,7 +595,7 @@ def optimize(st, courts_r: list[int], *,
 
     # --- Tulis balik -------------------------------------------------------
     lama = st.snapshot()
-    biaya_lama = (st.rep_pc, st.rep_oc, st.cost())
+    nilai_lama = nilai(st)
 
     baru: list[list[list[int]]] = []
     for r in range(R):
@@ -601,13 +626,15 @@ def optimize(st, courts_r: list[int], *,
         turun = {p for q in baru[r] for p in q}
         st.place_round(r, baru[r], sorted(set(range(n)) - turun))
 
-    # CP-SAT meminimalkan model, bukan ScheduleState - dan keduanya tidak persis
-    # sama (repeat_gap tidak dimodelkan). Jadi hasilnya tetap dibandingkan dengan
-    # ukuran yang sebenarnya dipakai untuk menilai jadwal, dan yang kalah dibuang.
-    baru_key = (st.rep_pc, st.rep_oc, st.cost())
-    if baru_key <= biaya_lama:
+    # CP-SAT meminimalkan MODELNYA, dan model itu tidak memuat semua yang dinilai
+    # host (repeat_gap dan giliran di luar jangkauannya). Jadi hasilnya wajib
+    # dibandingkan ulang dengan ukuran yang sebenarnya dipakai menilai jadwal -
+    # tanpa langkah ini solver bisa "menang" menurut dirinya sendiri sambil
+    # menyerahkan jadwal yang lebih buruk.
+    nilai_baru = nilai(st)
+    if nilai_baru <= nilai_lama:
         hasil.dipakai = True
-        hasil.membaik = baru_key < biaya_lama
+        hasil.membaik = nilai_baru < nilai_lama
     else:
         st.restore(lama)
     return hasil

@@ -71,14 +71,23 @@ def main() -> int:
                     help="batas waktu CP-SAT per jadwal")
     ap.add_argument("--seed", type=int, nargs="+", default=[42],
                     help="seed yang diuji")
+    ap.add_argument("--kasus", default="",
+                    help="jalankan hanya kasus yang labelnya memuat teks ini")
     args = ap.parse_args()
+
+    kasus = [k for k in KASUS if args.kasus.lower() in k[0].lower()]
+    if not kasus:
+        print(f"Tidak ada kasus yang cocok dengan {args.kasus!r}. Yang ada:")
+        for label, *_ in KASUS:
+            print("  -", label)
+        return 1
 
     print(f"{'kasus':<38} {'mesin':<7} {'ptn':>4} {'lwn':>4} {'mutu':>6} "
           f"{'detik':>7}  status")
     print("-" * 96)
 
     menang = kalah = seri = 0
-    for label, n, courts, rounds, pria, matchups in KASUS:
+    for label, n, courts, rounds, pria, matchups in kasus:
         for seed in args.seed:
             rng = random.Random(seed)
             players = roster(n, pria, rng)

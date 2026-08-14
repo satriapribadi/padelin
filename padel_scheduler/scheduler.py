@@ -2281,10 +2281,21 @@ def _build_once(players: list[Player], config: Config,
     # pun selain dia - MEMBUKTIKAN bahwa tidak ada lagi yang tersisa.
     if pakai_cpsat:
         say(0.95, "Mencari sisa perbaikan dengan solver eksak (CP-SAT)")
+        # Penilai yang dipakai solver untuk memutuskan apakah hasilnya layak
+        # dipakai. Sengaja kunci yang sama persis dengan _lebih_baik(), yang
+        # memilih di antara percobaan: kalau dua tempat itu memakai ukuran yang
+        # berbeda, solver bisa menyerahkan jadwal yang menurut ukurannya sendiri
+        # menang tapi menurut host kalah.
+        def nilai(state):
+            s = _build_stats(state, local_players, total_rounds)
+            return (s.partner_repeat_pairs, s.opponent_repeat_pairs,
+                    -s.quality_score)
+
         lapor = cpsat.optimize(
             st, courts_r,
             time_limit=config.cpsat_seconds,
             workers=config.cpsat_workers,
+            nilai=nilai,
             progress=(lambda f, m: say(0.95 + f * 0.03, m)) if progress else None,
         )
         notes.extend(lapor.catatan)
