@@ -664,10 +664,46 @@ async function runAnalyze() {
  'courts_after', 'courts_from_round']
   .forEach((id) => $(id).addEventListener('input', scheduleAnalyze));
 
+// Jumlah ronde berubah begitu durasi atau menit per ronde diubah, dan bersama
+// itu berubah pula apakah mode CP-SAT masih ada gunanya.
+['duration', 'round_min', 'warmup']
+  .forEach((id) => $(id).addEventListener('input', renderCpsatRonde));
+
 $('mode').addEventListener('change', () => {
   $('tier-row').style.display = $('mode').value === 'tiered' ? '' : 'none';
   $('cpsat-block').style.display = $('mode').value === 'americano_cpsat' ? '' : 'none';
+  renderCpsatRonde();
 });
+
+/** Ronde tempat solver eksak berhenti membantu. Diukur, bukan ditebak. */
+const CPSAT_RONDE_MAX = 11;
+
+/**
+ * Katakan di muka kalau acara ini terlalu panjang untuk solver.
+ *
+ * Yang menentukan berguna-tidaknya mode CP-SAT bukan jumlah peserta melainkan
+ * jumlah RONDE - ukuran modelnya tumbuh dengan peserta x ronde x court, dan
+ * ronde yang paling cepat membunuhnya. Diukur pada 4 court dengan roster nyata:
+ * di 9 ronde solver menembus seluruh rentang sampai 26 peserta, di 12 ronde ia
+ * mati total bahkan pada 18 peserta.
+ *
+ * Tanpa kalimat ini host menunggu satu batas waktu penuh di acara 3 jam lalu
+ * mendapat jadwal yang sama persis dengan Americano - dan tidak punya cara tahu
+ * bahwa itu memang sudah bisa diramalkan sebelum ia menekan Generate.
+ */
+function renderCpsatRonde() {
+  const box = $('cpsat-ronde-hint');
+  if (!box) return;
+  if ($('mode').value !== 'americano_cpsat') { box.textContent = ''; return; }
+  const ronde = rondeMuat();
+  if (!ronde) { box.textContent = ''; return; }
+  box.textContent = ronde > CPSAT_RONDE_MAX
+    ? `Acara ini ${ronde} ronde. Di atas ${CPSAT_RONDE_MAX} ronde solver hampir `
+      + `tidak pernah menemukan perbaikan maupun sempat membuktikan apa pun, `
+      + `jadi Anda menunggu tanpa dapat apa-apa - pakai Americano biasa. `
+      + `Perpanjang menit per ronde kalau mau turun ke ${CPSAT_RONDE_MAX} ronde.`
+    : `Acara ini ${ronde} ronde - di dalam jangkauan solver.`;
+}
 
 /**
  * Tampilkan mode CP-SAT hanya kalau OR-Tools benar-benar ada di server.
@@ -1583,6 +1619,7 @@ function applyRequest(req) {
   }
   $('tier-row').style.display = req.mode === 'tiered' ? '' : 'none';
   $('cpsat-block').style.display = req.mode === 'americano_cpsat' ? '' : 'none';
+  renderCpsatRonde();
   // Acara lama tidak punya field ini; dipulihkan ke bawaan, bukan dibiarkan
   // mewarisi angka dari acara yang dibuka sebelumnya.
   $('cpsat_seconds').value = req.cpsat_seconds || 30;

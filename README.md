@@ -115,26 +115,69 @@ menggantikan annealing dan mulai dari konstruksi greedy; hasilnya kalah telak
 13 pasang setelah 20 detik). Penjadwalan ini sangat simetris dan ruang solusinya
 raksasa — medan yang memang menguntungkan pencarian lokal.
 
-Diukur pada 6 setup × 3 seed dengan batas 30 detik: **lebih baik di 2 kasus,
-lebih buruk di 0, sama di 16**. Lima kasus selesai TERBUKTI optimal, dan
-karenanya berhenti jauh sebelum batas waktunya (8 orang / 2 court: 1,4–1,7
-detik; 12 orang / 2 court: 8,9–12,7 detik, salah satunya sekaligus menurunkan
-lawan berulang dari 15 ke 14).
+**Kapan menyalakannya: 11 ronde ke bawah.** Ini aturan operasi yang paling
+penting soal mode ini, dan tidak bisa ditebak dari mana pun — ia harus diukur.
 
-Bacalah angka itu apa adanya: pada meet besar yang annealing-nya sudah menyentuh
-nol pengulangan, solver tidak punya apa pun untuk diperbaiki dan Anda cuma
-membayar waktu. Yang dibelinya di situ bukan jadwal yang lebih baik, melainkan
-jawaban atas "apakah ini memang sudah mentok" — dan itu jawaban yang sebelumnya
-tidak pernah tersedia. Bandingkan sendiri:
+Yang menentukan bukan jumlah peserta, melainkan **jumlah ronde**. Ukuran model
+tumbuh dengan peserta × ronde × court, dan rondelah yang paling cepat
+membunuhnya. Diukur pada 4 court dengan roster nyata 26 orang, batas solver 60
+detik:
+
+| sewa | ronde | 10 org | 14 org | 18 org | 22 org | 26 org |
+|---|---|---|---|---|---|---|
+| 2 jam | 9 | terbukti | terbukti | **lebih baik** | terbukti | terbukti |
+| 2,5 jam | 11 | — | — | terbukti | tidak ada | **lebih baik** |
+| 2,7 jam | 12 | — | — | tidak ada | tidak ada | tidak ada |
+| 3 jam | 14 | terbukti | tidak ada | tidak ada | tidak ada | tidak ada |
+
+Di 9 ronde solver menembus SELURUH rentang peserta, termasuk 26 orang dalam 30
+detik. Di 12 ronde ia mati total, bahkan pada 18 orang. Jadi batasnya tajam dan
+letaknya di sekitar **11 ronde** — bukan di jumlah peserta, seperti yang mudah
+dikira.
+
+Sebagian besar yang dibelinya bukan jadwal yang lebih baik melainkan
+**kepastian**: "23 pasang berulang itu memang batasnya, berhenti mengulang
+dengan seed lain". Tapi tidak selalu — pada 26 orang / 11 ronde kualitasnya naik
+92,1 → 94,3 dengan pengulangan lawan yang sama-sama nol; yang diperbaiki solver
+di situ adalah keadilan istirahat.
+
+Bandingkan sendiri di setup Anda:
 
 ```
 python tools/banding_cpsat.py --detik 30 --seed 1 2 3
 ```
 
+**Tuas lain sering mengalahkannya.** Untuk 26 peserta, memakai 13 ronde (satu-
+satunya jumlah ronde yang membuat jatah main habis dibagi rata — lihat *Jumlah
+ronde yang membagi rata* di bawah) memberi mutu 97,2, jauh di atas 94,3 yang
+bisa dicapai solver. Kalau acara Anda cukup panjang untuk 13 ronde, pakai itu
+dan Americano biasa; solver tidak akan menyusul dan cuma menambah waktu tunggu.
+
 Ongkosnya dua: Anda menunggu selama batas waktu yang dipilih, dan installer
 membengkak sekitar 200 MB karena OR-Tools membawa numpy, pandas, dan protobuf.
 Kalau OR-Tools tidak terpasang, modenya otomatis disembunyikan dari UI dan sisa
 aplikasi berjalan seperti biasa.
+
+**Jumlah ronde yang membagi rata**
+Slot main per ronde = 4 × court. Supaya jatah main habis dibagi rata ke `N`
+peserta, `4·C·R` harus habis dibagi `N` — dan kalau tidak, sebagian orang main
+satu ronde lebih banyak, keadilan giliran rusak, dan skor kualitas jatuh lebih
+jauh daripada yang disebabkan pengulangan lawan mana pun.
+
+Untuk 26 peserta: `4·C·R ≡ 0 (mod 26)` ⟺ `13 | C·R`. Karena 13 prima dan jumlah
+court selalu di bawah 13, **R harus kelipatan 13** — jadi 13 ronde, berapa pun
+court-nya. Diukur, dan selisihnya besar:
+
+| court | ronde | main/orang | lawan berulang | mutu |
+|---|---|---|---|---|
+| 4 | **13** | 8,0 (rata) | 0 | **97,2** |
+| 4 | 14 | 8,6 (5–6 duduk) | 0 | 91,7 |
+| 6 | **13** | 12,0 (rata) | 13 | **98,6** |
+| 6 | 14 | 12,9 (lewat batas) | 26 | 93,6 |
+
+Perhatikan baris 6 court: 13 ronde punya LEBIH BANYAK pengulangan lawan
+daripada 12 ronde (13 lawan 4) tapi mutunya jauh lebih tinggi. Pembagian yang
+rata menggerakkan kualitas lebih besar daripada keunikan lawan.
 
 **Court berkurang di tengah acara**
 Untuk sewa yang tidak sama panjang: 2 court dua jam, lalu 1 court sejam lagi.
