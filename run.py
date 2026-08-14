@@ -32,7 +32,7 @@ from padel_scheduler import (
     analyze,
     build_schedule,
 )
-from padel_scheduler import storage
+from padel_scheduler import cpsat, storage
 from padel_scheduler.capacity import rounds_from_duration
 from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_analysis
 from padel_scheduler.html_report import build_html
@@ -148,6 +148,11 @@ def _config_from(payload: dict) -> Config:
         allowed_matchups=_matchups_from(payload),
         courts_after=kurang[0],
         courts_from_round=kurang[1],
+        # Batas waktu solver mode CP-SAT. Dibatasi 5-300 detik: di bawah 5 detik
+        # solver belum sempat membangun modelnya sendiri, dan di atas 300 detik
+        # host sudah menunggu terlalu lama untuk sesuatu yang bisa saja tidak
+        # membeli apa pun. Mode lain mengabaikan angka ini.
+        cpsat_seconds=max(5, min(300, int(payload.get("cpsat_seconds", 30)))),
     )
 
 
@@ -528,6 +533,10 @@ class Handler(BaseHTTPRequestHandler):
                 # tempat yang bisa berbeda diam-diam.
                 "matchups": [{"code": m, "label": MATCHUP_LABELS[m]}
                              for m in MATCHUPS],
+                # Mode CP-SAT butuh OR-Tools. Kalau paketnya tidak ada, UI
+                # menyembunyikan modenya - lebih baik tidak menawarkan daripada
+                # menawarkan lalu gagal setelah host mengisi seluruh formulir.
+                "cpsat": cpsat.tersedia(),
             })
         elif path == "/api/master":
             # Satu panggilan memuat master data yang dibutuhkan UI.

@@ -6,10 +6,19 @@ Web app lokal untuk menyusun jadwal meet padel: Americano, pool rating, Mexicano
 pasangan tetap, dan format bersegmen (putra / putri / mixed) — lengkap dengan
 pembagian tugas wasit & ballboy, analisa biaya, laporan siap cetak, dan database.
 
-**Nol dependency.** Cukup Python 3.10+, tanpa `pip install` apa pun.
+**Nol dependency wajib.** Cukup Python 3.10+, tanpa `pip install` apa pun.
 
 ```bash
 python run.py
+```
+
+Satu-satunya paket opsional adalah [OR-Tools](https://developers.google.com/optimization),
+yang menyalakan mode *Americano + solver eksak (CP-SAT)*. Tanpa paket itu semua
+fitur lain berjalan penuh dan modenya tidak muncul di UI. Installer Windows
+sudah membundelnya; untuk menjalankan dari repo:
+
+```bash
+pip install ortools
 ```
 
 Lalu buka <http://127.0.0.1:8770> (browser terbuka otomatis).
@@ -68,6 +77,8 @@ daripada "1 orang mengulang 4×".
 
 **Format**
 - Americano, pool berdasarkan rating, Mexicano (tim diseimbangkan), pasangan tetap
+- **Americano + solver eksak (CP-SAT)** — aturan yang sama persis dengan
+  Americano, mesin pencarian yang berbeda. Lihat di bawah
 - Babak bersegmen, mis. `Putra 3 – Putri 3 – Mixed 6`. Preset bisa ditambahkan
   ke susunan yang ada atau menggantinya - memilihnya saja tidak mengubah apa pun.
   Tiap babak bisa digandakan dan diurutkan dengan diseret (atau panah atas/bawah
@@ -79,6 +90,94 @@ daripada "1 orang mengulang 4×".
 - Preferensi per peserta: partner tetap, atau minta court khusus 4 perempuan /
   4 laki-laki. Boleh sebagian — peserta lain tetap rotasi bebas
 - 4–26+ pemain, meet satu gender penuh juga didukung
+
+**Americano + solver eksak (CP-SAT)**
+Mode ini tidak mengganti apa pun soal aturan jadwal — yang berganti cuma mesin
+pencariannya, dan bahkan itu pun hanya sebagai tahap TAMBAHAN di ujung.
+
+Seluruh rangkaian biasa tetap jalan lebih dulu (konstruksi, annealing,
+pemerataan, perapian giliran). Hasilnya baru diserahkan ke solver eksak
+[OR-Tools CP-SAT](https://developers.google.com/optimization) sebagai titik
+awal. Dari situ solver mengerjakan dua hal yang tidak bisa dikerjakan pencarian
+acak:
+
+1. memungut sisa perbaikan yang tidak terjangkau gerakan lokal;
+2. **membuktikan** bahwa tidak ada lagi yang tersisa.
+
+Poin kedua itulah alasan mode ini ada. Annealing tidak pernah bisa mengatakan
+apakah "2 pasang lawan berulang" itu memang batasnya atau cuma sejauh yang
+ia temukan. Solver bisa — dan kalau ia berhasil, catatan jadwalnya berkata
+begitu apa adanya.
+
+Urutan ini hasil pengukuran, bukan selera. Versi pertama menyuruh CP-SAT
+menggantikan annealing dan mulai dari konstruksi greedy; hasilnya kalah telak
+(26 orang / 4 court: annealing nol lawan berulang dalam 7 detik, CP-SAT masih
+13 pasang setelah 20 detik). Penjadwalan ini sangat simetris dan ruang solusinya
+raksasa — medan yang memang menguntungkan pencarian lokal.
+
+**Kapan menyalakannya: 11 ronde ke bawah.** Ini aturan operasi yang paling
+penting soal mode ini, dan tidak bisa ditebak dari mana pun — ia harus diukur.
+
+Yang menentukan bukan jumlah peserta, melainkan **jumlah ronde**. Ukuran model
+tumbuh dengan peserta × ronde × court, dan rondelah yang paling cepat
+membunuhnya. Diukur pada 4 court dengan roster nyata 26 orang, batas solver 60
+detik:
+
+| sewa | ronde | 10 org | 14 org | 18 org | 22 org | 26 org |
+|---|---|---|---|---|---|---|
+| 2 jam | 9 | terbukti | terbukti | **lebih baik** | terbukti | terbukti |
+| 2,5 jam | 11 | — | — | terbukti | tidak ada | **lebih baik** |
+| 2,7 jam | 12 | — | — | tidak ada | tidak ada | tidak ada |
+| 3 jam | 14 | terbukti | tidak ada | tidak ada | tidak ada | tidak ada |
+
+Di 9 ronde solver menembus SELURUH rentang peserta, termasuk 26 orang dalam 30
+detik. Di 12 ronde ia mati total, bahkan pada 18 orang. Jadi batasnya tajam dan
+letaknya di sekitar **11 ronde** — bukan di jumlah peserta, seperti yang mudah
+dikira.
+
+Sebagian besar yang dibelinya bukan jadwal yang lebih baik melainkan
+**kepastian**: "23 pasang berulang itu memang batasnya, berhenti mengulang
+dengan seed lain". Tapi tidak selalu — pada 26 orang / 11 ronde kualitasnya naik
+92,1 → 94,3 dengan pengulangan lawan yang sama-sama nol; yang diperbaiki solver
+di situ adalah keadilan istirahat.
+
+Bandingkan sendiri di setup Anda:
+
+```
+python tools/banding_cpsat.py --detik 30 --seed 1 2 3
+```
+
+**Tuas lain sering mengalahkannya.** Untuk 26 peserta, memakai 13 ronde (satu-
+satunya jumlah ronde yang membuat jatah main habis dibagi rata — lihat *Jumlah
+ronde yang membagi rata* di bawah) memberi mutu 97,2, jauh di atas 94,3 yang
+bisa dicapai solver. Kalau acara Anda cukup panjang untuk 13 ronde, pakai itu
+dan Americano biasa; solver tidak akan menyusul dan cuma menambah waktu tunggu.
+
+Ongkosnya dua: Anda menunggu selama batas waktu yang dipilih, dan installer
+membengkak sekitar 200 MB karena OR-Tools membawa numpy, pandas, dan protobuf.
+Kalau OR-Tools tidak terpasang, modenya otomatis disembunyikan dari UI dan sisa
+aplikasi berjalan seperti biasa.
+
+**Jumlah ronde yang membagi rata**
+Slot main per ronde = 4 × court. Supaya jatah main habis dibagi rata ke `N`
+peserta, `4·C·R` harus habis dibagi `N` — dan kalau tidak, sebagian orang main
+satu ronde lebih banyak, keadilan giliran rusak, dan skor kualitas jatuh lebih
+jauh daripada yang disebabkan pengulangan lawan mana pun.
+
+Untuk 26 peserta: `4·C·R ≡ 0 (mod 26)` ⟺ `13 | C·R`. Karena 13 prima dan jumlah
+court selalu di bawah 13, **R harus kelipatan 13** — jadi 13 ronde, berapa pun
+court-nya. Diukur, dan selisihnya besar:
+
+| court | ronde | main/orang | lawan berulang | mutu |
+|---|---|---|---|---|
+| 4 | **13** | 8,0 (rata) | 0 | **97,2** |
+| 4 | 14 | 8,6 (5–6 duduk) | 0 | 91,7 |
+| 6 | **13** | 12,0 (rata) | 13 | **98,6** |
+| 6 | 14 | 12,9 (lewat batas) | 26 | 93,6 |
+
+Perhatikan baris 6 court: 13 ronde punya LEBIH BANYAK pengulangan lawan
+daripada 12 ronde (13 lawan 4) tapi mutunya jauh lebih tinggi. Pembagian yang
+rata menggerakkan kualitas lebih besar daripada keunikan lawan.
 
 **Court berkurang di tengah acara**
 Untuk sewa yang tidak sama panjang: 2 court dua jam, lalu 1 court sejam lagi.
@@ -165,6 +264,7 @@ padel_scheduler/
   capacity.py               analisa kelayakan + batas matematis
   factorization.py          1-factorization & Latin square
   optimizer.py              simulated annealing + batas keras
+  cpsat.py                  solver eksak OR-Tools (mode americano_cpsat)
   scheduler.py              perakit jadwal
   roles.py                  pembagian wasit & ballboy
   economics.py              biaya, margin, trade-off court
@@ -179,7 +279,8 @@ web/
   _selftest.html            halaman verifikasi visual grafik (bukan bagian app)
 tools/
   uitest.py                 uji interaksi UI lewat DevTools Protocol
-tests/                      62 tes unit
+  banding_cpsat.py          adu annealing lawan solver eksak pada setup yang sama
+tests/                      170 tes unit
 ```
 
 ## Aplikasi desktop (Electron)
@@ -291,8 +392,8 @@ menyalin foldernya tidak ikut membawa data siapa pun.
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 62 tes unit
-python tools/uitest.py                  # 22 uji interaksi di browser sungguhan
+python -m unittest discover -s tests    # 170 tes unit
+python tools/uitest.py                  # 27 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 ```
 

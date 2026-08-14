@@ -31,6 +31,7 @@ from padel_scheduler.factorization import (
     mixed_pair_rounds,
     verify_one_factorization,
 )
+from padel_scheduler import cpsat
 from padel_scheduler.models import MATCHUPS, matchup_code, team_shape
 from padel_scheduler.optimizer import (
     Rules,
@@ -2307,6 +2308,107 @@ class TestCourtBerkurang(unittest.TestCase):
             [[m.players() for m in r.matches] for r in a.rounds],
             [[m.players() for m in r.matches] for r in b.rounds])
         self.assertEqual(a.stats.quality_score, b.stats.quality_score)
+
+
+@unittest.skipUnless(cpsat.tersedia(), "OR-Tools tidak terpasang")
+class TestCpsatMode(unittest.TestCase):
+    """Mode 'americano_cpsat'.
+
+    Yang diuji bukan "apakah solvernya pintar" - itu bergantung batas waktu dan
+    mesin - melainkan dua janji yang dipegang mode ini apa pun hasil pencarian:
+    jadwalnya tetap sah, dan tidak pernah lebih buruk daripada Americano biasa.
+    """
+
+    DASAR = dict(courts=2, duration_minutes=130, round_minutes=12,
+                 warmup_minutes=10, seed=42, effort=8000, attempts=1,
+                 cpsat_seconds=5)
+
+    def test_jadwalnya_sah(self):
+        players = make_players(12)
+        sch = build_schedule(players, Config(mode="americano_cpsat", **self.DASAR))
+        assert_structurally_valid(self, sch)
+
+    def test_tidak_pernah_kalah_dari_americano(self):
+        """Janji utama mode ini, dan yang paling mudah rusak diam-diam.
+
+        Dibandingkan dengan KUNCI LENGKAP yang dipakai _lebih_baik() - termasuk
+        skor kualitas - bukan cuma jumlah pengulangan. Bedanya nyata dan sudah
+        pernah terjadi: model CP-SAT tidak memuat "giliran" (berapa kali antrean
+        main diserobot, dan tunggu terpanjang), sementara skor kualitas
+        memuatnya. Dengan penjaga yang buta giliran, solver menurunkan biaya
+        modelnya sendiri sambil merusak giliran dan hasilnya tetap diterima:
+        pada 26 orang / 4 court kualitas turun 96,8 -> 96,5 padahal partner dan
+        lawan sama-sama sudah nol - persis kasus yang lolos dari versi tes ini
+        yang hanya memeriksa dua angka pengulangan.
+        """
+        def kunci(sch):
+            return (sch.stats.partner_repeat_pairs,
+                    sch.stats.opponent_repeat_pairs,
+                    -sch.stats.quality_score)
+
+        for n, courts in ((8, 2), (12, 2), (14, 3)):
+            with self.subTest(n=n, courts=courts):
+                dasar = {**self.DASAR, "courts": courts}
+                biasa = build_schedule(make_players(n),
+                                       Config(mode="americano", **dasar))
+                eksak = build_schedule(make_players(n),
+                                       Config(mode="americano_cpsat", **dasar))
+                self.assertLessEqual(
+                    kunci(eksak), kunci(biasa),
+                    f"{n} orang / {courts} court: CP-SAT menyerahkan jadwal "
+                    f"yang lebih buruk daripada Americano biasa "
+                    f"(mutu {eksak.stats.quality_score} vs "
+                    f"{biasa.stats.quality_score})")
+
+    def test_menghormati_batas_keras(self):
+        """Aturan gender, format match, dan partner terkunci tetap ditegakkan.
+
+        Batas keras ini hidup di dalam model CP-SAT, BUKAN di pemeriksa yang
+        menyaring hasil - jadi kalau modelnya salah menerjemahkan salah satu
+        aturan, tidak ada lapisan lain yang akan menangkapnya.
+        """
+        players = make_players(12, genders=["M"] * 6 + ["F"] * 6)
+        players[0].partner_id = players[1].id
+        players[1].partner_id = players[0].id
+        sch = build_schedule(players, Config(
+            mode="americano_cpsat",
+            allowed_matchups=["LL-LL", "LP-LP", "PP-PP"],
+            **self.DASAR))
+        assert_structurally_valid(self, sch)
+
+        gender = {p.id: p.gender for p in sch.players}
+        for rnd in sch.rounds:
+            for m in rnd.matches:
+                kode = matchup_code(
+                    team_shape(gender[m.team_a[0]], gender[m.team_a[1]]),
+                    team_shape(gender[m.team_b[0]], gender[m.team_b[1]]))
+                self.assertIn(kode, ("LL-LL", "LP-LP", "PP-PP"),
+                              f"ronde {rnd.index}: format match dilarang")
+                for tim in (m.team_a, m.team_b):
+                    if players[0].id in tim or players[1].id in tim:
+                        self.assertEqual(set(tim),
+                                         {players[0].id, players[1].id},
+                                         "partner terkunci dipisah")
+
+    def test_catatan_menyebut_status_solver(self):
+        """Host harus bisa membedakan "terbukti" dari "terbaik sejauh ini"."""
+        sch = build_schedule(make_players(8), Config(
+            mode="americano_cpsat", **{**self.DASAR, "cpsat_seconds": 10}))
+        catatan = [c for c in sch.notes if c.startswith("Mode CP-SAT")]
+        self.assertEqual(len(catatan), 1, "catatan status solver harus persis satu")
+        self.assertTrue(
+            "TERBUKTI" in catatan[0] or "belum sempat" in catatan[0],
+            f"catatan tidak menyebut status pembuktian: {catatan[0]}")
+
+    def test_americano_tidak_ikut_berubah(self):
+        """Mode lama harus keluar sama persis, tanpa peduli field baru terisi."""
+        a = build_schedule(make_players(12), Config(mode="americano",
+                                                    **self.DASAR))
+        b = build_schedule(make_players(12), Config(
+            mode="americano", **{**self.DASAR, "cpsat_seconds": 120}))
+        self.assertEqual(
+            [[m.players() for m in r.matches] for r in a.rounds],
+            [[m.players() for m in r.matches] for r in b.rounds])
 
 
 if __name__ == "__main__":

@@ -820,6 +820,59 @@ def main() -> int:
             return "pasangan cocok, jadwal effort 160k -> Sangat teliti"
         check("Pulihkan pilihan kualitas dari jadwal tersimpan", effort_restore)
 
+        # --- 12c. mode CP-SAT: sakelar, batas waktu, dan penyembunyiannya --
+        # Modenya bergantung pada paket Python yang bisa saja tidak ada, jadi
+        # yang diuji bukan cuma "kotaknya muncul" melainkan seluruh rantainya:
+        # kolom batas waktu ikut muncul, angkanya benar-benar terkirim ke
+        # server, dan kalau OR-Tools tidak ada modenya hilang dari daftar -
+        # bukan tinggal di situ menunggu dipilih lalu gagal.
+        # Sama seperti effort di atas: dibaca lewat tombol info debug, bukan
+        # dengan memanggil fungsi internal app.js.
+        def cpsat_toggle():
+            ada = json.loads(b.js("""JSON.stringify((() => {
+              const o = document.getElementById('mode')
+                .querySelector('option[value="americano_cpsat"]');
+              return o ? {ada: true, tersembunyi: o.hidden} : {ada: false};
+            })())"""))
+            if not ada["ada"]:
+                return "opsi tidak ada di daftar HTML"
+            if ada["tersembunyi"]:
+                # Sah kalau OR-Tools memang tidak terpasang di server.
+                return "opsi disembunyikan (server melaporkan OR-Tools tidak ada)"
+
+            def debug_untuk(mode, detik=None):
+                b.js(f"""(() => {{
+                  const sel = document.getElementById('mode');
+                  sel.value = {json.dumps(mode)};
+                  sel.dispatchEvent(new Event('change', {{bubbles: true}}));
+                  {f"document.getElementById('cpsat_seconds').value = '{detik}';"
+                   if detik else ""}
+                  document.getElementById('debug-out').value = '';
+                  document.getElementById('copy-debug').click();
+                }})(); true""")
+                b.wait_for("document.getElementById('debug-out').value"
+                           ".includes('percobaan=')",
+                           timeout=5, label=f"teks debug {mode}")
+                return b.js("""JSON.stringify({
+                  teks: document.getElementById('debug-out').value,
+                  blok: document.getElementById('cpsat-block').style.display,
+                })""")
+
+            eksak = json.loads(debug_untuk("americano_cpsat", 45))
+            assert eksak["blok"] == "", "kolom batas waktu tidak muncul"
+            assert "batas_solver=45s" in eksak["teks"], \
+                "batas waktu solver tidak ikut terkirim ke server"
+
+            biasa = json.loads(debug_untuk("americano"))
+            assert biasa["blok"] == "none", "kolom batas waktu tidak ikut sembunyi"
+            # Batas waktu solver tidak berarti apa-apa di mode lain, jadi ia juga
+            # tidak boleh muncul di info debug - laporan yang menyebut angka yang
+            # tidak dipakai membuat orang mengejar sebab yang salah.
+            assert "batas_solver" not in biasa["teks"], \
+                "batas solver ikut dilaporkan padahal modenya tidak memakainya"
+            return "blok muncul/hilang, batas 45s terkirim, Americano bersih"
+        check("Mode CP-SAT: sakelar & batas waktu", cpsat_toggle)
+
         # --- 13. tidak ada error JS sepanjang sesi ------------------------
         def no_errors():
             errs = b.js("window.__errs")

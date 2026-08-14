@@ -18,6 +18,7 @@ import random
 from dataclasses import dataclass, field, replace
 from itertools import combinations
 
+from . import cpsat
 from .capacity import (
     analyze,
     bisa_liput_semua,
@@ -27,6 +28,7 @@ from .capacity import (
 )
 from .factorization import mixed_pair_rounds, subset_pair_rounds
 from .models import (
+    CPSAT_MODES,
     MATCHUP_LABELS,
     MATCHUPS,
     TEAM_SHAPES,
@@ -1660,6 +1662,61 @@ def _zero_repeats_possible(players: list[Player], config: Config,
     return True
 
 
+def _catatan_cpsat(lapor, rep_pc: int, rep_oc: int) -> str:
+    """Satu kalimat tentang apa yang benar-benar dicapai solver.
+
+    "Terbukti optimal" dan "yang terbaik dalam 30 detik" adalah dua klaim yang
+    sangat berbeda, dan host berhak tahu yang mana yang sedang ia pegang - itu
+    satu-satunya cara ia bisa tahu kapan menaikkan batas waktu ada gunanya, dan
+    kapan justru setupnya yang harus diubah.
+
+    Catatan yang menyertai kegagalan (OR-Tools tidak terpasang, solver tidak
+    menemukan apa pun) sudah ditulis Hasil.catatan; yang di sini khusus soal
+    MUTU jadwal yang akhirnya dipakai.
+    """
+    if lapor.status in ("tidak jalan", "OR-Tools tidak terpasang"):
+        return ("Mode CP-SAT tidak bisa dijalankan, jadi jadwal ini murni hasil "
+                "mesin biasa - sama persis dengan mode Americano.")
+
+    # Angkanya disebut, bukan cuma kata "optimal": yang dibuktikan solver adalah
+    # bahwa DUA ANGKA INI tidak bisa lebih kecil lagi, dan host perlu melihat
+    # angka mana yang sedang dijamin.
+    capaian = (f"{rep_pc} pasang partner berulang dan {rep_oc} pasang lawan "
+               f"berulang")
+    if lapor.terbukti_optimal:
+        pokok = (
+            f"Mode CP-SAT: {capaian} - dan itu TERBUKTI tidak bisa lebih kecil "
+            f"lagi, dibuktikan dalam {lapor.detik:.1f} detik. Mengulang dengan "
+            f"seed lain atau menambah waktu tidak akan menurunkannya; yang "
+            f"tersisa cuma mengubah setupnya sendiri (jumlah court, ronde, "
+            f"atau peserta)."
+        )
+        if not lapor.membaik:
+            pokok += (" Mesin biasa ternyata sudah menyentuh batas itu; yang "
+                      "dibeli waktu tadi adalah kepastiannya.")
+        return pokok
+
+    celah = ""
+    if lapor.objective and lapor.batas_bawah is not None and lapor.objective > 0:
+        sisa = 100.0 * (lapor.objective - lapor.batas_bawah) / lapor.objective
+        celah = (f" Jarak ke batas bawah yang sudah terbukti masih "
+                 f"{max(0.0, sisa):.0f}%.")
+    if lapor.membaik:
+        return (
+            f"Mode CP-SAT: {capaian}. Solver berhasil memperbaiki jadwal mesin "
+            f"biasa dalam {lapor.detik:.1f} detik, tapi belum sempat MEMBUKTIKAN "
+            f"tidak ada yang lebih baik lagi.{celah} Naikkan batas waktunya "
+            f"kalau mau dikejar lebih jauh."
+        )
+    return (
+        f"Mode CP-SAT: {capaian}. Dalam {lapor.detik:.1f} detik solver tidak "
+        f"menemukan yang lebih baik daripada mesin biasa, dan juga belum sempat "
+        f"membuktikan bahwa memang tidak ada.{celah} Jadwal yang Anda pegang "
+        f"sama dengan hasil mode Americano - naikkan batas waktunya kalau mau "
+        f"kepastiannya."
+    )
+
+
 def _lebih_baik(a: Schedule, b: Schedule) -> bool:
     """Apakah jadwal a lebih layak dipakai daripada b?
 
@@ -1752,6 +1809,17 @@ def build_schedule(players: list[Player], config: Config,
     # Giliran ikut apa adanya, dan _lebih_baik memutus di antara yang
     # keunikannya setara.
     terbaik: Schedule | None = None
+    # Config percobaan yang sedang memimpin. Hanya dipakai mode CP-SAT, yang
+    # menjalankan solvernya SEKALI di atas pemenang - bukan di tiap percobaan.
+    # Membagi anggaran waktu solver ke beberapa percobaan selalu merugi: satu
+    # pencarian 30 detik dari titik awal terbaik mengalahkan tiga pencarian 10
+    # detik dari titik awal yang sebagian memang lebih buruk.
+    cfg_terbaik: Config | None = None
+    # Berapa bagian dari batang kemajuan yang dipegang rangkaian percobaan.
+    # Mode CP-SAT menambahkan satu putaran lagi setelah semuanya selesai, jadi
+    # kalau percobaan tetap memakai seluruh batang, batangnya penuh lalu mundur
+    # ke nol - dan host membaca itu sebagai jadwalnya diulang dari awal.
+    bagian = 0.5 if config.mode in CPSAT_MODES else 1.0
     # Berapa ronde yang dibutuhkan supaya semua peserta kebagian match pertama,
     # kalau tiap slot dipakai untuk orang yang berbeda. Dipakai sebagai syarat
     # berhenti lebih awal di bawah.
@@ -1771,14 +1839,14 @@ def build_schedule(players: list[Player], config: Config,
 
         def teruskan(frac, msg, k=k):
             if progress is not None:
-                awal = k / percobaan
+                awal = (k / percobaan) * bagian
                 label = msg if percobaan == 1 else f"[{k + 1}/{percobaan}] {msg}"
-                progress(awal + frac / percobaan, label)
+                progress(awal + frac / percobaan * bagian, label)
 
         sch = _build_once(players, cfg, teruskan if progress else None,
                           courts_per_round)
         if terbaik is None or _lebih_baik(sch, terbaik):
-            terbaik = sch
+            terbaik, cfg_terbaik = sch, cfg
         # Berhenti lebih awal hanya kalau tidak ada lagi yang bisa dikejar, dan
         # sejak giliran ikut dinilai itu berarti keunikan DAN putaran pertama
         # sama-sama sudah di batasnya. Tanpa syarat kedua, percobaan pertama
@@ -1801,6 +1869,20 @@ def build_schedule(players: list[Player], config: Config,
         if sch.stats.at_theoretical_floor and sch.stats.last_first_play <= putaran:
             break
 
+    # Mode CP-SAT: percobaan yang menang diulang sekali lagi, kali ini dengan
+    # solver eksak dipasang di ujungnya. Mengulang memang berarti membayar satu
+    # kali annealing lagi, tapi jauh lebih murah daripada menjalankan solver di
+    # SETIAP percobaan - dan lintasan acaknya deterministik dari seed, jadi
+    # pengulangan itu mendarat di jadwal yang sama persis sebelum solver mulai.
+    if config.mode in CPSAT_MODES and cfg_terbaik is not None:
+        def teruskan_akhir(frac, msg):
+            if progress is not None:
+                progress(bagian + frac * (1.0 - bagian), msg)
+
+        terbaik = _build_once(players, cfg_terbaik,
+                              teruskan_akhir if progress else None,
+                              courts_per_round, pakai_cpsat=True)
+
     terbaik.config.seed = config.seed
     terbaik.config.attempts = config.attempts
     if progress is not None:
@@ -1810,8 +1892,15 @@ def build_schedule(players: list[Player], config: Config,
 
 def _build_once(players: list[Player], config: Config,
                 progress=None,
-                courts_per_round: list[int] | None = None) -> Schedule:
-    """Satu kali penjadwalan utuh, dari validasi sampai jadwal jadi."""
+                courts_per_round: list[int] | None = None,
+                pakai_cpsat: bool = False) -> Schedule:
+    """Satu kali penjadwalan utuh, dari validasi sampai jadwal jadi.
+
+    `pakai_cpsat` memasang solver eksak di ujung rangkaian. Dipisah dari
+    config.mode karena build_schedule menjalankan beberapa percobaan lalu
+    menyalakan solver hanya untuk yang menang - jadi mode-nya sama sepanjang
+    percobaan, sakelarnya yang berbeda.
+    """
     def say(frac, msg):
         if progress is not None:
             progress(frac, msg)
@@ -2174,6 +2263,44 @@ def _build_once(players: list[Player], config: Config,
     say(0.94, "Merapikan sisa giliran")
     ratakan_giliran(st)
 
+    # --- Solver eksak (mode CP-SAT saja) ---------------------------------
+    # Dijalankan PALING AKHIR, dengan jadwal hasil seluruh tahap di atas sebagai
+    # titik awal. Urutan ini bukan selera - ia diukur.
+    #
+    # Versi pertama mode ini menyuruh CP-SAT menggantikan annealing dan mulai
+    # dari konstruksi greedy. Hasilnya kalah telak: pada 26 orang / 4 court,
+    # annealing sampai di NOL lawan berulang dalam 7 detik sementara CP-SAT
+    # masih di 13 pasang setelah 20 detik. Sebabnya bukan modelnya salah,
+    # melainkan bentuk masalahnya: penjadwalan ini sangat simetris dan ruang
+    # solusinya raksasa, dan di medan seperti itu pencarian lokal memang
+    # mengungguli cabang-dan-batas dengan selisih yang jauh.
+    #
+    # Yang benar-benar bisa disumbangkan solver eksak ada dua, dan dua-duanya
+    # butuh titik awal yang sudah bagus: memungut perbaikan terakhir yang tidak
+    # terjangkau gerakan acak, dan - ini yang tidak bisa dilakukan mesin mana
+    # pun selain dia - MEMBUKTIKAN bahwa tidak ada lagi yang tersisa.
+    if pakai_cpsat:
+        say(0.95, "Mencari sisa perbaikan dengan solver eksak (CP-SAT)")
+        # Penilai yang dipakai solver untuk memutuskan apakah hasilnya layak
+        # dipakai. Sengaja kunci yang sama persis dengan _lebih_baik(), yang
+        # memilih di antara percobaan: kalau dua tempat itu memakai ukuran yang
+        # berbeda, solver bisa menyerahkan jadwal yang menurut ukurannya sendiri
+        # menang tapi menurut host kalah.
+        def nilai(state):
+            s = _build_stats(state, local_players, total_rounds)
+            return (s.partner_repeat_pairs, s.opponent_repeat_pairs,
+                    -s.quality_score)
+
+        lapor = cpsat.optimize(
+            st, courts_r,
+            time_limit=config.cpsat_seconds,
+            workers=config.cpsat_workers,
+            nilai=nilai,
+            progress=(lambda f, m: say(0.95 + f * 0.03, m)) if progress else None,
+        )
+        notes.extend(lapor.catatan)
+        notes.append(_catatan_cpsat(lapor, st.rep_pc, st.rep_oc))
+
     # --- Rakit hasil -----------------------------------------------------
     pref_labels = {
         "women_only": "court isi 4 perempuan",
@@ -2381,6 +2508,8 @@ def _build_once(players: list[Player], config: Config,
         attempts=config.attempts,
         courts_after=aturan_court[0],
         courts_from_round=aturan_court[1],
+        cpsat_seconds=config.cpsat_seconds,
+        cpsat_workers=config.cpsat_workers,
     )
 
     # Format match yang dilarang tapi tetap muncul. Bisa terjadi kalau susunan
