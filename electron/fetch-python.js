@@ -1,9 +1,15 @@
-// Ambil Python "embeddable" untuk dibundel ke installer.
+// Ambil Python "embeddable" untuk dibundel ke installer, plus OR-Tools.
 //
-// Padelin tidak memakai satu pun paket pihak ketiga - seluruhnya pustaka
-// standar - jadi distribusi embeddable dari python.org sudah cukup apa adanya.
-// Tidak ada pip, tidak ada langkah pasang dependensi, dan pengguna akhir tidak
-// perlu memasang Python sama sekali.
+// Penjadwalnya sendiri seluruhnya pustaka standar, jadi distribusi embeddable
+// dari python.org sudah cukup apa adanya. Satu-satunya paket pihak ketiga
+// adalah OR-Tools, yang dipakai mode "Americano + solver eksak (CP-SAT)".
+//
+// OR-Tools tidak murah: bersama numpy, pandas, dan protobuf yang dibawanya, ia
+// menambah sekitar 200 MB ke folder Python yang tadinya 22 MB. Itu keputusan
+// yang disengaja - modenya harus tersedia untuk semua pengguna, bukan cuma
+// yang bisa memasang paket Python sendiri. Kalau suatu saat ukuran installer
+// jadi masalah, di sinilah tempat memutuskannya: hapus langkah pasangnya, dan
+// UI otomatis menyembunyikan modenya (lihat /api/presets -> "cpsat").
 //
 // Dijalankan otomatis oleh `npm run dist`. Kalau foldernya sudah ada, tidak
 // mengunduh ulang.
@@ -17,6 +23,10 @@ const { execFileSync } = require('child_process');
 
 const VERSI = process.argv[2] || '3.12.7';
 const ARCH = 'amd64';
+// Dipatok, bukan dibiarkan mengambang. Wheel OR-Tools memuat modul biner, dan
+// versi yang berbeda-beda antar build berarti bug yang muncul di installer
+// tertentu saja tidak bisa dilacak dari repo ini.
+const ORTOOLS = 'ortools==9.15.6755';
 const TUJUAN = path.join(__dirname, 'vendor', 'python');
 const ZIP = path.join(__dirname, 'vendor', `python-${VERSI}-embed-${ARCH}.zip`);
 const URL = `https://www.python.org/ftp/python/${VERSI}/python-${VERSI}-embed-${ARCH}.zip`;
@@ -50,22 +60,27 @@ async function main() {
       + 'atau biarkan aplikasi memakai Python sistem.');
     return;
   }
+  // Unduhannya yang dilewati kalau sudah ada, BUKAN seluruh sisanya. Dulu
+  // fungsi ini langsung return di sini, dan akibatnya baru terasa saat ada
+  // langkah baru: siapa pun yang sudah punya folder vendor dari build
+  // sebelumnya tidak akan pernah mendapat jalur modul yang diperbarui maupun
+  // OR-Tools, dan installer-nya keluar tanpa mode CP-SAT tanpa satu pun pesan.
+  // Dua langkah di bawah aman diulang - keduanya memeriksa keadaannya sendiri.
   if (fs.existsSync(path.join(TUJUAN, 'python.exe'))) {
     console.log('Python bundel sudah ada di', TUJUAN);
-    return;
+  } else {
+    fs.mkdirSync(path.dirname(ZIP), { recursive: true });
+    console.log('Mengunduh', URL);
+    await unduh(URL, ZIP);
+
+    fs.mkdirSync(TUJUAN, { recursive: true });
+    console.log('Membuka paket ke', TUJUAN);
+    // Expand-Archive ada di setiap Windows yang didukung; tidak menambah dependensi.
+    execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
+      `Expand-Archive -LiteralPath '${ZIP}' -DestinationPath '${TUJUAN}' -Force`],
+    { stdio: 'inherit' });
+    fs.unlinkSync(ZIP);
   }
-
-  fs.mkdirSync(path.dirname(ZIP), { recursive: true });
-  console.log('Mengunduh', URL);
-  await unduh(URL, ZIP);
-
-  fs.mkdirSync(TUJUAN, { recursive: true });
-  console.log('Membuka paket ke', TUJUAN);
-  // Expand-Archive ada di setiap Windows yang didukung; tidak menambah dependensi.
-  execFileSync('powershell', ['-NoProfile', '-NonInteractive', '-Command',
-    `Expand-Archive -LiteralPath '${ZIP}' -DestinationPath '${TUJUAN}' -Force`],
-  { stdio: 'inherit' });
-  fs.unlinkSync(ZIP);
 
   // Distribusi embeddable berjalan terisolasi: folder kerja TIDAK ikut dicari,
   // dan PYTHONPATH diabaikan. Jalur modulnya hanya diatur berkas ._pth.
@@ -82,15 +97,63 @@ async function main() {
   if (!pth) {
     throw new Error('Berkas ._pth tidak ditemukan; jalur modul tidak bisa diatur.');
   }
+  //
+  // 'Lib\\site-packages' ada di daftar karena OR-Tools dipasang ke situ di
+  // langkah berikutnya. Distribusi embeddable tidak punya folder itu secara
+  // bawaan dan tidak mencarinya sendiri.
   const nama = path.basename(pth, '._pth');
   fs.writeFileSync(path.join(TUJUAN, pth),
-    [`${nama}.zip`, '.', '..\\app.asar.unpacked', '', 'import site', ''].join('\n'));
+    [`${nama}.zip`, '.', 'Lib\\site-packages', '..\\app.asar.unpacked', '',
+      'import site', ''].join('\n'));
   console.log('Jalur modul disesuaikan di', pth);
 
-  console.log('Selesai. Ukuran bundel Python:',
-    Math.round(fs.readdirSync(TUJUAN)
-      .reduce((n, f) => n + fs.statSync(path.join(TUJUAN, f)).size, 0) / 1e6),
-    'MB');
+  pasangOrtools();
+
+  console.log('Selesai. Ukuran bundel Python:', ukuranMB(TUJUAN), 'MB');
+}
+
+/** Total ukuran satu folder, rekursif, dalam MB bulat. */
+function ukuranMB(dir) {
+  let n = 0;
+  for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+    const p = path.join(dir, e.name);
+    n += e.isDirectory() ? ukuranMB(p) * 1e6 : fs.statSync(p).size;
+  }
+  return Math.round(n / 1e6);
+}
+
+/**
+ * Pasang OR-Tools ke dalam Python embeddable.
+ *
+ * Distribusi embeddable tidak punya pip, jadi yang dipakai pip milik Python
+ * pembangun lewat `--target`. Tag-nya WAJIB ditulis eksplisit: tanpa itu pip
+ * memasang wheel yang cocok untuk Python pembangun, dan kalau versinya berbeda
+ * dari Python yang dibundel, modul .pyd-nya gagal dimuat di komputer pengguna -
+ * sebuah kegagalan yang tidak muncul sama sekali di mesin pembangun.
+ *
+ * Gagal keras kalau tidak berhasil. Melanjutkan diam-diam berarti installer
+ * keluar tanpa mode CP-SAT sementara semua tulisan di sekitarnya bilang mode itu
+ * ada, dan itu baru ketahuan setelah sampai di tangan pengguna.
+ */
+function pasangOrtools() {
+  const site = path.join(TUJUAN, 'Lib', 'site-packages');
+  if (fs.existsSync(path.join(site, 'ortools'))) {
+    console.log('OR-Tools sudah ada di', site);
+    return;
+  }
+  const [mayor, minor] = VERSI.split('.');
+  const py = process.env.PADELIN_PIP_PYTHON || 'python';
+  console.log(`Memasang OR-Tools untuk cp${mayor}${minor} win_amd64 (perlu unduhan ~100 MB)`);
+  execFileSync(py, [
+    '-m', 'pip', 'install', ORTOOLS,
+    '--target', site,
+    '--only-binary=:all:',
+    '--python-version', `${mayor}.${minor}`,
+    '--implementation', 'cp',
+    `--platform`, `win_${ARCH}`,
+    '--upgrade',
+  ], { stdio: 'inherit' });
+  console.log('OR-Tools terpasang. Ukuran site-packages:', ukuranMB(site), 'MB');
 }
 
 main().catch((err) => { console.error(err.message); process.exit(1); });

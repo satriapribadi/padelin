@@ -500,6 +500,7 @@ function buildPayload() {
     seed: +$('seed').value,
     effort: opt.effort,
     attempts: opt.attempts,
+    cpsat_seconds: +$('cpsat_seconds').value,
     segments: getSegments(),
     interleave_segments: $('interleave').checked,
     allowed_matchups: selectedMatchups(),
@@ -665,7 +666,26 @@ async function runAnalyze() {
 
 $('mode').addEventListener('change', () => {
   $('tier-row').style.display = $('mode').value === 'tiered' ? '' : 'none';
+  $('cpsat-block').style.display = $('mode').value === 'americano_cpsat' ? '' : 'none';
 });
+
+/**
+ * Tampilkan mode CP-SAT hanya kalau OR-Tools benar-benar ada di server.
+ *
+ * Modenya ditandai `hidden` di HTML dan baru dibuka di sini. Menawarkan mode
+ * yang pasti gagal berarti host mengisi seluruh formulir lebih dulu, menekan
+ * Generate, lalu baru diberi tahu - dan pada titik itu ia tidak punya cara tahu
+ * bahwa yang kurang adalah sebuah paket Python.
+ */
+function applyCpsatAvailability(ada) {
+  const opt = $('mode').querySelector('option[value="americano_cpsat"]');
+  if (!opt) return;
+  opt.hidden = !ada;
+  if (!ada && $('mode').value === 'americano_cpsat') {
+    $('mode').value = 'americano';
+    $('cpsat-block').style.display = 'none';
+  }
+}
 
 /**
  * Terjemahkan "sisa 1 court mulai ronde 11" jadi kalimat yang bisa diperiksa
@@ -1227,6 +1247,8 @@ function debugSnapshot() {
     // angka ini tidak bisa direproduksi.
     `seed=${payload.seed} effort=${payload.effort} `
       + `percobaan=${payload.attempts ?? 3} `
+      + (payload.mode === 'americano_cpsat'
+        ? `batas_solver=${payload.cpsat_seconds}s ` : '')
       + `selang_seling=${payload.interleave_segments}`,
     // Format yang diizinkan WAJIB ikut. Batasan ini menentukan siapa yang bisa
     // turun bareng, jadi ia mengubah kerataan main dan keunikan lawan sekaligus
@@ -1411,6 +1433,10 @@ function schedulingStamp() {
     // Percobaan ikut: ia mengubah jadwal yang keluar, jadi menggantinya membuat
     // yang di layar bukan lagi hasil dari setup yang tertulis.
     p.attempts,
+    // Batas waktu solver ikut, dan hanya berarti di mode CP-SAT. Di mode lain
+    // ia diabaikan penjadwal, jadi memasukkannya tanpa syarat akan membuat
+    // jadwal Americano dianggap basi cuma karena angka yang tidak dipakainya.
+    p.mode === 'americano_cpsat' ? p.cpsat_seconds : null,
     p.segments, p.interleave_segments, p.players, p.allowed_matchups,
   ]);
 }
@@ -1556,6 +1582,10 @@ function applyRequest(req) {
     if (pas) $('effort').value = pas.value;
   }
   $('tier-row').style.display = req.mode === 'tiered' ? '' : 'none';
+  $('cpsat-block').style.display = req.mode === 'americano_cpsat' ? '' : 'none';
+  // Acara lama tidak punya field ini; dipulihkan ke bawaan, bukan dibiarkan
+  // mewarisi angka dari acara yang dibuka sebelumnya.
+  $('cpsat_seconds').value = req.cpsat_seconds || 30;
   // Court berkurang. Acara lama tidak punya field ini, dan itu harus dipulihkan
   // sebagai "tidak dipakai" - bukan dibiarkan mewarisi centang dari acara yang
   // dibuka sebelumnya.
@@ -2275,6 +2305,7 @@ async function loadClubSummary() {
     $('preset-desc').textContent = presets.single ? presets.single.description : '';
     matchupTypes = d.matchups || [];
     renderMatchups();
+    applyCpsatAvailability(!!d.cpsat);
   } catch (e) { /* biarkan default */ }
 
   setupCombos();

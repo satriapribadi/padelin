@@ -6,10 +6,19 @@ Web app lokal untuk menyusun jadwal meet padel: Americano, pool rating, Mexicano
 pasangan tetap, dan format bersegmen (putra / putri / mixed) — lengkap dengan
 pembagian tugas wasit & ballboy, analisa biaya, laporan siap cetak, dan database.
 
-**Nol dependency.** Cukup Python 3.10+, tanpa `pip install` apa pun.
+**Nol dependency wajib.** Cukup Python 3.10+, tanpa `pip install` apa pun.
 
 ```bash
 python run.py
+```
+
+Satu-satunya paket opsional adalah [OR-Tools](https://developers.google.com/optimization),
+yang menyalakan mode *Americano + solver eksak (CP-SAT)*. Tanpa paket itu semua
+fitur lain berjalan penuh dan modenya tidak muncul di UI. Installer Windows
+sudah membundelnya; untuk menjalankan dari repo:
+
+```bash
+pip install ortools
 ```
 
 Lalu buka <http://127.0.0.1:8770> (browser terbuka otomatis).
@@ -68,6 +77,8 @@ daripada "1 orang mengulang 4×".
 
 **Format**
 - Americano, pool berdasarkan rating, Mexicano (tim diseimbangkan), pasangan tetap
+- **Americano + solver eksak (CP-SAT)** — aturan yang sama persis dengan
+  Americano, mesin pencarian yang berbeda. Lihat di bawah
 - Babak bersegmen, mis. `Putra 3 – Putri 3 – Mixed 6`. Preset bisa ditambahkan
   ke susunan yang ada atau menggantinya - memilihnya saja tidak mengubah apa pun.
   Tiap babak bisa digandakan dan diurutkan dengan diseret (atau panah atas/bawah
@@ -79,6 +90,51 @@ daripada "1 orang mengulang 4×".
 - Preferensi per peserta: partner tetap, atau minta court khusus 4 perempuan /
   4 laki-laki. Boleh sebagian — peserta lain tetap rotasi bebas
 - 4–26+ pemain, meet satu gender penuh juga didukung
+
+**Americano + solver eksak (CP-SAT)**
+Mode ini tidak mengganti apa pun soal aturan jadwal — yang berganti cuma mesin
+pencariannya, dan bahkan itu pun hanya sebagai tahap TAMBAHAN di ujung.
+
+Seluruh rangkaian biasa tetap jalan lebih dulu (konstruksi, annealing,
+pemerataan, perapian giliran). Hasilnya baru diserahkan ke solver eksak
+[OR-Tools CP-SAT](https://developers.google.com/optimization) sebagai titik
+awal. Dari situ solver mengerjakan dua hal yang tidak bisa dikerjakan pencarian
+acak:
+
+1. memungut sisa perbaikan yang tidak terjangkau gerakan lokal;
+2. **membuktikan** bahwa tidak ada lagi yang tersisa.
+
+Poin kedua itulah alasan mode ini ada. Annealing tidak pernah bisa mengatakan
+apakah "2 pasang lawan berulang" itu memang batasnya atau cuma sejauh yang
+ia temukan. Solver bisa — dan kalau ia berhasil, catatan jadwalnya berkata
+begitu apa adanya.
+
+Urutan ini hasil pengukuran, bukan selera. Versi pertama menyuruh CP-SAT
+menggantikan annealing dan mulai dari konstruksi greedy; hasilnya kalah telak
+(26 orang / 4 court: annealing nol lawan berulang dalam 7 detik, CP-SAT masih
+13 pasang setelah 20 detik). Penjadwalan ini sangat simetris dan ruang solusinya
+raksasa — medan yang memang menguntungkan pencarian lokal.
+
+Diukur pada 6 setup × 3 seed dengan batas 30 detik: **lebih baik di 2 kasus,
+lebih buruk di 0, sama di 16**. Lima kasus selesai TERBUKTI optimal, dan
+karenanya berhenti jauh sebelum batas waktunya (8 orang / 2 court: 1,4–1,7
+detik; 12 orang / 2 court: 8,9–12,7 detik, salah satunya sekaligus menurunkan
+lawan berulang dari 15 ke 14).
+
+Bacalah angka itu apa adanya: pada meet besar yang annealing-nya sudah menyentuh
+nol pengulangan, solver tidak punya apa pun untuk diperbaiki dan Anda cuma
+membayar waktu. Yang dibelinya di situ bukan jadwal yang lebih baik, melainkan
+jawaban atas "apakah ini memang sudah mentok" — dan itu jawaban yang sebelumnya
+tidak pernah tersedia. Bandingkan sendiri:
+
+```
+python tools/banding_cpsat.py --detik 30 --seed 1 2 3
+```
+
+Ongkosnya dua: Anda menunggu selama batas waktu yang dipilih, dan installer
+membengkak sekitar 200 MB karena OR-Tools membawa numpy, pandas, dan protobuf.
+Kalau OR-Tools tidak terpasang, modenya otomatis disembunyikan dari UI dan sisa
+aplikasi berjalan seperti biasa.
 
 **Court berkurang di tengah acara**
 Untuk sewa yang tidak sama panjang: 2 court dua jam, lalu 1 court sejam lagi.
@@ -165,6 +221,7 @@ padel_scheduler/
   capacity.py               analisa kelayakan + batas matematis
   factorization.py          1-factorization & Latin square
   optimizer.py              simulated annealing + batas keras
+  cpsat.py                  solver eksak OR-Tools (mode americano_cpsat)
   scheduler.py              perakit jadwal
   roles.py                  pembagian wasit & ballboy
   economics.py              biaya, margin, trade-off court
@@ -179,7 +236,8 @@ web/
   _selftest.html            halaman verifikasi visual grafik (bukan bagian app)
 tools/
   uitest.py                 uji interaksi UI lewat DevTools Protocol
-tests/                      62 tes unit
+  banding_cpsat.py          adu annealing lawan solver eksak pada setup yang sama
+tests/                      170 tes unit
 ```
 
 ## Aplikasi desktop (Electron)
@@ -291,8 +349,8 @@ menyalin foldernya tidak ikut membawa data siapa pun.
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 62 tes unit
-python tools/uitest.py                  # 22 uji interaksi di browser sungguhan
+python -m unittest discover -s tests    # 170 tes unit
+python tools/uitest.py                  # 27 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 ```
 

@@ -5,10 +5,20 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-Mode = Literal["americano", "tiered", "mexicano", "team"]
+Mode = Literal["americano", "tiered", "mexicano", "team", "americano_cpsat"]
 
 # Semua mode yang didukung generator.
-MODES: tuple[str, ...] = ("americano", "tiered", "mexicano", "team")
+#
+# "americano_cpsat" memakai aturan yang sama persis dengan "americano" - yang
+# berbeda cuma MESIN pencariannya: solver eksak CP-SAT (OR-Tools) menggantikan
+# simulated annealing. Sengaja dibuat sebagai mode tersendiri, bukan sakelar di
+# dalam americano, supaya jadwal yang sudah pernah dibuat host tetap keluar
+# persis sama seperti sebelumnya.
+MODES: tuple[str, ...] = ("americano", "tiered", "mexicano", "team",
+                          "americano_cpsat")
+
+# Mode yang dijalankan dengan solver eksak, bukan annealing.
+CPSAT_MODES: tuple[str, ...] = ("americano_cpsat",)
 
 # Aturan komposisi pemain dalam satu segmen jadwal.
 #   open        -> siapa saja boleh main & berpasangan dengan siapa saja
@@ -173,6 +183,16 @@ class Config:
     seed: int = 42
     # Iterasi optimasi. Lebih tinggi = lebih rapi, tapi lebih lama.
     effort: int = 30_000
+    # Mode CP-SAT: berapa detik solver boleh mencari, dan berapa thread yang
+    # dipakainya. Hanya dibaca oleh mode di CPSAT_MODES; mode lain mengabaikannya.
+    #
+    # Batas waktu adalah satu-satunya kendali yang benar-benar berarti di solver
+    # eksak. Tidak seperti `effort` yang berbanding lurus dengan mutu, di sini
+    # waktu tambahan bisa tidak membeli apa pun (jadwalnya sudah optimal) atau
+    # membeli banyak sekali (solver sedang menutup celah terakhir) - dan yang
+    # mana yang terjadi dilaporkan apa adanya di catatan jadwal.
+    cpsat_seconds: float = 30.0
+    cpsat_workers: int = 8
     # Berapa kali seluruh penjadwalan diulang dengan seed turunan, lalu diambil
     # yang terbaik. Berhenti lebih awal begitu ada percobaan yang mencapai batas
     # bawah teoretis - mencoba lagi setelah itu mustahil menolong.
