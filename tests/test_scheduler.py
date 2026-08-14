@@ -21,7 +21,9 @@ from padel_scheduler.economics import Economics, upgrade_analysis
 from padel_scheduler.capacity import (
     analyze,
     bisa_liput_semua,
+    court_kurang_terpakai,
     court_terpakai,
+    court_vs_babak,
     duduk_per_ronde,
     gender_tak_terpakai,
     ronde_membagi_rata,
@@ -1661,6 +1663,182 @@ class TestCapacity(unittest.TestCase):
         rep = analyze(8, courts=2, duration_minutes=10, round_minutes=12)
         self.assertEqual(rep.rounds, 0)
         self.assertEqual(rep.verdict, "error")
+
+
+class TestCourtMenganggurKarenaAturanBabak(unittest.TestCase):
+    """Court yang dibayar tapi tidak boleh dipakai siapa pun.
+
+    Dua roster nyata melaporkannya, dua-duanya 2 court dengan babak
+    putra/putri: 7L+5P dan 6L+4P. Di keduanya court kedua tidak terpakai satu
+    ronde pun sepanjang babak gender, sementara panel melaporkan courts_idle=0
+    karena hitungan "4 orang per court" memang terpenuhi.
+    """
+
+    GEN = [("men", 4), ("women", 3), ("mixed", 3)]
+    SAMA = ["LL-LL", "LP-LP", "PP-PP"]
+
+    def _rep(self, n, men, women, courts, segments):
+        return analyze(
+            n_players=n, courts=courts, duration_minutes=120,
+            round_minutes=10, warmup_minutes=0, rounds_override=10,
+            allowed_matchups=self.SAMA, segments=segments,
+            roster_men=men, roster_women=women)
+
+    def _peringatan(self, rep):
+        return [i for i in rep.issues
+                if i.title.startswith("Court menganggur di")]
+
+    def test_hitungan_per_babak(self):
+        # 6 putra cuma cukup untuk satu court; dua court menuntut delapan.
+        self.assertEqual(
+            court_kurang_terpakai(self.GEN, 6, 4, 10, 2),
+            [("men", 4, 1), ("women", 3, 1)])
+        # Babak mixed TIDAK ikut: min(2, 6//2, 4//2) = 2, jadi ia penuh.
+        self.assertEqual(court_kurang_terpakai([("mixed", 3)], 6, 4, 10, 2), [])
+        # Satu court: tidak ada yang kurang, berapa pun komposisinya.
+        self.assertEqual(court_kurang_terpakai(self.GEN, 6, 4, 10, 1), [])
+
+    def test_peringatan_muncul_untuk_kedua_roster_yang_melaporkan(self):
+        for n, men, women in ((12, 7, 5), (10, 6, 4)):
+            rep = self._rep(n, men, women, 2, self.GEN)
+            # Justru ini yang membuatnya tidak terlihat sebelumnya.
+            self.assertEqual(rep.courts_idle, 0)
+            hit = self._peringatan(rep)
+            self.assertEqual(len(hit), 1, f"{n} orang: {[i.title for i in rep.issues]}")
+            self.assertEqual(hit[0].severity, "warning")
+            self.assertIn("7 ronde", hit[0].title)
+            self.assertIn("Putra saja", hit[0].detail)
+            self.assertIn("Putri saja", hit[0].detail)
+            self.assertTrue(hit[0].fix, "peringatan tanpa jalan keluar")
+
+    def test_menyarankan_tim_satu_gender_hanya_kalau_benar_menolong(self):
+        # 6L+4P: same_gender mengisi 6//4 + 4//4 = 2 court, jadi sah disarankan.
+        fix = self._peringatan(self._rep(10, 6, 4, 2, self.GEN))[0].fix
+        self.assertIn("Tim satu gender", fix)
+        # 6L+2P: same_gender cuma 6//4 + 2//4 = 1 - tidak lebih baik daripada
+        # yang sekarang, jadi tidak boleh ditawarkan.
+        rep = self._rep(8, 6, 2, 2, [("men", 5), ("women", 5)])
+        hit = self._peringatan(rep)
+        if hit:
+            self.assertNotIn("Tim satu gender", hit[0].fix)
+
+    def test_tidak_menyuruh_lepas_court_yang_dipakai_babak_lain(self):
+        """Babak mixed memakai dua court walau babak putra/putri tidak."""
+        fix = self._peringatan(self._rep(10, 6, 4, 2, self.GEN))[0].fix
+        self.assertNotIn("lepas sisanya", fix)
+        # Tanpa babak mixed, tidak ada lagi yang memakai court kedua - barulah
+        # melepasnya jadi saran yang benar.
+        fix2 = self._peringatan(
+            self._rep(10, 6, 4, 2, [("men", 5), ("women", 5)]))[0].fix
+        self.assertIn("lepas sisanya", fix2)
+
+    def test_diam_kalau_tidak_ada_yang_terbuang(self):
+        senyap = [
+            (16, 8, 8, 2, self.GEN),                    # roster cukup
+            (10, 6, 4, 1, self.GEN),                    # satu court
+            (10, 6, 4, 2, [("same_gender", 7), ("mixed", 3)]),
+            (10, 6, 4, 2, []),                          # tanpa babak
+            (10, 0, 0, 2, self.GEN),                    # gender belum diisi
+            (11, 6, 4, 2, self.GEN),                    # gender tidak lengkap
+        ]
+        for n, men, women, courts, segs in senyap:
+            hit = self._peringatan(self._rep(n, men, women, courts, segs))
+            self.assertEqual(hit, [], f"{n}/{men}L/{women}P/{courts}c: {[i.title for i in hit]}")
+
+    def test_babak_bebas_tidak_dihitung_dua_kali(self):
+        """Kekurangan karena jumlah kepala sudah punya peringatannya sendiri."""
+        rep = self._rep(6, 3, 3, 3, [("open", 10)])
+        self.assertEqual(rep.courts_idle, 2)
+        self.assertTrue(any(i.title == "2 court menganggur" for i in rep.issues))
+        self.assertEqual(self._peringatan(rep), [])
+
+
+class TestCourtTerbuangPerRonde(unittest.TestCase):
+    """Court yang dilepas di tengah acara: jawabannya tergantung ronde.
+
+    Membandingkan tiap babak dengan jumlah court TERBANYAK yang disewa sudah
+    cukup selama court-nya sama sepanjang acara. Begitu court kedua dilepas di
+    ronde 6, babak yang menempati ronde 6-10 tidak membuang apa pun - dan
+    menuduhnya membuang court membuat host mengubah setup yang tidak bermasalah.
+    """
+
+    SAMA = ["LL-LL", "LP-LP", "PP-PP"]
+    # 6 putra + 4 putri, 2 court sampai ronde 5 lalu 1 court - setup yang
+    # dilaporkan host. men/women cuma sanggup 1 court, mixed sanggup 2.
+    GEN = [("men", 4), ("women", 3), ("mixed", 3)]
+    URUT = ["men"] * 4 + ["women"] * 3 + ["mixed"] * 3
+    PLAN = [2] * 5 + [1] * 5
+
+    def _rep(self, rules, plan, segments=None, interleave=False,
+             n=10, men=6, women=4):
+        return analyze(
+            n_players=n, courts=max(plan), duration_minutes=120,
+            round_minutes=10, warmup_minutes=0, rounds_override=len(plan),
+            allowed_matchups=self.SAMA, segments=segments or self.GEN,
+            roster_men=men, roster_women=women,
+            rules_per_round=rules, court_plan=plan,
+            interleave_segments=interleave)
+
+    def _hit(self, rep):
+        return [i for i in rep.issues
+                if i.title.startswith("Court menganggur di")]
+
+    def test_hitungan_per_ronde(self):
+        h = court_vs_babak(self.URUT, self.PLAN, 6, 4, 10)
+        # Ronde 1-4 putra di 2 court: 1 terpakai, 1 terbuang - empat kali.
+        # Ronde 5 putri di 2 court: 1 terbuang. Ronde 6-7 putri di 1 court:
+        # tidak ada yang terbuang, karena yang disewa memang cuma satu.
+        self.assertEqual(h["terbuang"], {"men": (4, 4), "women": (1, 1)})
+        self.assertEqual(h["total_terbuang"], 5)
+        # Mixed sanggup 2 court tapi kebagian ronde 8-10 yang court-nya sudah
+        # dilepas. Ini bukan pemborosan - ini petunjuk urutannya bisa ditukar.
+        self.assertEqual(h["potensi"], {"mixed": (3, 3)})
+
+    def test_ronde_di_zona_satu_court_tidak_dituduh(self):
+        """Babak terbatas yang seluruhnya di jam 1 court tidak membuang apa pun."""
+        rules = ["mixed"] * 3 + ["men"] * 4
+        plan = [2, 2, 2, 1, 1, 1, 1]
+        h = court_vs_babak(rules, plan, 6, 4, 10)
+        self.assertEqual(h["terbuang"], {})
+        self.assertEqual(h["total_terbuang"], 0)
+        self.assertEqual(
+            self._hit(self._rep(rules, plan,
+                                segments=[("mixed", 3), ("men", 4)])), [])
+
+    def test_angkanya_ikut_ronde_bukan_seluruh_babak(self):
+        # Per babak, 'Putri saja' 3 ronde semuanya terhitung kurang. Per ronde,
+        # hanya ronde 5 yang benar-benar menyewa court kedua.
+        judul = self._hit(self._rep(self.URUT, self.PLAN))[0].title
+        self.assertIn("5 ronde", judul)
+        # Tanpa court berkurang, ketujuh ronde memang menyewa dua court.
+        tetap = self._hit(self._rep(self.URUT, [2] * 10))[0].title
+        self.assertIn("7 ronde", tetap)
+
+    def test_menyarankan_urutan_kalau_ada_babak_yang_lebih_lapar_court(self):
+        fix = self._hit(self._rep(self.URUT, self.PLAN))[0].fix
+        self.assertIn("Mixed", fix)
+        self.assertIn("Selang-seling babak", fix)
+
+    def test_tidak_menyuruh_menyalakan_tuas_yang_sudah_menyala(self):
+        fix = self._hit(self._rep(self.URUT, self.PLAN, interleave=True))[0].fix
+        self.assertIn("Taruh babak itu lebih awal", fix)
+        self.assertNotIn("Nyalakan", fix)
+
+    def test_saran_urutan_hilang_kalau_sudah_tidak_menolong(self):
+        """Mixed di awal: tidak ada lagi potensi yang tersisa di jam 1 court."""
+        rules = ["mixed"] * 3 + ["men"] * 4 + ["women"] * 3
+        fix = self._hit(self._rep(rules, self.PLAN,
+                                  segments=[("mixed", 3), ("men", 4),
+                                            ("women", 3)]))[0].fix
+        self.assertNotIn("Selang-seling", fix)
+        self.assertNotIn("lebih awal", fix)
+
+    def test_panjang_tidak_sepadan_jatuh_ke_hitungan_per_babak(self):
+        """Dua daftar yang tidak sepadan tidak boleh dipasangkan diam-diam."""
+        rep = self._rep(self.URUT, [2] * 3)   # 10 aturan vs 3 ronde
+        # zip() akan memotong tanpa mengeluh; yang benar adalah mengabaikannya
+        # dan memakai perbandingan per babak, yaitu 7 ronde.
+        self.assertIn("7 ronde", self._hit(rep)[0].title)
 
 
 class TestRondeMembagiRata(unittest.TestCase):

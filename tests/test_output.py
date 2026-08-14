@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import json
 import re
+import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -20,6 +23,7 @@ from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_an
 from padel_scheduler.html_report import build_html
 from padel_scheduler.report import (
     batas_keunikan,
+    from_dict,
     kolam_partner,
     to_csv,
     to_dict,
@@ -27,6 +31,12 @@ from padel_scheduler.report import (
     to_text,
 )
 from padel_scheduler.roles import assign_roles
+
+# run.py hidup di akar repo, bukan di dalam paket. Diimpor karena keputusan
+# "pakai jadwal kiriman atau generate ulang" ada di sana, dan justru keputusan
+# itulah yang paling mahal kalau salah.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import run  # noqa: E402
 
 
 def make_schedule(n=26, courts=4, refs=1, balls=1):
@@ -612,6 +622,204 @@ class TestExports(unittest.TestCase):
                              f"{name}: jumlah B tidak sama dengan kolom Ballboy")
             self.assertEqual(letters.count("r"), max(0, idle),
                              f"{name}: jumlah R tidak sama dengan kolom Istirahat")
+
+
+class TestRehidrasiJadwal(unittest.TestCase):
+    """from_dict: satu-satunya jalan pulang dari JSON ke objek Schedule.
+
+    Sebelum ini Schedule hanya bisa lahir dari solver, sehingga laporan
+    menjalankan ulang seluruh optimasi cuma untuk mencetak jadwal yang sudah
+    ada di layar.
+    """
+
+    def test_roundtrip_lewat_json_menghasilkan_dict_yang_sama_persis(self):
+        # Lewat json.dumps/loads sungguhan, bukan dict Python langsung: justru
+        # perjalanan lewat JSON-lah yang merusak (kunci int jadi string, tuple
+        # jadi list), dan itu yang dialami payload laporan.
+        asli = to_dict(make_schedule(n=14, courts=2))
+        pulang = to_dict(from_dict(json.loads(json.dumps(asli))))
+        self.assertEqual(pulang, asli)
+
+    def test_segmen_dan_label_pool_ikut_pulang(self):
+        # court_labels dibongkar to_dict jadi field 'pool' di tiap match; kalau
+        # perakitan baliknya lupa, label babak hilang diam-diam dari laporan.
+        players = [Player(id=i, name=f"Pemain {i + 1}", rating=3.0,
+                          gender="M" if i < 8 else "F") for i in range(16)]
+        cfg = Config(courts=2, duration_minutes=120, mode="tiered",
+                     tier_count=2, effort=4000,
+                     segments=[Segment(label="Putra", rounds=2, rule="men"),
+                               Segment(label="Putri", rounds=2, rule="women")])
+        asli = to_dict(build_schedule(players, cfg))
+        sch = from_dict(json.loads(json.dumps(asli)))
+
+        self.assertEqual([s.label for s in sch.config.segments],
+                         ["Putra", "Putri"])
+        self.assertEqual([r.segment for r in sch.rounds],
+                         [r["segment"] for r in asli["rounds"]])
+        label_asli = [m["pool"] for r in asli["rounds"] for m in r["matches"]]
+        label_pulang = [r.court_labels.get(m.court, "")
+                        for r in sch.rounds for m in r.matches]
+        self.assertEqual(label_pulang, label_asli)
+
+    def test_kunci_statistik_kembali_menjadi_int(self):
+        """Bug yang tidak berteriak: kolom rekap jadi nol semua.
+
+        st.plays_per_player.get(p.id) memakai id berupa int. Setelah lewat JSON
+        kuncinya string, jadi setiap pencarian meleset - laporan tetap terbit,
+        hanya saja angka Main/Duduk/Tugas semua orang nol.
+        """
+        sch = make_schedule(n=14, courts=2)
+        pulang = from_dict(json.loads(json.dumps(to_dict(sch))))
+
+        for kunci in ("plays_per_player", "byes_per_player", "roles_per_player"):
+            dikembalikan = getattr(pulang.stats, kunci)
+            self.assertTrue(all(isinstance(k, int) for k in dikembalikan),
+                            f"{kunci} masih berkunci string")
+        self.assertEqual(pulang.stats.plays_per_player,
+                         sch.stats.plays_per_player)
+
+        # Sampai ke laporannya. Uji paling tegas yang bisa ditulis di sini:
+        # laporan dari jadwal yang direhidrasi harus sama BYTE PER BYTE dengan
+        # laporan dari jadwal aslinya. Kalau kuncinya meleset, rekap per pemain
+        # berubah jadi nol semua dan perbandingan ini gagal.
+        self.assertGreater(sum(sch.stats.plays_per_player.values()), 0)
+        self.assertEqual(build_html(pulang, title="Uji"),
+                         build_html(sch, title="Uji"))
+
+    def test_data_dari_versi_lain_tidak_mematikan_rehidrasi(self):
+        # Field asing (versi lebih baru) dan field turunan yang memang tidak
+        # dipakai saat merakit balik harus diabaikan, bukan bikin TypeError.
+        d = json.loads(json.dumps(to_dict(make_schedule(n=12, courts=2))))
+        d["players"][0]["hobi_baru"] = "padel"
+        d["config"]["fitur_masa_depan"] = True
+        d["stats"]["metrik_baru"] = 1.23
+        sch = from_dict(d)
+        self.assertEqual(len(sch.players), 12)
+        self.assertFalse(hasattr(sch.players[0], "hobi_baru"))
+
+    def test_jadwal_rusak_ditolak_bukan_ditebak(self):
+        d = json.loads(json.dumps(to_dict(make_schedule(n=12, courts=2))))
+        del d["stats"]["quality_score"]
+        with self.assertRaises(TypeError):
+            from_dict(d)
+
+
+def susunan(sch):
+    """Bentuk jadwal yang bisa dibandingkan: siapa lawan siapa, di court mana."""
+    return [[(m.court, tuple(m.team_a), tuple(m.team_b)) for m in r.matches]
+            for r in sch.rounds]
+
+
+class TestLaporanMemakaiJadwalYangTampil(unittest.TestCase):
+    """Laporan harus memuat jadwal yang sudah diumumkan, bukan hasil baru."""
+
+    def _payload(self, sch, seed_setup):
+        return {
+            "title": "Uji", "courts": 2, "duration_minutes": 120,
+            "mode": "americano", "seed": seed_setup, "effort": 4000,
+            "players": [{"id": p.id, "name": p.name, "rating": p.rating,
+                         "gender": p.gender} for p in sch.players],
+            "schedule": json.loads(json.dumps(to_dict(sch))),
+        }
+
+    def test_yang_dipakai_jadwal_kiriman_bukan_generate_ulang_dari_setup(self):
+        # Kasus yang tidak bisa lolos kebetulan, meniru uji commit 7f6af2c:
+        # setup menyebut seed 1, tapi yang dikirim jadwal seed 99.
+        players = [Player(id=i, name=f"Pemain {i + 1}", rating=2 + (i % 5) * 0.5)
+                   for i in range(12)]
+
+        def bikin(seed):
+            return build_schedule(players, Config(
+                courts=2, duration_minutes=120, mode="americano",
+                effort=4000, seed=seed))
+
+        sch99, sch1 = bikin(99), bikin(1)
+        self.assertNotEqual(susunan(sch99), susunan(sch1),
+                            "kedua seed kebetulan sama - uji ini jadi tumpul")
+
+        dipakai = run._schedule_supplied(self._payload(sch99, seed_setup=1))
+        self.assertIsNotNone(dipakai)
+        self.assertEqual(susunan(dipakai), susunan(sch99))
+
+    def test_tanpa_jadwal_kiriman_tetap_jatuh_ke_generate_ulang(self):
+        # Pemanggil API lama (dan tombol dari versi web yang belum diperbarui)
+        # tidak boleh rusak.
+        sch = make_schedule(n=12, courts=2)
+        p = self._payload(sch, seed_setup=1)
+        del p["schedule"]
+        self.assertIsNone(run._schedule_supplied(p))
+
+    def test_jadwal_kiriman_yang_rusak_jatuh_ke_generate_ulang(self):
+        sch = make_schedule(n=12, courts=2)
+        p = self._payload(sch, seed_setup=1)
+        del p["schedule"]["stats"]["quality_score"]
+        self.assertIsNone(run._schedule_supplied(p))
+
+
+class TestLogServer(unittest.TestCase):
+    """Penyaring log: yang berarti lewat, lalu lintas biasa tidak.
+
+    Dua-duanya penting. Log yang bisu membuat laporan blank tidak meninggalkan
+    jejak sama sekali; log yang mencatat segalanya juga sama buruknya, karena
+    Electron cuma menyimpan 40 baris terakhir untuk ditempelkan ke dialog kalau
+    server mati - dan lalu lintas biasa akan mendorong keluar baris yang
+    menjelaskan kematiannya.
+    """
+
+    def _handler(self, command="GET", path="/", lama=0.0):
+        # Tanpa socket: yang diuji penyaringnya, bukan HTTP-nya.
+        h = run.Handler.__new__(run.Handler)
+        h.command = command
+        h.path = path
+        h._mulai = time.perf_counter() - lama
+        return h
+
+    def _tercatat(self, fn):
+        buf = io.StringIO()
+        asli, sys.stderr = sys.stderr, buf
+        try:
+            fn()
+        finally:
+            sys.stderr = asli
+        return buf.getvalue()
+
+    def test_lalu_lintas_biasa_tidak_dicatat(self):
+        for path in ("/", "/web/app.js", "/api/presets", "/api/analyze"):
+            h = self._handler(path=path)
+            keluar = self._tercatat(lambda: h.log_request(200, 1234))
+            self.assertEqual(keluar, "", f"{path} membanjiri log")
+
+    def test_request_gagal_dicatat(self):
+        h = self._handler(path="/api/tidak-ada")
+        keluar = self._tercatat(lambda: h.log_request(404, 0))
+        self.assertIn("/api/tidak-ada", keluar)
+        self.assertIn("404", keluar)
+
+    def test_request_lambat_dicatat_walau_berhasil(self):
+        """Gejala 'aplikasinya menggantung' harus meninggalkan jejak."""
+        h = self._handler("POST", "/api/report", lama=12.0)
+        keluar = self._tercatat(lambda: h.log_request(200, 9999))
+        self.assertIn("/api/report", keluar)
+        self.assertIn("12.0 detik", keluar)
+
+    def test_kegagalan_berstatus_200_tetap_dicatat(self):
+        """Justru kasus kemarin: laporan gagal dikirim sebagai HTML 200.
+
+        Tidak ada status >= 400 yang bisa ditangkap log_request, jadi tanpa
+        log_gagal seluruh jalur laporan bisu.
+        """
+        h = self._handler("POST", "/api/report")
+        keluar = self._tercatat(
+            lambda: h.log_gagal(ValueError("Butuh minimal 4 pemain, sekarang 0.")))
+        self.assertIn("/api/report", keluar)
+        self.assertIn("ValueError", keluar)
+        self.assertIn("Butuh minimal 4 pemain", keluar)
+
+    def test_send_error_tidak_tercatat_dua_kali(self):
+        # send_error() memanggil log_error() lalu send_response() -> log_request().
+        # Yang dibungkam log_error, jadi satu kejadian tetap satu baris.
+        h = self._handler(path="/api/tidak-ada")
+        self.assertEqual(self._tercatat(lambda: h.log_error("code %d", 404)), "")
 
 
 class TestStorage(unittest.TestCase):

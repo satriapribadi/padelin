@@ -28,6 +28,17 @@ CPSAT_MODES: tuple[str, ...] = ("americano_cpsat",)
 #   mixed       -> tiap tim wajib 1 putra + 1 putri
 SEGMENT_RULES: tuple[str, ...] = ("open", "men", "women", "same_gender", "mixed")
 
+# Nama aturan babak untuk pesan yang dibaca host. Kata-katanya HARUS sama dengan
+# dropdown di web/app.js (SEG_RULES): peringatan yang menyebut "Putra saja"
+# untuk aturan yang di layar tertulis lain memaksa host menerka maksudnya.
+SEGMENT_RULE_LABELS: dict[str, str] = {
+    "open": "Bebas",
+    "men": "Putra saja",
+    "women": "Putri saja",
+    "same_gender": "Tim satu gender",
+    "mixed": "Mixed (1L+1P)",
+}
+
 # Susunan gender satu tim: LL = dua putra, PP = dua putri, LP = campur.
 TEAM_SHAPES: tuple[str, ...] = ("LL", "LP", "PP")
 

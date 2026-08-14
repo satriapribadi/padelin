@@ -20,7 +20,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from .models import MATCHUP_LABELS, MATCHUPS
+from .models import MATCHUP_LABELS, MATCHUPS, SEGMENT_RULE_LABELS
 
 # Ambang "nyaman": pemain duduk maksimal ~25% dari total ronde.
 COMFORT_REST_RATIO = 0.25
@@ -556,6 +556,84 @@ def court_terpakai(rule: str, men: int, women: int, n_players: int,
     return min(courts, n_players // 4)   # open
 
 
+def court_kurang_terpakai(
+    segments: list[tuple[str, int]] | None,
+    men: int, women: int, n_players: int, courts: int,
+) -> list[tuple[str, int, int]]:
+    """Babak yang tidak sanggup mengisi seluruh court yang disewa.
+
+    Pertanyaan ini BEDA dari courts_idle di analyze(), dan itulah sebabnya ia
+    ada. courts_idle menghitung kepala: 4 orang per court, jadi 10 pemain di 2
+    court dinyatakan aman. Padahal aturan babak menentukan siapa yang BERHAK
+    turun, dan itu bisa jauh lebih sedikit - babak "Putra saja" dengan 6 putra
+    cuma bisa mengisi satu court, berapa pun yang disewa.
+
+    Diukur pada dua roster nyata, dua-duanya 2 court dengan babak putra/putri:
+    7L+5P dan 6L+4P. Di keduanya court kedua tidak terpakai satu ronde pun
+    sepanjang babak gender - pada yang kedua itu berarti 5 dari 10 slot court
+    jam pertama terbuang - dan tidak ada satu angka pun di panel yang
+    menyebutkannya, karena courts_idle memang melaporkan 0.
+
+    Mengembalikan (rule, ronde, court_yang_bisa_terisi) per babak yang kurang,
+    urut seperti babaknya. Kosong berarti semua babak bisa mengisi penuh, atau
+    tidak ada babak sama sekali.
+    """
+    hasil: list[tuple[str, int, int]] = []
+    for rule, ronde in (segments or []):
+        if ronde <= 0:
+            continue
+        bisa = court_terpakai(rule, men, women, n_players, courts)
+        if bisa < courts:
+            hasil.append((rule, ronde, bisa))
+    return hasil
+
+
+def court_vs_babak(
+    rules_per_round: list[str], court_plan: list[int],
+    men: int, women: int, n_players: int,
+) -> dict[str, dict[str, tuple[int, int]] | int]:
+    """Court yang disewa vs yang benar-benar bisa terisi, ronde demi ronde.
+
+    court_kurang_terpakai() membandingkan tiap babak dengan jumlah court
+    TERBANYAK yang disewa, dan itu cukup selama court-nya sama sepanjang acara.
+    Begitu host melepas court di tengah jalan, jawabannya tergantung babak itu
+    kebetulan menempati ronde yang mana - dan menuduh ronde yang salah lebih
+    buruk daripada diam, karena host lalu mengubah setup yang tidak bermasalah.
+
+    Dua angka yang dikembalikan menjawab dua pertanyaan berbeda:
+
+      terbuang  aturan babak ini tidak sanggup mengisi court yang disewa di
+                ronde yang ia tempati. Ini uang yang sudah keluar.
+      potensi   aturan babak ini SANGGUP memakai lebih banyak court daripada
+                yang disewa di ronde yang ia tempati. Ini bukan pemborosan -
+                ini petunjuk bahwa urutannya bisa ditukar. Babak mixed yang
+                sanggup dua court sering terjadwal justru di jam yang court-nya
+                sudah dilepas, sementara jam dua court diisi babak yang cuma
+                sanggup satu.
+
+    Keduanya dipetakan per aturan: rule -> (jumlah ronde, jumlah slot court).
+    """
+    maks = max(court_plan) if court_plan else 0
+    terbuang: dict[str, list[int]] = {}
+    potensi: dict[str, list[int]] = {}
+    for rule, sewa in zip(rules_per_round, court_plan):
+        bisa = court_terpakai(rule, men, women, n_players, sewa)
+        sanggup = court_terpakai(rule, men, women, n_players, maks)
+        if bisa < sewa:
+            e = terbuang.setdefault(rule, [0, 0])
+            e[0] += 1
+            e[1] += sewa - bisa
+        if sanggup > bisa:
+            e = potensi.setdefault(rule, [0, 0])
+            e[0] += 1
+            e[1] += sanggup - bisa
+    return {
+        "terbuang": {r: (v[0], v[1]) for r, v in terbuang.items()},
+        "potensi": {r: (v[0], v[1]) for r, v in potensi.items()},
+        "total_terbuang": sum(v[1] for v in terbuang.values()),
+    }
+
+
 def duduk_per_ronde(
     n_players: int, men: int, women: int, courts: int,
     segments: list[tuple[str, int]] | None,
@@ -665,6 +743,16 @@ def analyze(
     roster_men: int | None = None,
     roster_women: int | None = None,
     matches_per_round: list[int] | None = None,
+    # Aturan babak yang berjalan di tiap ronde, dan court yang disewa di tiap
+    # ronde. Keduanya opsional dan hanya berarti berpasangan: tanpa ini,
+    # perbandingan court jatuh ke tingkat babak, yang benar selama jumlah
+    # court-nya sama sepanjang acara.
+    rules_per_round: list[str] | None = None,
+    court_plan: list[int] | None = None,
+    # Hanya untuk menyusun saran: tuas yang sudah menyala tidak boleh disuruh
+    # dinyalakan. Saran yang menyebut langkah yang sudah dikerjakan host membuat
+    # seluruh peringatan terbaca seperti tidak membaca setupnya.
+    interleave_segments: bool = False,
 ) -> CapacityReport:
     """Hitung kapasitas + batas matematis + rekomendasi konkret.
 
@@ -873,6 +961,122 @@ def analyze(
                 f"{4 * courts - n_players} pemain lagi.",
             )
         )
+
+    # Court menganggur karena ATURAN BABAK, bukan karena jumlah kepala.
+    #
+    # Peringatan di atas berhenti di "4 orang per court", dan justru karena itu
+    # ia diam pada kasus yang paling mahal: host menyewa 2 court, seluruh babak
+    # gender cuma sanggup mengisi 1, dan court kedua dibayar penuh tanpa dipakai
+    # satu ronde pun. courts_idle melaporkan 0 di situ, sehingga panel terlihat
+    # aman. Lihat court_kurang_terpakai() untuk dua roster yang mengalaminya.
+    m_, w_ = roster_men or 0, roster_women or 0
+    if segments and n_players >= 4 and m_ + w_ == n_players:
+        # Babak "Bebas" dibuang di kedua jalur: kekurangannya murni soal jumlah
+        # kepala, dan itu sudah dikatakan peringatan di atas. Menyebutnya lagi di
+        # sini membuat satu keadaan muncul sebagai dua masalah berbeda.
+        #
+        # Kalau pemanggil tahu babak mana berjalan di ronde mana DAN court mana
+        # yang disewa di ronde itu, hitungannya per ronde - satu-satunya cara
+        # menjawab benar ketika court dilepas di tengah acara. Kalau tidak,
+        # perbandingannya jatuh ke tingkat babak, yang tetap benar selama jumlah
+        # court-nya sama sepanjang acara.
+        pakai_plan = bool(rules_per_round and court_plan
+                          and len(rules_per_round) == len(court_plan))
+        potensi: dict[str, tuple[int, int]] = {}
+        if pakai_plan:
+            hitung = court_vs_babak(rules_per_round, court_plan,
+                                    m_, w_, n_players)
+            terbuang = {r: v for r, v in hitung["terbuang"].items()
+                        if r != "open"}
+            potensi = {r: v for r, v in hitung["potensi"].items()
+                       if r != "open"}
+            maks_sewa = max(court_plan)
+            ronde_kena = sum(ron for ron, _ in terbuang.values())
+            rules_kurang = list(terbuang)
+            rincian = "; ".join(
+                f"'{SEGMENT_RULE_LABELS.get(r, r)}' {ron} ronde, {slot} slot "
+                f"court" for r, (ron, slot) in terbuang.items())
+        else:
+            kurang = [k for k in court_kurang_terpakai(
+                segments, m_, w_, n_players, courts) if k[0] != "open"]
+            maks_sewa = courts
+            ronde_kena = sum(ron for _, ron, _ in kurang)
+            rules_kurang = [r for r, _, _ in kurang]
+            rincian = "; ".join(
+                f"'{SEGMENT_RULE_LABELS.get(r, r)}' {ron} ronde -> "
+                f"{bisa} dari {courts} court"
+                for r, ron, bisa in kurang)
+
+        if ronde_kena:
+            # Jalan keluarnya bisa berlawanan arah - pakai court yang sudah
+            # dibayar, atau berhenti membayarnya - jadi semuanya ditulis sebagai
+            # pilihan bersyarat, bukan daftar perintah. Host yang membaca "pakai
+            # Tim satu gender" lalu "sewa 1 court saja" berurutan tanpa syaratnya
+            # akan menyangka keduanya harus dikerjakan sekaligus.
+            #
+            # Tiap saran diuji dengan hitungan yang sama, tidak diandaikan
+            # menolong: saran yang tidak benar-benar memperbaiki apa pun lebih
+            # buruk daripada tidak ada saran.
+            obat: list[str] = []
+
+            # Disebut PERTAMA kalau ada: ini satu-satunya jalan keluar yang tidak
+            # menuntut host mengubah format acaranya maupun anggarannya - cuma
+            # urutan babaknya. Terjadi karena babak yang paling lapar court
+            # justru sering ditaruh di akhir, tepat setelah court-nya dilepas.
+            if potensi:
+                nama = ", ".join(f"'{SEGMENT_RULE_LABELS.get(r, r)}'"
+                                 for r in potensi)
+                ronde_p = sum(ron for ron, _ in potensi.values())
+                langkah = ("Taruh babak itu lebih awal" if interleave_segments
+                           else "Nyalakan 'Selang-seling babak', atau taruh "
+                                "babak itu lebih awal")
+                obat.append(
+                    f"Babak {nama} justru sanggup memakai lebih banyak court, "
+                    f"tapi terjadwal di {ronde_p} ronde yang court-nya sudah "
+                    f"dilepas. {langkah} supaya ia kebagian jam yang court-nya "
+                    f"masih penuh")
+
+            gender_kurang = [court_terpakai(r, m_, w_, n_players, maks_sewa)
+                             for r in rules_kurang if r in ("men", "women")]
+            if gender_kurang:
+                sg = court_terpakai("same_gender", m_, w_, n_players, maks_sewa)
+                # Klaim "court putra DAN court putri sekaligus" hanya benar kalau
+                # dua-duanya sanggup memenuhi satu court sendiri. Tanpa syarat
+                # ini, roster 6 putra + 2 putri ditawari aturan yang tidak
+                # mengubah apa pun untuk kedua putri itu - mereka tetap tidak
+                # pernah turun, karena satu court menuntut empat orang.
+                if (sg >= 2 and m_ // 4 >= 1 and w_ // 4 >= 1
+                        and sg > min(gender_kurang)):
+                    obat.append(
+                        f"Kalau ingin {sg} court terpakai bersamaan, pakai "
+                        f"aturan 'Tim satu gender': court putra dan court putri "
+                        f"berjalan sekaligus, dan selama format LL-PP tidak "
+                        f"diizinkan tim putra tetap tidak pernah melawan tim "
+                        f"putri")
+            # Menyarankan sewa lebih sedikit hanya sah kalau TIDAK ADA babak yang
+            # sanggup memakai lebih. Babak mixed sering bisa mengisi dua court
+            # padahal babak putra/putri di acara yang sama tidak - menyuruh host
+            # melepas court kedua di situ membuang court yang sebenarnya dipakai.
+            semua = [court_terpakai(r, m_, w_, n_players, maks_sewa)
+                     for r, ron in segments if ron > 0]
+            if semua and max(semua) < maks_sewa:
+                obat.append(
+                    f"Kalau {max(semua)} court memang cukup, lepas sisanya - "
+                    f"tidak ada babak di acara ini yang sanggup mengisi lebih, "
+                    f"jadi selebihnya murni biaya")
+            issues.append(
+                Issue(
+                    "warning",
+                    f"Court menganggur di {ronde_kena} ronde",
+                    f"Aturan babak menentukan siapa yang berhak turun, dan itu "
+                    f"bisa lebih sedikit daripada yang sanggup mengisi court "
+                    f"yang disewa ({rincian}). Court sisanya tetap dibayar, "
+                    f"tapi tidak ada yang boleh memakainya.",
+                    ". ".join(obat or [
+                        "Tambah peserta pada gender yang paling sedikit, atau "
+                        "kurangi jumlah court yang disewa"]) + ".",
+                )
+            )
 
     if not opponent_blind_ok and n_players >= 4:
         excess = effective_rounds - max_opponent_rounds

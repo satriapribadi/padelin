@@ -1391,7 +1391,11 @@ $('open-html').onclick = () => {
   form.method = 'POST'; form.action = '/api/report'; form.target = '_blank';
   const input = el('input');
   input.type = 'hidden'; input.name = 'payload';
-  input.value = JSON.stringify(buildPayload());
+  // Jadwal yang tampil ikut dikirim, sama seperti saat menyimpan. Dulu yang
+  // dikirim cuma setup, jadi server menyusun ulang seluruh jadwal sebelum
+  // mengirim satu byte pun - dan jendela laporan sudah telanjur terbuka putih
+  // selama itu. Host yang menekan Ctrl+P di situ mencetak halaman kosong.
+  input.value = JSON.stringify({ ...buildPayload(), schedule });
   form.appendChild(input);
   document.body.appendChild(form);
   form.submit();

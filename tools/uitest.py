@@ -873,6 +873,45 @@ def main() -> int:
             return "blok muncul/hilang, batas 45s terkirim, Americano bersih"
         check("Mode CP-SAT: sakelar & batas waktu", cpsat_toggle)
 
+        # --- 12d. tombol Buka laporan membawa jadwal yang tampil ----------
+        # Dulu yang dikirim cuma setup, jadi server menyusun ulang seluruh
+        # jadwal sebelum mengirim satu byte pun - sementara jendela laporan
+        # sudah telanjur terbuka putih. Host yang menekan Ctrl+P di situ
+        # mencetak halaman kosong, dan tidak ada log apa pun yang menjelaskan.
+        #
+        # submit() ditambal supaya harness tidak benar-benar membuka tab baru;
+        # yang diperiksa isi payload-nya, karena di situlah bug-nya hidup.
+        def laporan_bawa_jadwal():
+            hasil = b.js("""JSON.stringify((() => {
+              const asli = HTMLFormElement.prototype.submit;
+              let terkirim = null;
+              HTMLFormElement.prototype.submit = function () {
+                const f = this.querySelector('input[name=payload]');
+                terkirim = f ? f.value : null;
+              };
+              try { document.getElementById('open-html').click(); }
+              finally { HTMLFormElement.prototype.submit = asli; }
+              if (!terkirim) return {ada: false};
+              const p = JSON.parse(terkirim);
+              const s = p.schedule || {};
+              return {
+                ada: true,
+                ronde: (s.rounds || []).length,
+                pemain: (s.players || []).length,
+                stats: !!s.stats,
+                kb: Math.round(terkirim.length / 1024),
+              };
+            })())""")
+            d = json.loads(hasil)
+            assert d["ada"], "form laporan tidak pernah disubmit"
+            assert d["ronde"] > 0, \
+                "jadwal tidak ikut dikirim - server akan generate ulang"
+            assert d["stats"], \
+                "statistik tidak ikut - rekap per pemain di laporan jadi nol"
+            return (f"{d['ronde']} ronde + {d['pemain']} pemain ikut terkirim "
+                    f"({d['kb']} KB)")
+        check("Buka laporan membawa jadwal yang tampil", laporan_bawa_jadwal)
+
         # --- 13. tidak ada error JS sepanjang sesi ------------------------
         def no_errors():
             errs = b.js("window.__errs")

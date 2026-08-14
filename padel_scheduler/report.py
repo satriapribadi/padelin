@@ -4,10 +4,21 @@ from __future__ import annotations
 
 import csv
 import io
-from dataclasses import asdict
+from dataclasses import asdict, fields
 from datetime import date
 
-from .models import MATCHUPS, Schedule
+from .models import (
+    MATCHUPS,
+    Config,
+    Match,
+    Player,
+    PreferenceViolation,
+    Round,
+    RoleAssignment,
+    Schedule,
+    ScheduleStats,
+    Segment,
+)
 
 HARI = ("Senin", "Selasa", "Rabu", "Kamis", "Jumat", "Sabtu", "Minggu")
 BULAN = ("Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli",
@@ -416,3 +427,102 @@ def to_dict(schedule: Schedule) -> dict:
             for v in schedule.violations
         ],
     }
+
+
+def _milik(cls, raw: dict | None) -> dict:
+    """Hanya field yang memang dimiliki dataclass-nya.
+
+    Jadwal tersimpan bisa datang dari versi lain: membawa field yang sudah
+    dihapus, atau belum punya field yang baru ditambahkan. Menyaringnya di sini
+    membuat acara lama tetap bisa dibuka alih-alih mati karena satu kunci asing.
+    """
+    nama = {f.name for f in fields(cls)}
+    return {k: v for k, v in (raw or {}).items() if k in nama}
+
+
+def _kunci_int(raw: dict | None) -> dict:
+    """Kunci dict yang sebenarnya id pemain, dikembalikan menjadi int.
+
+    JSON tidak punya kunci angka: sekali jadwal melewati json.dumps, id 7
+    berubah jadi "7". Kalau dibiarkan, st.plays_per_player.get(p.id) di laporan
+    mencari 7 di antara kunci berupa string dan selalu meleset - dan yang keluar
+    bukan error, melainkan kolom Main/Duduk/Tugas yang isinya nol semua.
+    """
+    return {int(k): v for k, v in (raw or {}).items()}
+
+
+def from_dict(data: dict) -> Schedule:
+    """Kebalikan to_dict: rakit ulang Schedule dari bentuk JSON-nya.
+
+    Dibutuhkan karena Schedule sebelumnya hanya bisa lahir dari solver, padahal
+    laporan dan penyimpanan butuh jadwal yang PERSIS sedang dilihat host.
+    Tanpa ini, satu-satunya cara mendapatkan objeknya adalah menjalankan ulang
+    seluruh optimasi - lambat, dan hasilnya belum tentu sama.
+
+    Dua hal yang tidak simetris dengan to_dict dan sengaja diurus di sini:
+
+      - court_labels dibongkar to_dict menjadi field 'pool' di tiap match, jadi
+        di sini dirakit balik dari match-nya. Label untuk court yang tidak punya
+        match tidak ikut kembali; court seperti itu tidak pernah ada karena
+        labelnya memang diberikan per court yang bermain.
+      - resting_only diserialkan sebagai data padahal aslinya turunan dari byes
+        dan roles. Yang dibaca di sini byes dan roles-nya; resting_only dihitung
+        ulang sendiri oleh Round.
+
+    Melempar TypeError/ValueError/KeyError kalau datanya tidak utuh - pemanggil
+    yang memutuskan apakah itu berarti gagal atau jatuh ke generate ulang.
+    """
+    players = [Player(**_milik(Player, p)) for p in data.get("players") or []]
+
+    craw = dict(data.get("config") or {})
+    segments = [Segment(**_milik(Segment, s)) for s in craw.get("segments") or []]
+    config = Config(**{**_milik(Config, craw), "segments": segments})
+
+    rounds: list[Round] = []
+    for r in data.get("rounds") or []:
+        matches: list[Match] = []
+        labels: dict[int, str] = {}
+        for m in r.get("matches") or []:
+            court = int(m["court"])
+            matches.append(
+                Match(
+                    court=court,
+                    team_a=tuple(int(x["id"]) for x in m["team_a"]),
+                    team_b=tuple(int(x["id"]) for x in m["team_b"]),
+                )
+            )
+            if m.get("pool"):
+                labels[court] = m["pool"]
+        rounds.append(
+            Round(
+                index=int(r.get("index", len(rounds) + 1)),
+                matches=matches,
+                byes=[int(b["id"]) for b in r.get("byes") or []],
+                start_min=int(r.get("start_min", 0)),
+                end_min=int(r.get("end_min", 0)),
+                segment=r.get("segment", ""),
+                court_labels=labels,
+                roles=[
+                    RoleAssignment(player_id=int(a["player_id"]), role=a["role"],
+                                   court=int(a["court"]))
+                    for a in r.get("roles") or []
+                ],
+            )
+        )
+
+    sraw = _milik(ScheduleStats, data.get("stats") or {})
+    for k in ("plays_per_player", "byes_per_player", "roles_per_player"):
+        if k in sraw:
+            sraw[k] = _kunci_int(sraw[k])
+
+    return Schedule(
+        players=players,
+        config=config,
+        rounds=rounds,
+        stats=ScheduleStats(**sraw),
+        notes=list(data.get("notes") or []),
+        # preference_label ikut dikirim to_dict untuk UI, tapi bukan field
+        # PreferenceViolation - _milik yang membuangnya.
+        violations=[PreferenceViolation(**_milik(PreferenceViolation, v))
+                    for v in data.get("violations") or []],
+    )

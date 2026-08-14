@@ -17,9 +17,11 @@ import base64
 import binascii
 import json
 import mimetypes
+import sys
 import threading
 import time
 import webbrowser
+from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -40,12 +42,13 @@ from padel_scheduler.models import COURT_PREFERENCES, MATCHUP_LABELS, MATCHUPS
 from padel_scheduler.presets import PRESETS
 from padel_scheduler.report import (
     format_date_id,
+    from_dict,
     to_csv,
     to_dict,
     to_personal_text,
     to_text,
 )
-from padel_scheduler.scheduler import ScheduleError
+from padel_scheduler.scheduler import ScheduleError, round_plan
 
 WEB_DIR = Path(__file__).parent / "web"
 MAX_BODY = 8 * 1024 * 1024
@@ -210,12 +213,29 @@ def api_analyze(payload: dict) -> dict:
     # Court yang berkurang mengubah jumlah match seluruh acara, dan dari situlah
     # batas keunikan dihitung. Tanpa ini panel menjanjikan ronde main yang tidak
     # akan terjadi - dan angkanya dipakai host untuk memutuskan setup.
+    ronde_panel = rounds_override or rounds_from_duration(
+        cfg.duration_minutes, round_minutes, cfg.warmup_minutes)
+
     matches_per_round = None
     if cfg.courts_after is not None and n >= 4:
-        ronde_panel = rounds_override or rounds_from_duration(
-            cfg.duration_minutes, round_minutes, cfg.warmup_minutes)
         matches_per_round = [min(c, n // 4)
                              for c in cfg.court_plan(ronde_panel)]
+
+    # Court yang disewa TIDAK sama di semua ronde, dan babak juga tidak menempati
+    # ronde yang sama. Keduanya harus dipasangkan per ronde, kalau tidak panel
+    # menghitung court terbuang di ronde yang court-nya memang cuma satu.
+    #
+    # Petanya diambil dari round_plan() milik penjadwal, bukan dihitung ulang di
+    # sini: aturan penempatan selang-seling cuma boleh punya satu rumus, dan
+    # rumus kedua yang meleset sedikit menghasilkan peringatan yang menuduh
+    # ronde yang salah.
+    rules_per_round = None
+    court_plan = None
+    if cfg.segments and ronde_panel > 0:
+        plan = round_plan(cfg.segments, cfg.interleave_segments)[:ronde_panel]
+        if plan:
+            rules_per_round = [seg.rule for seg, _ in plan]
+            court_plan = cfg.court_plan(len(rules_per_round))
 
     rep = analyze(
         n_players=n,
@@ -236,6 +256,9 @@ def api_analyze(payload: dict) -> dict:
         roster_men=men,
         roster_women=women,
         matches_per_round=matches_per_round,
+        rules_per_round=rules_per_round,
+        court_plan=court_plan,
+        interleave_segments=cfg.interleave_segments,
     )
 
     return {
@@ -333,6 +356,33 @@ def api_economics(payload: dict) -> dict:
 
 def _generate(payload: dict):
     return build_schedule(_players_from(payload), _config_from(payload))
+
+
+def _schedule_supplied(payload: dict):
+    """Jadwal yang sedang dilihat host, kalau ikut dikirim.
+
+    Alasannya sama dengan yang membuat api_event_save berhenti men-generate
+    ulang: laporan harus memuat jadwal yang SUDAH diumumkan ke peserta, bukan
+    hasil pencarian baru yang kebetulan mirip. Bedanya di sini ada dua, dan
+    dua-duanya terasa langsung oleh host:
+
+      - Jendela laporan dibuka lewat form submit, jadi ia sudah tampil putih
+        sebelum servernya menjawab. Selama generate ulang berjalan, host
+        menatap halaman kosong tanpa tanda apa pun - terukur 69 detik pada mode
+        CP-SAT dengan batas 60 detik, dan batas itu boleh sampai 300.
+      - Optimasinya sudah dijalankan sekali saat Generate. Mengulanginya untuk
+        mencetak berarti membayar dua kali untuk jawaban yang sudah ada.
+
+    None kalau tidak ada jadwal yang dikirim, atau bentuknya tidak utuh -
+    pemanggil jatuh ke generate ulang supaya pemanggil API lama tidak rusak.
+    """
+    supplied = payload.get("schedule")
+    if not isinstance(supplied, dict) or not supplied.get("rounds"):
+        return None
+    try:
+        return from_dict(supplied)
+    except (TypeError, ValueError, KeyError):
+        return None
 
 
 def api_schedule(payload: dict) -> dict:
@@ -475,11 +525,66 @@ def _delete_club(payload: dict) -> dict:
     return {"ok": True, "deleted": len(ids)}
 
 
+# Request yang lebih lama dari ini ikut dicatat walau berhasil. Ambangnya
+# dipilih dari yang benar-benar terjadi: memuat halaman dan seluruh panggilan
+# API biasa selesai jauh di bawah satu detik, sementara yang menjalankan
+# optimasi memakan detik sampai menit. Jadi yang lolos ke log hanyalah request
+# yang sempat membuat host menunggu - dan itu persis yang ingin dilihat orang
+# yang sedang mencari sebab aplikasinya terasa menggantung.
+LOG_LAMBAT_DETIK = 1.0
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "PadelScheduler/1.0"
 
-    def log_message(self, fmt, *args):  # noqa: A003 - senyapkan log per request
+    # Log per request dulu dimatikan total, dan itu punya alasan yang masih
+    # berlaku: /api/analyze dipanggil ulang tiap kali host mengetik, dan
+    # Electron cuma menyimpan 40 baris terakhir untuk ditempelkan ke dialog
+    # kalau server mati. Mencatat setiap request berarti 40 baris itu selalu
+    # penuh oleh lalu lintas biasa, dan justru barisnya yang menjelaskan
+    # kematiannya yang terdorong keluar.
+    #
+    # Yang salah bukan penyaringannya, melainkan penyaring yang meloloskan NOL.
+    # Laporan blank kemarin tidak meninggalkan satu jejak pun. Jadi sekarang
+    # yang lewat cuma tiga hal, dan ketiganya berarti ada yang perlu dilihat:
+    # request yang gagal, request yang lambat, dan kesalahan yang tertangkap.
+
+    def log_message(self, fmt, *args):  # noqa: A003
+        sys.stderr.write(f"{self.log_date_time_string()}  {fmt % args}\n")
+
+    def log_request(self, code="-", size="-"):
+        status = code.value if isinstance(code, HTTPStatus) else code
+        try:
+            status = int(status)
+        except (TypeError, ValueError):
+            status = 0
+        lama = time.perf_counter() - getattr(self, "_mulai", time.perf_counter())
+        if status >= 400:
+            self.log_message("%s %s -> %s", self.command, self.path, status)
+        elif lama >= LOG_LAMBAT_DETIK:
+            self.log_message("%s %s -> %s (%.1f detik)",
+                             self.command, self.path, status, lama)
+
+    def log_error(self, fmt, *args):
+        # send_error() memanggil ini LALU send_response(), jadi status yang sama
+        # akan tercatat dua kali. Yang dibuang di sini, bukan yang di
+        # log_request: log_request tahu berapa lamanya, dan ia juga satu-satunya
+        # yang melihat error yang tidak lewat send_error().
         pass
+
+    def handle_one_request(self):
+        self._mulai = time.perf_counter()
+        super().handle_one_request()
+
+    def log_gagal(self, exc: BaseException) -> None:
+        """Kesalahan yang tertangkap dan dijawab sebagai halaman/JSON biasa.
+
+        Tanpa ini jalur laporan sepenuhnya bisu: kegagalannya dikirim sebagai
+        HTML berstatus 200, sehingga tidak ada satu pun status >= 400 yang bisa
+        ditangkap log_request.
+        """
+        self.log_message("%s %s GAGAL: %s: %s", self.command, self.path,
+                         type(exc).__name__, exc)
 
     # -- util -------------------------------------------------------------
     def _send_json(self, obj, status=200):
@@ -663,6 +768,7 @@ class Handler(BaseHTTPRequestHandler):
             except ScheduleError as exc:
                 emit("error", {"error": str(exc)})
             except Exception as exc:  # noqa: BLE001
+                self.log_gagal(exc)
                 emit("error", {"error": f"Kesalahan internal: {exc}"})
             return
 
@@ -670,7 +776,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 fields = parse_qs(raw.decode("utf-8"))
                 payload = json.loads(fields.get("payload", ["{}"])[0])
-                sch = _generate(payload)
+                sch = _schedule_supplied(payload) or _generate(payload)
                 html = build_html(
                     sch,
                     title=payload.get("title") or "Jadwal Meet Padel",
@@ -682,10 +788,16 @@ class Handler(BaseHTTPRequestHandler):
                 )
                 self._send_bytes(html.encode("utf-8"), "text/html; charset=utf-8")
             except ScheduleError as exc:
+                # Setup yang tidak bisa dijadwalkan bukan kerusakan - host
+                # membacanya di halaman laporan dan memperbaiki setupnya. Tetap
+                # dicatat karena laporan menjawabnya dengan status 200, jadi
+                # tidak ada jejak lain yang tertinggal.
+                self.log_gagal(exc)
                 self._send_bytes(
                     f"<p style='font-family:sans-serif;padding:30px'>{exc}</p>"
                     .encode("utf-8"), "text/html; charset=utf-8")
             except Exception as exc:  # noqa: BLE001
+                self.log_gagal(exc)
                 self._send_bytes(
                     f"<p style='font-family:sans-serif;padding:30px'>"
                     f"Gagal membuat laporan: {exc}</p>".encode("utf-8"),
@@ -711,6 +823,9 @@ class Handler(BaseHTTPRequestHandler):
         except (ValueError, KeyError, TypeError) as exc:
             self._send_json({"error": f"Input tidak valid: {exc}"}, 400)
         except Exception as exc:  # noqa: BLE001 - jangan sampai server mati
+            # Status 500 saja sudah tertangkap log_request, tapi yang dibutuhkan
+            # saat menelusuri adalah kalimat kesalahannya, bukan angkanya.
+            self.log_gagal(exc)
             self._send_json({"error": f"Kesalahan internal: {exc}"}, 500)
 
 

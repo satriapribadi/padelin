@@ -27,7 +27,7 @@ from .models import (
     Segment,
 )
 from .presets import PRESETS, preset_segments
-from .report import to_csv, to_dict, to_text
+from .report import from_dict, to_csv, to_dict, to_text
 from .scheduler import ScheduleError, build_schedule
 
 __all__ = [
@@ -53,6 +53,7 @@ __all__ = [
     "build_schedule",
     "compare",
     "evaluate",
+    "from_dict",
     "preset_segments",
     "suggest_setup",
     "to_csv",
