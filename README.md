@@ -304,7 +304,6 @@ npm run icon       # bangun ikon aplikasi dari web/logo.svg
 npm start          # jalankan dari kode sumber
 npm run shortcut   # buat Padelin.lnk (tambah -- -Desktop untuk taruh di Desktop)
 npm run dist       # bangun installer Windows (.exe)
-npm run portable   # bangun paket portable, tanpa pemasangan
 ```
 
 **Apa yang perlu dipasang pengguna akhir: tidak ada.**
@@ -379,23 +378,23 @@ ke aplikasi maupun ke repo.
 
 Naikkan `version` di `package.json` tiap merilis — itu yang dibandingkan.
 
-### Paket portable, tanpa pemasangan
+### Menjalankan tanpa memasang
 
-`npm run portable` menghasilkan `dist-portable/` berisi folder aplikasi dan satu
-pintasan `Padelin.lnk`. Bisa disalin ke flashdisk atau komputer lain apa adanya;
-Python sudah ikut di dalamnya, jadi tidak ada yang perlu dipasang.
+Tidak ada paket portable. Yang dulu ada — `npm run portable`, penghasil
+`dist-portable/` berisi folder aplikasi plus pintasan `Padelin.lnk` — sudah
+dihentikan: ia tidak pernah ikut diuji bersama rilis, dan pada pemeriksaan
+terakhir memang tidak naik (prosesnya hidup, jendelanya tidak pernah muncul).
+Yang dirilis dan diuji hanya installer NSIS.
 
-Bedanya dengan installer bukan cuma kepraktisan. Windows menilai executable dari
-**reputasi**, dan biner yang baru dibuat belum punya reputasi apa pun — di mesin
-dengan Smart App Control aktif, executable baru bisa ditolak mentah-mentah pada
-percobaan pertama. Paket portable sengaja tidak membuat executable baru:
-`electron.exe` dibiarkan utuh, dan nama serta ikon aplikasi dibawa oleh pintasan
-— yang bukan executable, jadi tidak kena penilaian itu.
+Untuk menjalankan dari kode sumber tanpa memasang apa pun, pakai `npm start`,
+atau `npm run shortcut` yang membuat `Padelin.lnk` menunjuk ke `electron.exe` di
+`node_modules`. Alasan memakai pintasan dan bukan executable baru tetap berlaku:
+Windows menilai executable dari **reputasi**, dan biner yang baru dibuat belum
+punya reputasi apa pun — di mesin dengan Smart App Control aktif ia bisa ditolak
+mentah-mentah. Pintasan bukan executable, jadi tidak kena penilaian itu.
 
-Harganya: di Task Manager prosesnya bernama `electron.exe`, bukan `Padelin.exe`.
-
-Data acara tetap di `%APPDATA%\Padelin`, bukan di dalam folder portable — jadi
-menyalin foldernya tidak ikut membawa data siapa pun.
+Data acara ada di `%APPDATA%\Padelin` saat dipasang lewat installer, dan
+`padel.db` di folder repo saat dijalankan dari kode sumber.
 
 ## Tes
 

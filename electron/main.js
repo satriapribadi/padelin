@@ -65,17 +65,18 @@ function freePort() {
 /** Folder resources paket yang dibagikan, atau null kalau jalan dari repo.
  *
  * SENGAJA tidak memakai app.isPackaged. Electron menentukan nilai itu dari nama
- * berkas executable-nya - kalau namanya masih electron.exe, ia dianggap "belum
- * dipaketkan". Paket portable justru MEMBIARKAN nama itu apa adanya (biner yang
- * diganti nama kehilangan reputasinya di Smart App Control), jadi app.isPackaged
- * di sana bernilai false padahal jelas-jelas sudah dipaketkan.
+ * berkas executable-nya, dan salahnya mahal: kalau paket dianggap "jalan dari
+ * repo", aplikasi diam-diam memakai Python SISTEM alih-alih Python bundel dan
+ * database ditulis ke dalam folder paket. Di mesin pengembang keduanya tidak
+ * terlihat salah - baru ketahuan di komputer yang belum punya Python, yaitu
+ * tepat yang menjadi alasan Python dibundel.
  *
- * Akibatnya kalau dipercaya: aplikasi diam-diam memakai Python SISTEM alih-alih
- * Python bundel, dan database ditulis ke dalam folder paket. Di mesin
- * pengembang keduanya tidak terlihat salah - baru ketahuan di komputer yang
- * belum punya Python, yaitu tepat yang menjadi alasan Python dibundel.
- *
- * Jadi yang diperiksa keberadaan berkasnya, bukan nama executable-nya.
+ * Dulu ini bukan teori: paket portable membiarkan nama electron.exe apa adanya
+ * (biner yang diganti nama kehilangan reputasinya di Smart App Control),
+ * sehingga app.isPackaged bernilai false padahal jelas sudah dipaketkan. Paket
+ * itu sudah dihentikan, tapi pemeriksaannya DIBIARKAN: memeriksa keberadaan
+ * berkas selalu benar, sementara menyandarkan diri pada nama executable hanya
+ * kebetulan benar - dan salahnya baru terasa di komputer orang lain.
  */
 function distRoot() {
   const rp = process.resourcesPath;
@@ -106,7 +107,9 @@ function pythonAppRoot() {
   if (!dist) return ROOT;
   // Dua tata letak yang sah:
   //   resources/app.asar.unpacked  <- hasil electron-builder (asar + unpack)
-  //   resources/app                <- paket portable, berkas apa adanya
+  //   resources/app                <- berkas apa adanya, tanpa asar (dipakai
+  //                                   paket portable yang sudah dihentikan;
+  //                                   tetap dilayani karena murah dan benar)
   const kandidat = [
     path.join(dist, 'app.asar.unpacked'),
     path.join(dist, 'app'),
@@ -150,9 +153,9 @@ function pythonCommand() {
  */
 function databasePath() {
   // Sama seperti di atas: yang menentukan tata letak berkasnya, bukan
-  // app.isPackaged. Kalau tertukar, paket portable menulis database ke DALAM
-  // foldernya sendiri - ikut tersalin saat foldernya dibagikan, membawa data
-  // acara orang lain tanpa ada yang menyadarinya.
+  // app.isPackaged. Kalau tertukar, paket menulis database ke DALAM foldernya
+  // sendiri - dan folder aplikasi yang ikut tersalin atau ikut terhapus saat
+  // pemasangan ulang membawa data acara orang lain tanpa ada yang menyadarinya.
   return distRoot()
     ? path.join(app.getPath('userData'), 'padel.db')
     : path.join(ROOT, 'padel.db');
