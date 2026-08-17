@@ -15,11 +15,12 @@
     "verify:dist": "node electron/verify-artifact.js",
     "dist": "npm run fetch-python && electron-builder",
     "dist:dir": "npm run fetch-python && electron-builder --dir",
-    "release": "npm run fetch-python && electron-builder --publish always"
+    "release": "npm run fetch-python && electron-builder --publish always",
+    "postinstall": "install-electron"
   },
   "devDependencies": {
     "electron": "^43.0.0",
-    "electron-builder": "^25.0.0",
+    "electron-builder": "^26.15.3",
     "rcedit": "^5.0.2"
   },
   "dependencies": {
@@ -87,5 +88,8 @@
       }
     ],
     "afterPack": "electron/after-pack.js"
+  },
+  "allowScripts": {
+    "electron-winstaller": false
   }
 }
