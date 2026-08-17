@@ -31,6 +31,12 @@ const PYTHON_SRC = path.join(__dirname, 'vendor', 'python');
 const APP_FILES = [
   ['electron/main.js', 'electron/main.js'],
   ['electron/updater.js', 'electron/updater.js'],
+  // Dua berkas ini yang membuat cetak punya pratinjau. Tanpa preload.js
+  // jembatan window.padelin hilang dan tombol di laporan jatuh ke dialog
+  // Windows tanpa pratinjau; tanpa pratinjau.html jendelanya kosong. Keduanya
+  // gagal DIAM-DIAM - paketnya jalan, cuma fiturnya lenyap.
+  ['electron/preload.js', 'electron/preload.js'],
+  ['electron/pratinjau.html', 'electron/pratinjau.html'],
   ['electron/build/icon.ico', 'electron/build/icon.ico'],
   ['run.py', 'run.py'],
   ['package.json', 'package.json'],

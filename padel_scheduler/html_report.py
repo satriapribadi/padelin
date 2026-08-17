@@ -423,11 +423,33 @@ def build_html(
     parts.append(f"<title>{_e(title)}</title><style>{CSS}</style></head><body>")
 
     if include_toolbar:
+        # Satu tombol, dua jalur, karena dua lingkungan yang berbeda:
+        #
+        #   Browser biasa - window.print() sudah membuka pratinjau Chrome, yang
+        #   punya tujuan "Save as PDF" sekaligus daftar printer. Label bawaannya
+        #   ditulis untuk lingkungan ini.
+        #
+        #   Aplikasi desktop - window.print() di Electron bermuara ke dialog
+        #   cetak Windows, dan panel pratinjaunya kosong ("This app doesn't
+        #   support print preview") karena UI pratinjau Chrome tidak diikutkan
+        #   Electron. Jadi kalau jembatan window.padelin ada, tombolnya berganti
+        #   label dan membuka jendela pratinjau milik Padelin - di situ ada
+        #   halamannya, tombol simpan, dan tombol cetak.
+        #
+        # Tombol cetak-langsung sengaja TIDAK ditaruh di sini. Tombol yang
+        # membuka dialog tanpa pratinjau, berdampingan dengan tombol yang
+        # memperlihatkan halaman, hanya membuat host menekan yang salah lalu
+        # menyimpulkan pratinjaunya rusak. Jalur itu tinggal di menu Berkas.
         parts.append(
             "<div class='toolbar'>"
-            "<button onclick='window.print()'>Simpan sebagai PDF</button>"
+            "<button id='pdf'>Simpan sebagai PDF</button>"
             "<button class='ghost' onclick='window.close()'>Tutup</button>"
             "</div>"
+            "<script>(function(){"
+            "var j=window.padelin, b=document.getElementById('pdf');"
+            "if(j){ b.textContent='Pratinjau cetak'; }"
+            "b.onclick=function(){ j ? j.pratinjau() : window.print(); };"
+            "})();</script>"
         )
 
     parts.append("<div class='sheet'>")

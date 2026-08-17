@@ -16,6 +16,9 @@
 const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
 const { spawn } = require('child_process');
 const { periksaPembaruan } = require('./updater');
+// Di-require di baris atas dengan sengaja: cetak.js mendaftarkan skema
+// pratinjaunya saat dimuat, dan itu harus terjadi sebelum app siap.
+const cetak = require('./cetak');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
@@ -23,6 +26,7 @@ const http = require('http');
 
 const ROOT = path.join(__dirname, '..');
 const DEV = process.argv.includes('--dev');
+const PRELOAD = cetak.PRELOAD;
 
 let serverProc = null;
 let serverPort = 0;
@@ -233,6 +237,10 @@ function fatal(judul, detail) {
   app.exit(1);
 }
 
+/* Cetak dan pratinjau ada di cetak.js - lihat komentar di kepala berkas itu
+ * untuk alasan kenapa dialog cetak Windows tidak bisa diberi pratinjau, dan
+ * kenapa pratinjaunya dirakit sendiri dari printToPDF(). */
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1440,
@@ -249,6 +257,7 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       spellcheck: false,
+      preload: PRELOAD,
     },
   });
 
@@ -265,8 +274,11 @@ function createWindow() {
 /** Laporan dibuka dengan target=_blank supaya bisa dicetak Ctrl+P.
  *
  * Tanpa penanganan ini Electron memblokirnya dan tombol "Buka laporan" diam
- * saja. Jendela laporan dibuat sungguhan - bukan tab - supaya dialog cetak
- * bawaan Chromium tetap bekerja seperti di browser.
+ * saja. Jendela laporan dibuat sungguhan - bukan tab - supaya punya menu dan
+ * webContents sendiri yang bisa dicetak.
+ *
+ * Preload-nya ikut dipasang: tanpa itu tombol cetak di laporan jatuh kembali ke
+ * window.print(), yaitu dialog Windows yang panel pratinjaunya kosong.
  */
 function aturJendelaBaru(win) {
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -283,7 +295,11 @@ function aturJendelaBaru(win) {
         height: 900,
         backgroundColor: '#ffffff',     // laporan bertema terang
         title: 'Laporan',
-        webPreferences: { contextIsolation: true, nodeIntegration: false },
+        webPreferences: {
+          contextIsolation: true,
+          nodeIntegration: false,
+          preload: PRELOAD,
+        },
       },
     };
   });
@@ -303,9 +319,22 @@ function buatMenu() {
       label: 'Berkas',
       submenu: [
         {
-          label: 'Cetak / Simpan PDF',
+          // Ctrl+P jatuh ke pratinjau, bukan ke dialog printer. Yang dicari
+          // host saat menekannya adalah melihat halamannya dulu, dan hanya
+          // jalur ini yang bisa memperlihatkannya.
+          label: 'Pratinjau cetak...',
           accelerator: 'CmdOrCtrl+P',
-          click: (_i, win) => { if (win) win.webContents.print(); },
+          click: (_i, win) => { if (win) cetak.bukaPratinjau(win); },
+        },
+        {
+          label: 'Simpan sebagai PDF...',
+          accelerator: 'CmdOrCtrl+S',
+          click: (_i, win) => { if (win) cetak.simpanPdf(win); },
+        },
+        {
+          label: 'Cetak ke printer...',
+          accelerator: 'CmdOrCtrl+Shift+P',
+          click: (_i, win) => { if (win) cetak.cetakKePrinter(win); },
         },
         { type: 'separator' },
         { label: 'Tutup jendela', accelerator: 'CmdOrCtrl+W', role: 'close' },
@@ -371,6 +400,7 @@ if (!app.requestSingleInstanceLock()) {
   });
 
   app.whenReady().then(async () => {
+    cetak.siapkan({ dev: DEV });
     buatMenu();
     try {
       await startServer();

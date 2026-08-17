@@ -529,9 +529,41 @@ class TestExports(unittest.TestCase):
     def test_html_escapes_player_names(self):
         players = [Player(id=i, name=f"<script>{i}</script>") for i in range(8)]
         sch = build_schedule(players, Config(courts=2, duration_minutes=60))
-        h = build_html(sch)
+        # Tanpa toolbar, laporan seluruhnya data - satu tag script pun tidak
+        # boleh ada di sana.
+        h = build_html(sch, include_toolbar=False)
         self.assertNotIn("<script>", h)
         self.assertIn("&lt;script&gt;", h)
+        # Dengan toolbar ada satu script milik toolbar (pemilih jalur cetak).
+        # Jumlahnya dipatok: nama peserta tidak boleh menambah satu pun.
+        self.assertEqual(build_html(sch).count("<script>"), 1)
+
+    def test_html_toolbar_punya_dua_jalur_cetak(self):
+        """Toolbar harus memilih jalur sesuai lingkungannya.
+
+        Di aplikasi desktop, window.print() bermuara ke dialog cetak Windows
+        yang panel pratinjaunya kosong - Electron tidak memuat UI pratinjau
+        Chrome, dan itu tidak bisa ditambal dari sini. Jadi kalau jembatan
+        window.padelin ada, tombolnya harus membuka pratinjau milik Padelin.
+        Di browser biasa window.print() memang sudah membuka pratinjau, jadi
+        jalur itu wajib tetap ada sebagai cadangan.
+
+        Nama fungsi jembatannya dipatok di sini: kalau ia bergeser di
+        electron/preload.js, tombolnya diam-diam jatuh ke jalur lama - gagal
+        tanpa satu pun error, yaitu bentuk kegagalan yang paling lama tidak
+        ketahuan.
+        """
+        players = [Player(id=i, name=f"Pemain {i}") for i in range(8)]
+        sch = build_schedule(players, Config(courts=2, duration_minutes=60))
+        h = build_html(sch)
+        self.assertIn("j.pratinjau()", h)
+        self.assertIn("window.print()", h)
+        # Toolbar cuma dua tombol. Tombol cetak-langsung sengaja tidak di sini:
+        # berdampingan dengan tombol pratinjau, ia cuma membuat host menekan
+        # yang salah lalu menyimpulkan pratinjaunya rusak. Jalur itu di menu.
+        toolbar = h.split("<div class='toolbar'>")[1].split("</div>")[0]
+        self.assertEqual(toolbar.count("<button"), 2)
+        self.assertNotIn("printer", toolbar)
 
     def test_html_never_falls_back_to_one_column(self):
         """Banyak court tidak boleh membuat card ronde selebar halaman.

@@ -1,0 +1,145 @@
+<!doctype html>
+<meta charset="utf-8">
+<!-- Halaman ini tidak mengambil apa pun dari luar. Yang perlu diizinkan bukan
+     cuma object-src: penampil PDF Chromium memuat dokumennya di dalam frame
+     internalnya sendiri, jadi tanpa frame-src PDF-nya ditolak dengan
+     ERR_BLOCKED_BY_CSP dan jendelanya kosong - dan itu gagal tanpa suara,
+     karena elemen embed-nya tetap ada. -->
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; object-src 'self'; frame-src 'self'; script-src 'unsafe-inline'; style-src 'unsafe-inline'">
+<title>Pratinjau cetak</title>
+<!-- Halaman pratinjau cetak.
+     ==========================================================================
+     Ini pengganti panel pratinjau yang tidak pernah bisa kita isi. Dialog cetak
+     Windows menggambar pratinjaunya dari aliran halaman yang harus DISEDIAKAN
+     aplikasi pemanggil; UI pratinjau milik Chrome (chrome://print) hidup di
+     lapisan //chrome yang tidak diikutkan Electron, jadi dialog itu selalu
+     berisi "This app doesn't support print preview".
+
+     Jadi pratinjaunya dibuat sendiri: laporan dirender ke PDF oleh printToPDF()
+     - halaman yang PERSIS akan tercetak, karena CSS @media print dan @page yang
+     sama - lalu PDF itu ditampilkan penampil PDF bawaan Chromium yang memang
+     ikut di Electron. Thumbnail, nomor halaman, dan zoom datang dari penampil
+     itu; header di bawah cuma menambahkan aksi yang penampil tidak punya
+     (simpan ke lokasi pilihan, cetak) dan menyebut jumlah halaman.
+
+     Dokumennya dilayani dari memori lewat protokol padelin-pratinjau://, bukan
+     berkas temp: laporan memuat nama peserta, dan itu tidak perlu mendarat di
+     disk hanya untuk dilihat sebentar. Karena origin-nya sama dengan halaman
+     ini, src embed cukup relatif.
+     ========================================================================== -->
+<style>
+  /* Cermin token web/style.css - permukaan APLIKASI, jadi gelap. Isinya
+     (laporan) tetap terang, dan itu memang benar: yang terang adalah kertasnya. */
+  :root{
+    --bg:#0f1419; --panel:#161c24; --line:#2a3644;
+    --ink:#e8edf3; --muted:#8b98a9;
+    --accent:#3d9be9; --accent-dim:#1d4f75;
+    --good:#3ec98a;
+    --radius:10px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0; display:flex; flex-direction:column;
+    background:var(--bg); color:var(--ink); font-size:14px; line-height:1.55;
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  header{
+    background:var(--panel); border-bottom:1px solid var(--line);
+    padding:11px 16px; display:flex; align-items:center; gap:14px; flex:none;
+  }
+  h1{margin:0; font-size:15px; font-weight:800; letter-spacing:-.02em;
+     white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:46vw}
+  .sub{color:var(--muted); font-size:12px; white-space:nowrap}
+  .spacer{flex:1}
+  .kabar{color:var(--good); font-size:12px; white-space:nowrap;
+         overflow:hidden; text-overflow:ellipsis; max-width:34vw}
+  button{font-family:inherit; font-size:inherit}
+  .btn{
+    background:var(--accent); color:#fff; border:0; border-radius:8px;
+    padding:6px 14px; font-weight:700; font-size:12.5px; cursor:pointer;
+  }
+  .btn:hover{filter:brightness(1.1)}
+  .btn:disabled{opacity:.5; cursor:not-allowed}
+  .btn.ghost{background:transparent; color:var(--accent); border:1px solid var(--accent-dim)}
+  .btn.ghost:hover{background:var(--accent-dim); filter:none}
+  /* Penampil PDF mengisi sisa jendela. Tanpa min-height:0 embed di dalam flex
+     menolak menyusut dan header terdorong keluar layar. */
+  embed{flex:1; min-height:0; border:0; width:100%}
+  .galat{padding:18px 16px; color:var(--muted)}
+</style>
+
+<header>
+  <h1>Pratinjau cetak</h1>
+  <span class="sub" id="halaman"></span>
+  <span class="spacer"></span>
+  <span class="kabar" id="kabar"></span>
+  <button class="btn" id="simpan">Simpan PDF...</button>
+  <button class="btn ghost" id="cetak">Cetak...</button>
+  <button class="btn ghost" id="tutup">Tutup</button>
+</header>
+
+<embed id="dokumen" type="application/pdf" src="dokumen.pdf">
+
+<script>
+(function () {
+  var j = window.padelin;
+  var kabar = document.getElementById('kabar');
+  var simpan = document.getElementById('simpan');
+  var cetak = document.getElementById('cetak');
+
+  document.getElementById('tutup').onclick = function () { window.close(); };
+
+  if (!j) {
+    // Tidak seharusnya terjadi: jendela ini selalu dibuat dengan preload.
+    // Kalau toh terjadi, katakan - tombol yang diam membuat host menekan
+    // berulang kali dan menyangka aplikasinya menggantung.
+    kabar.style.color = 'var(--muted)';
+    kabar.textContent = 'Jembatan cetak tidak termuat; tutup lalu buka lagi laporannya.';
+    simpan.disabled = true;
+    cetak.disabled = true;
+    return;
+  }
+
+  j.info().then(function (info) {
+    if (!info) return;
+    // Nama laporannya TIDAK diulang di header ini: bilah penampil PDF di
+    // bawahnya sudah menyebutkannya (dari metadata judul PDF), dan dua judul
+    // bertumpuk cuma memakan ruang. Yang dibawa ke bilah judul jendela, supaya
+    // dua pratinjau yang terbuka sekaligus tetap bisa dibedakan di taskbar.
+    if (info.judul) document.title = 'Pratinjau cetak - ' + info.judul;
+    // Jumlah halaman adalah alasan utama pratinjau ini ada: yang dicari host
+    // sebelum mencetak bukan warnanya, tapi laporannya jadi berapa lembar.
+    if (info.halaman) {
+      document.getElementById('halaman').textContent = info.halaman + ' halaman A4';
+    }
+  });
+
+  function sibuk(aktif) {
+    simpan.disabled = aktif;
+    cetak.disabled = aktif;
+  }
+
+  simpan.onclick = function () {
+    sibuk(true);
+    kabar.textContent = '';
+    j.simpan().then(function (h) {
+      sibuk(false);
+      if (!h || h.status === 'batal') return;
+      // Yang tersimpan adalah PDF yang SAMA dengan yang sedang dilihat - bukan
+      // hasil render ulang - jadi tidak ada kejutan antara pratinjau dan berkas.
+      kabar.style.color = h.status === 'tersimpan' ? 'var(--good)' : 'var(--muted)';
+      kabar.textContent = h.status === 'tersimpan'
+        ? 'Tersimpan: ' + h.nama
+        : 'Gagal menyimpan.';
+    }, function () { sibuk(false); });
+  };
+
+  cetak.onclick = function () {
+    kabar.textContent = '';
+    sibuk(true);
+    j.cetak().then(function () { sibuk(false); }, function () { sibuk(false); });
+  };
+})();
+</script>
