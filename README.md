@@ -399,9 +399,12 @@ Data acara ada di `%APPDATA%\Padelin` saat dipasang lewat installer, dan
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 175 tes unit
-python tools/uitest.py                  # 27 uji interaksi di browser sungguhan
+python -m unittest discover -s tests    # 209 tes unit
+python tools/uitest.py                  # 28 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
+python tools/cetaktest.py               # 15 uji jalur cetak & pratinjau (Electron)
+python tools/apptest.py                 # 18 uji aplikasi desktop sungguhan
+python tools/pakettest.py               # uji paket hasil `npm run dist:dir`
 ```
 
 `tools/uitest.py` menjalankan Edge/Chrome headless, menyambung ke DevTools
@@ -412,6 +415,35 @@ nol dependency. Tesnya idempotent - data uji dihapus lagi di akhir.
 
 Ini bukan pelengkap: tiga bug lolos dari seluruh tes unit dan pemeriksaan statis,
 dan baru ketahuan dari menjalankan serta melihat aplikasinya sungguhan.
+
+### Tiga lapis yang tidak tersentuh browser
+
+Cetak, pratinjau, dan pengemasan tidak ada di browser, jadi ketiganya punya
+alatnya sendiri. Semuanya memakai kode produksi yang sama - bukan tiruannya,
+karena versi tiruan pernah LULUS sementara aplikasinya tetap salah.
+
+`cetaktest.py` merakit laporan contoh, menjalankan Electron, mengklik tombol di
+toolbar laporan, lalu **melihat piksel** di jendela pratinjau yang muncul. Yang
+terakhir itu bukan hiasan: pernah ada CSP yang memblokir dokumen PDF-nya, dan
+seluruh pemeriksaan lain tetap lulus karena elemen `embed`-nya tetap ada dan
+tetap setinggi jendela - hanya kosong. Piksel yang membongkarnya: 0% terang saat
+rusak, 94% saat benar.
+
+`apptest.py` menjalankan aplikasi desktop dari `main.js` dan mengendalikannya
+lewat DevTools Protocol: server Python menyala, tempel peserta, Generate, Buka
+laporan (jendela baru lewat `window.open`), lalu Pratinjau cetak. Yang dijaga di
+sini adalah preload yang harus sampai ke jendela anak - tanpa itu tombol cetak
+jatuh diam-diam ke dialog Windows yang panel pratinjaunya kosong.
+
+`pakettest.py` memeriksa paket hasil build: daftar isi `app.asar` dibaca dari
+header-nya (`preload.js` pernah tertinggal, dan akibatnya bukan error - fiturnya
+cuma lenyap), berkas yang harus di luar asar, lalu menjalankan paketnya. Kalau
+Windows menolak biner barunya (Application Control, `WinError 4551`), lapis
+runtime-nya dilaporkan **dilewati** - bukan lulus - dan harus dicoba dengan
+tangan sekali lewat prompt yang mengizinkan.
+
+Klien CDP bersamanya ada di `tools/cdp.py`, dan ia memakai ulang klien WebSocket
+di `uitest.py` supaya di repo ini tetap hanya ada satu.
 
 Yang diuji adalah properti keras: tidak ada pemain di dua court sekaligus,
 aturan gender ditegakkan 100%, partner terkunci tetap terkunci, pemula tidak
