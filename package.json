@@ -14,6 +14,7 @@
     "verify:dist": "node electron/verify-artifact.js",
     "dist": "npm run fetch-python && electron-builder",
     "dist:dir": "npm run fetch-python && electron-builder --dir",
+    "prerelease": "node electron/ensure-tag.js",
     "release": "npm run fetch-python && electron-builder --publish always",
     "postinstall": "install-electron"
   },
