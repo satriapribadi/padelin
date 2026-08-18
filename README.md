@@ -185,10 +185,26 @@ Kalau OR-Tools tidak terpasang, modenya otomatis disembunyikan dari UI dan sisa
 aplikasi berjalan seperti biasa.
 
 **Sempurnakan jadwal ini**
-Tombol yang muncul di panel Hasil, dan **hanya** kalau ada peserta yang duduk
-lebih lama beruntun daripada batas yang tak terhindarkan untuk jumlah mainnya —
-ambang numerik yang sama yang membuat kartu *Tunggu terpanjang* berwarna kuning.
-Kalau jadwalnya sudah di batas, tombolnya tidak ditawarkan sama sekali.
+Tombol yang muncul di panel Hasil, dan hanya kalau salah satu dari dua hal ini
+masih di atas batasnya — keduanya ambang numerik, bukan selera:
+
+- **giliran**: ada peserta yang duduk lebih lama beruntun daripada batas yang tak
+  terhindarkan untuk jumlah mainnya, ambang yang sama yang membuat kartu *Tunggu
+  terpanjang* berwarna kuning
+- **lawan berulang**: ada pasangan yang berhadapan lebih dari sekali, *dan*
+  jadwalnya belum menyentuh batas bawah teoretis pengulangan. Syarat kedua itu
+  yang menjaganya tetap berguna: pada 16 orang / 4 court yang pengulangannya
+  memang wajib, penyempurnaan berhenti dalam 2,2 detik tanpa mencoba apa pun
+
+Kalau dua-duanya sudah di batas, tombolnya tidak ditawarkan sama sekali.
+
+Syarat lawan berulang ditambahkan setelah versi pertama terbukti terlalu ketat.
+Waktu itu tertulis di sini bahwa setup yang tanda gilirannya mati tidak pernah
+menemukan apa pun — dan itu cuma benar untuk enam setup yang kebetulan disapu.
+Diukur ulang pada kasus yang gilirannya sudah rapi: 12 orang / 2 court naik
+92,6 → 94,6 dan 93,8 → 94,8, dan mexicano 16 turun dari 53 ke 50 pasang lawan
+berulang. Empat dari dua belas kasus membaik padahal tombolnya tidak pernah
+ditawarkan di sana.
 
 Yang dijalankannya bukan solver seutuh-jadwal. Ia membuka **tiga ronde
 sekaligus**, memaku sisanya, dan menyelesaikan submasalah itu secara eksak.
@@ -204,6 +220,20 @@ Empat dari sembilan jendela itu menemukan perbaikan yang tidak terjangkau
 pertukaran biasa: 92,1 → 94,6, dengan pengulangan lawan tetap nol. Yang
 diperbaiki giliran — dan giliran memang yang paling sering tertinggal, karena
 pertukaran berpasangan tidak bisa menggeser tiga ronde sekaligus.
+
+Anggaran waktunya milik tahap penyempurnaan, bukan lama host menunggu: menekan
+tombol menyusun ulang jadwalnya lebih dulu, dan biaya itu tumbuh dengan ukuran
+acara. Diukur dari penekanan sampai selesai — 18,9 detik pada 26 orang / 4 court
+(7,4 di antaranya penyempurnaan) dan 41,9 detik pada 60 orang / 6 court (14,4
+penyempurnaan). Karena itu tombolnya tidak memasang angka: menjanjikan "maks 20
+detik" berarti melanggarnya sendiri di acara besar.
+
+Roster besar justru paling tidak membutuhkannya. Pada 40 orang / 6 court dan 60
+orang / 15 court tombolnya tidak muncul sama sekali — dengan court sebanyak itu
+hampir semua orang turun tiap ronde, jadi tidak ada rentetan duduk untuk
+diperbaiki. Yang paling terbantu adalah roster menengah dengan court sedikit:
+gain terbesar yang terukur bukan di 26 orang melainkan **20 orang / 3 court,
++3,4 poin**.
 
 Jendela yang dicoba dipilih dari lokasi pelanggarannya, bukan disapu semua.
 Diukur pada 18 kasus: menyapu seluruh jendela memberi mutu rata-rata yang sama
@@ -351,7 +381,7 @@ web/
 tools/
   uitest.py                 uji interaksi UI lewat DevTools Protocol
   banding_cpsat.py          adu annealing lawan solver eksak pada setup yang sama
-tests/                      217 tes unit
+tests/                      218 tes unit
 ```
 
 ## Aplikasi desktop (Electron)
@@ -462,7 +492,7 @@ Data acara ada di `%APPDATA%\Padelin` saat dipasang lewat installer, dan
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 217 tes unit
+python -m unittest discover -s tests    # 218 tes unit
 python tools/uitest.py                  # 28 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 python tools/cetaktest.py               # 15 uji jalur cetak & pratinjau (Electron)

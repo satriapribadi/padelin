@@ -827,6 +827,14 @@ JENDELA = 3
 # Batas waktu satu jendela. Angka ini bukan yang membatasi total - anggaran
 # totalnya milik host (Config.lns_seconds) - melainkan penjaga supaya satu
 # jendela yang ternyata keras tidak menelan seluruh anggaran sendirian.
+#
+# CP-SAT TIDAK selalu menghormatinya, dan itu terukur: presolve model besar sudah
+# melewati batasnya sebelum pemeriksaan waktu menggigit. Satu jendela dengan
+# batas 3,0 detik memakai 2,10 detik pada 26 orang / 4 court (47 ribu variabel),
+# 3,62 detik pada 40 orang / 4 court (110 ribu), dan 4,82 detik pada 60 orang / 6
+# court (325 ribu). Perakitan modelnya sendiri bukan penyebabnya - itu cuma
+# 0,02-0,37 detik. Karena itu anggaran total di sempurnakan() tidak boleh
+# mengandalkan angka ini sebagai biaya sebenarnya; lihat `biaya_jendela` di sana.
 DETIK_PER_JENDELA = 3.0
 
 # Berapa jendela terpanas yang dicoba per sapuan. Diukur: 3 jendela x 2 sapuan
@@ -947,9 +955,25 @@ def sempurnakan(st, courts_r: list[int], *, anggaran: float,
     hasil.dijalankan = True
     nilai = nilai or _nilai_bawaan
 
+    # Berapa lama satu jendela BENAR-BENAR memakan waktu, bukan berapa lama ia
+    # dijanjikan. Dimulai dari batas per jendela lalu dinaikkan ke biaya nyata
+    # yang terpantau, dan sebuah jendela baru hanya dimulai kalau sisa anggaran
+    # masih cukup membayarnya.
+    #
+    # Ini pengamanan terhadap batas atas, bukan perbaikan atas pelanggaran yang
+    # terpantau: diukur pada 60 orang / 6 court, tahap ini memakai 14,3 detik
+    # dari anggaran 20 - patuh. Yang diamankan adalah keadaan yang belum
+    # terpantau tapi mungkin: satu jendela di sana berbiaya 4,5-5,6 detik
+    # meskipun batasnya 3, jadi enam jendela (dua sapuan penuh yang keduanya
+    # menemukan perbaikan) bisa menembus anggaran. Memakai biaya yang terpantau
+    # membuat kelebihan terburuknya tinggal satu jendela, dan angkanya
+    # menyesuaikan sendiri ke ukuran acara tanpa tabel ukuran yang harus
+    # dirawat.
+    biaya_jendela = DETIK_PER_JENDELA
+
     for sapuan in range(MAKS_SAPUAN):
         sisa = anggaran - (time.perf_counter() - mulai)
-        if sisa <= 0.5:
+        if sisa < biaya_jendela:
             hasil.anggaran_habis = True
             break
         panas = _panas_per_ronde(st, wait_thresholds(st))
@@ -966,19 +990,21 @@ def sempurnakan(st, courts_r: list[int], *, anggaran: float,
         ada = False
         for ke, a in enumerate(kandidat):
             sisa = anggaran - (time.perf_counter() - mulai)
-            if sisa <= 0.5:
+            if sisa < biaya_jendela:
                 hasil.anggaran_habis = True
                 break
             if progress is not None:
                 progress(min(1.0, (time.perf_counter() - mulai) / max(anggaran, 1e-9)),
                          f"Menyempurnakan ronde {a + 1}-{a + JENDELA}")
             hasil.jendela_dicoba += 1
+            t_jendela = time.perf_counter()
             lapor = optimize(
                 st, courts_r,
                 time_limit=min(DETIK_PER_JENDELA, sisa),
                 workers=workers, nilai=nilai,
                 beku=set(range(R)) - set(range(a, a + JENDELA)),
             )
+            biaya_jendela = max(biaya_jendela, time.perf_counter() - t_jendela)
             if lapor.membaik:
                 hasil.jendela_membaik += 1
                 ada = True

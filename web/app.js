@@ -912,12 +912,24 @@ $('generate').onclick = () => jalankanGenerate();
 /**
  * Tawaran "Sempurnakan jadwal ini".
  *
- * Muncul HANYA kalau tunggu terpanjang masih di atas batas yang tak
- * terhindarkan - ambang numerik yang sama yang membuat kartu "Tunggu
- * terpanjang" di atas berwarna kuning. Bukan selera: pada setup yang tandanya
- * menyala, penyempurnaan per kelompok ronde memberi +2,3 sampai +3,8 poin
- * dalam 7-22 detik; pada setup yang tandanya mati ia tidak pernah menemukan
- * apa pun, jadi menawarkannya di situ cuma menghabiskan waktu host.
+ * Ditawarkan kalau salah satu dari dua hal ini masih di atas batasnya, dan
+ * keduanya ambang numerik - bukan selera:
+ *
+ *   giliran : tunggu terpanjang > batas yang tak terhindarkan (ambang yang sama
+ *             yang membuat kartu "Tunggu terpanjang" kuning). Terukur memberi
+ *             +2,3 sampai +3,8 poin dalam 7-22 detik.
+ *   lawan   : ada pasangan yang berhadapan lebih dari sekali, DAN jadwalnya
+ *             belum di batas bawah teoretis pengulangan. Syarat kedua penting:
+ *             di 16 orang / 4 court yang pengulangannya memang wajib,
+ *             penyempurnaan berhenti dalam 2,2 detik tanpa mencoba apa pun.
+ *
+ * Syarat lawan ditambahkan setelah klaim di sini terbukti SALAH. Dulu tertulis
+ * "pada setup yang tandanya mati ia tidak pernah menemukan apa pun", dan itu
+ * cuma benar untuk enam setup yang kebetulan disapu waktu itu. Diukur ulang
+ * pada kasus yang gilirannya sudah rapi: 12 orang / 2 court naik 92,6 -> 94,6
+ * dan 93,8 -> 94,8, dan mexicano 16 turun dari 53 ke 50 pasang lawan berulang
+ * (99,0 -> 99,5). Empat dari dua belas kasus membaik padahal tombolnya tidak
+ * pernah ditawarkan.
  *
  * Juga butuh OR-Tools di server. Kalau paket itu tidak ada, tombolnya tidak
  * ditampilkan sama sekali daripada gagal setelah ditekan.
@@ -928,20 +940,41 @@ function renderPenyempurnaan(st) {
   const box = $('lns-box');
   if (!box) return;
   box.innerHTML = '';
-  const bisa = cpsatAda && st.longest_wait !== undefined
-    && st.longest_wait > st.wait_floor;
-  if (!bisa) return;
+  if (!cpsatAda || st.longest_wait === undefined) return;
+  const giliran = st.longest_wait > st.wait_floor;
+  const lawan = st.opponent_repeat_pairs > 0 && !st.at_theoretical_floor;
+  if (!giliran && !lawan) return;
 
   const wrap = el('div', 'issue info');
-  wrap.appendChild(el('div', 't', 'Masih ada giliran yang bisa dirapikan'));
-  wrap.appendChild(el('div', 'd',
-    `Ada peserta yang duduk ${st.longest_wait} ronde beruntun, sementara `
-    + `pembagian paling merata untuk jumlah mainnya cuma menuntut `
-    + `${st.wait_floor} ronde. Solver eksak bisa menyusun ulang tiga ronde `
-    + `sekaligus - jangkauan yang tidak dimiliki pertukaran biasa.`));
+  wrap.appendChild(el('div', 't', giliran
+    ? 'Masih ada giliran yang bisa dirapikan'
+    : 'Masih ada lawan berulang yang mungkin bisa dikurangi'));
+  // Penjelasannya menyebut yang sedang dikejar, dan angkanya. Host yang membaca
+  // "giliran" lalu melihat lawan berulang yang berubah - atau sebaliknya - akan
+  // menyangka tombolnya mengerjakan hal lain daripada yang dijanjikan.
+  const bagian = [];
+  if (giliran) {
+    bagian.push(`Ada peserta yang duduk ${st.longest_wait} ronde beruntun, `
+      + `sementara pembagian paling merata untuk jumlah mainnya cuma menuntut `
+      + `${st.wait_floor} ronde.`);
+  }
+  if (lawan) {
+    bagian.push(`Ada ${st.opponent_repeat_pairs} pasang yang berhadapan lebih `
+      + `dari sekali, dan jadwal ini belum menyentuh batas bawah pengulangan - `
+      + `jadi mungkin masih bisa dikurangi.`);
+  }
+  bagian.push('Solver eksak bisa menyusun ulang tiga ronde sekaligus - '
+    + 'jangkauan yang tidak dimiliki pertukaran biasa.');
+  wrap.appendChild(el('div', 'd', bagian.join(' ')));
   const saran = el('div', 'f');
-  const tombol = el('button', 'btn ghost sm',
-    `Sempurnakan jadwal ini (maks ${LNS_DETIK} detik)`);
+  // Tanpa angka di labelnya, dan itu disengaja. Angka 20 detik adalah anggaran
+  // TAHAP PENYEMPURNAAN, bukan lama host menunggu: menekan tombol menyusun ulang
+  // jadwalnya lebih dulu, dan biaya itu tumbuh dengan ukuran acara. Diukur dari
+  // penekanan sampai selesai - 18,9 detik pada 26 orang / 4 court (7,4 untuk
+  // penyempurnaan, sisanya menyusun ulang) dan 41,9 detik pada 60 orang / 6
+  // court (14,4 untuk penyempurnaan). Menaruh "maks 20 detik" di tombol berarti
+  // menjanjikan angka yang dilanggar sendiri di acara besar.
+  const tombol = el('button', 'btn ghost sm', 'Sempurnakan jadwal ini');
   tombol.id = 'lns-run';
   tombol.onclick = () => jalankanGenerate({
     tombol: 'lns-run',
@@ -959,9 +992,11 @@ function renderPenyempurnaan(st) {
   // kualitas turun akan menyimpulkan tombolnya rusak, padahal app sedang
   // melakukan pertukaran yang dianutnya di semua tempat lain.
   saran.appendChild(el('span', 'hint',
-    'Yang dijaga urutannya: partner berulang, lalu lawan berulang, baru skor '
-    + 'kualitas. Jadi skor kualitas bisa turun sedikit kalau lawan berulangnya '
-    + 'ikut berkurang - itu pertukaran yang disengaja, bukan kemunduran.'));
+    `Jadwalnya disusun ulang dulu, lalu disempurnakan dengan anggaran `
+    + `${LNS_DETIK} detik - jadi menunggunya kira-kira selama Generate ditambah `
+    + `itu. Yang dijaga urutannya: partner berulang, lalu lawan berulang, baru `
+    + `skor kualitas, jadi skor kualitas bisa turun sedikit kalau lawan `
+    + `berulangnya ikut berkurang - itu pertukaran yang disengaja.`));
   wrap.appendChild(saran);
   box.appendChild(wrap);
 }

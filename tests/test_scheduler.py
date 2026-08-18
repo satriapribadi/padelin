@@ -2927,6 +2927,27 @@ class TestPenyempurnaanJendela(unittest.TestCase):
                 for n in sch.notes),
             f"gerbang tidak menutup padahal jadwal sudah rapi; catatan: {sch.notes}")
 
+    def test_anggaran_kecil_tidak_menjalankan_jendela(self):
+        """Anggaran yang lebih kecil daripada satu jendela tidak boleh dipakai.
+
+        Penjaganya memakai biaya jendela yang TERPANTAU, bukan batas yang
+        dijanjikan - CP-SAT bisa melewati batasnya sendiri di model besar. Yang
+        diuji di sini sisi paling mudah dilanggarnya: anggaran yang sejak awal
+        tidak cukup untuk satu jendela pun.
+        """
+        from padel_scheduler import cpsat as _cpsat
+        players = self._roster()
+        sch = build_schedule(
+            players, Config(seed=3, lns_seconds=0.2, **self.DASAR))
+        # Jadwalnya tetap sah dan tidak berubah oleh tahap yang tidak berjalan.
+        assert_structurally_valid(self, sch)
+        biasa = build_schedule(players, Config(seed=3, **self.DASAR))
+        self.assertEqual(
+            [[(m.team_a, m.team_b) for m in r.matches] for r in sch.rounds],
+            [[(m.team_a, m.team_b) for m in r.matches] for r in biasa.rounds],
+            "anggaran 0,2 detik tetap mengubah jadwal; satu jendela saja "
+            f"berbiaya sekitar {_cpsat.DETIK_PER_JENDELA} detik")
+
     def test_catatan_membedakan_dua_keadaan(self):
         """Host harus bisa membedakan "sudah rapi" dari "sudah dikerjakan".
 
