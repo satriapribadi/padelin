@@ -167,6 +167,14 @@ input[type=date],input[type=time]{color-scheme:dark}
 .issue .t{font-weight:700;font-size:13px;margin-bottom:3px}
 .issue .d{font-size:12.5px;color:var(--muted)}
 .issue .f{font-size:12.5px;margin-top:5px;color:var(--ink);opacity:.85}
+/* Blok tawaran penyempurnaan duduk persis di bawah barisan kartu statistik, dan
+   .stat-grid tidak punya margin bawah - jadi dua kotak berbingkai menempel tanpa
+   jarak dan terbaca seperti bertumpuk. Terukur: kartu statistik berakhir di 244px
+   dan blok ini mulai di 244px. 12px sama dengan .btn-row supaya irama jaraknya di
+   dalam kartu Hasil konsisten. :not(:empty) supaya wadah yang kosong - saat
+   tombolnya tidak ditawarkan - tidak meninggalkan celah hantu. */
+#lns-box:not(:empty){margin-top:12px}
+
 /* Catatan kecil di bawah tombol saran. .hint di app ini selalu ber-scope
    ke induknya (h2, label, .tl-h, .seg-toggle); tanpa aturan ini ia
    mewarisi .issue .f dan terbaca sama nyaring dengan teks utama. */

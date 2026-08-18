@@ -567,6 +567,54 @@ def main() -> int:
             return f"{lines} baris, akhir '{stage}'"
         check("Log kemajuan terisi dari server", proglog)
 
+        # --- 3c. blok tawaran penyempurnaan tidak menempel kartu di atasnya
+        # Kelas bug yang lolos dari pemeriksaan kode: dua kotak berbingkai yang
+        # jaraknya nol tetap "benar" menurut DOM, tapi terbaca sebagai bertumpuk.
+        # Pernah terjadi - .stat-grid tidak punya margin bawah dan .issue tidak
+        # punya margin atas, jadi keduanya bersentuhan persis di 244px.
+        def jarak_tawaran():
+            d = b.js("""(() => {
+              const s = document.getElementById('sched-stats');
+              const box = document.getElementById('lns-box');
+              const row = document.querySelector('#view-jadwal .btn-row');
+              if (!s || !box || !row) return null;
+              const rs = s.getBoundingClientRect();
+              const rb = box.getBoundingClientRect();
+              return {bawah: Math.round(rs.bottom), atas: Math.round(rb.top),
+                      tinggi: Math.round(rb.height),
+                      tombol: Math.round(row.getBoundingClientRect().top)};
+            })()""")
+            if d is None:
+                return "elemen tidak ada - dilewati"
+            # Wadah kosong tidak boleh menyisakan celah hantu.
+            kosong = d["tinggi"] == 0
+            celah_kosong = d["tombol"] - d["bawah"] if kosong else None
+            if kosong and celah_kosong > 20:
+                raise AssertionError(
+                    f"wadah kosong menyisakan celah {celah_kosong}px")
+            # Dan yang berisi harus punya jarak. Kalau app tidak sedang
+            # menawarkannya, anak boneka disisipkan sebentar - yang diuji aturan
+            # CSS-nya, dan itu berlaku sama saja isinya sungguhan atau bukan.
+            jarak = b.js("""(() => {
+              const box = document.getElementById('lns-box');
+              const simpan = box.innerHTML;
+              const semula = box.getBoundingClientRect().height;
+              if (!semula) box.innerHTML = '<div class="issue info">x</div>';
+              const s = document.getElementById('sched-stats')
+                          .getBoundingClientRect();
+              const r = box.getBoundingClientRect();
+              const j = Math.round(r.top - s.bottom);
+              if (!semula) box.innerHTML = simpan;
+              return j;
+            })()""")
+            if jarak < 6:
+                raise AssertionError(
+                    f"blok tawaran menempel kartu statistik (jarak {jarak}px)")
+            return (f"jarak {jarak}px"
+                    + (f", wadah kosong tanpa celah hantu ({celah_kosong}px)"
+                       if kosong else " (sedang ditawarkan)"))
+        check("Blok penyempurnaan tidak menempel kartu statistik", jarak_tawaran)
+
         # --- 4. grafik keterlibatan ---------------------------------------
         def engagement():
             b.wait_for("document.querySelector('#engagement svg')",

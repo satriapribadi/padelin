@@ -493,7 +493,7 @@ Data acara ada di `%APPDATA%\Padelin` saat dipasang lewat installer, dan
 
 ```bash
 python -m unittest discover -s tests    # 218 tes unit
-python tools/uitest.py                  # 28 uji interaksi di browser sungguhan
+python tools/uitest.py                  # 29 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 python tools/cetaktest.py               # 15 uji jalur cetak & pratinjau (Electron)
 python tools/apptest.py                 # 18 uji aplikasi desktop sungguhan
