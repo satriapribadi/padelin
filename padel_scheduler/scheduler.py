@@ -1883,7 +1883,9 @@ def build_schedule(players: list[Player], config: Config,
     # Mode CP-SAT menambahkan satu putaran lagi setelah semuanya selesai, jadi
     # kalau percobaan tetap memakai seluruh batang, batangnya penuh lalu mundur
     # ke nol - dan host membaca itu sebagai jadwalnya diulang dari awal.
-    bagian = 0.5 if config.mode in CPSAT_MODES else 1.0
+    perlu_putaran_akhir = (config.mode in CPSAT_MODES
+                           or config.lns_seconds > 0)
+    bagian = 0.5 if perlu_putaran_akhir else 1.0
     # Berapa ronde yang dibutuhkan supaya semua peserta kebagian match pertama,
     # kalau tiap slot dipakai untuk orang yang berbeda. Dipakai sebagai syarat
     # berhenti lebih awal di bawah.
@@ -1956,15 +1958,21 @@ def build_schedule(players: list[Player], config: Config,
     # kali annealing lagi, tapi jauh lebih murah daripada menjalankan solver di
     # SETIAP percobaan - dan lintasan acaknya deterministik dari seed, jadi
     # pengulangan itu mendarat di jadwal yang sama persis sebelum solver mulai.
-    if config.mode in CPSAT_MODES and cfg_terbaik is not None:
+    #
+    # Penyempurnaan jendela ikut jalur yang sama, dan alasannya juga sama:
+    # menjalankannya di tiap percobaan berarti membelanjakan anggaran host untuk
+    # jadwal yang pada akhirnya dibuang.
+    if perlu_putaran_akhir and cfg_terbaik is not None:
         def teruskan_akhir(frac, msg):
             if progress is not None:
                 progress(bagian + frac * (1.0 - bagian), msg)
 
         terbaik = _build_once(players, cfg_terbaik,
                               teruskan_akhir if progress else None,
-                              courts_per_round, pakai_cpsat=True,
-                              kuota_mustahil=kuota_terbaik)
+                              courts_per_round,
+                              pakai_cpsat=config.mode in CPSAT_MODES,
+                              kuota_mustahil=kuota_terbaik,
+                              pakai_lns=config.lns_seconds > 0)
 
     terbaik.config.seed = config.seed
     terbaik.config.attempts = config.attempts
@@ -1977,7 +1985,8 @@ def _build_once(players: list[Player], config: Config,
                 progress=None,
                 courts_per_round: list[int] | None = None,
                 pakai_cpsat: bool = False,
-                kuota_mustahil: bool = False) -> Schedule:
+                kuota_mustahil: bool = False,
+                pakai_lns: bool = False) -> Schedule:
     """Satu kali penjadwalan utuh, dari validasi sampai jadwal jadi.
 
     `pakai_cpsat` memasang solver eksak di ujung rangkaian. Dipisah dari
@@ -2432,18 +2441,34 @@ def _build_once(players: list[Player], config: Config,
     # butuh titik awal yang sudah bagus: memungut perbaikan terakhir yang tidak
     # terjangkau gerakan acak, dan - ini yang tidak bisa dilakukan mesin mana
     # pun selain dia - MEMBUKTIKAN bahwa tidak ada lagi yang tersisa.
+    # Penilai yang dipakai solver untuk memutuskan apakah hasilnya layak dipakai.
+    # Sengaja kunci yang sama persis dengan _lebih_baik(), yang memilih di antara
+    # percobaan: kalau dua tempat itu memakai ukuran yang berbeda, solver bisa
+    # menyerahkan jadwal yang menurut ukurannya sendiri menang tapi menurut host
+    # kalah. Dipakai bersama oleh penyempurnaan jendela dan solver seutuh-jadwal.
+    def nilai(state):
+        s = _build_stats(state, local_players, total_rounds)
+        return (s.partner_repeat_pairs, s.opponent_repeat_pairs,
+                -s.quality_score)
+
+    # --- Penyempurnaan jendela (tombol "Sempurnakan jadwal ini") ----------
+    # Dijalankan SEBELUM solver seutuh-jadwal, kalau dua-duanya diminta: yang
+    # ini bekerja cepat di submasalah kecil, dan hasilnya jadi titik awal yang
+    # lebih baik untuk yang berikutnya.
+    if pakai_lns and config.lns_seconds > 0:
+        say(0.95, "Menyempurnakan jadwal per kelompok ronde")
+        hasil_lns = cpsat.sempurnakan(
+            st, courts_r,
+            anggaran=config.lns_seconds,
+            workers=config.cpsat_workers,
+            nilai=nilai,
+            progress=(lambda f, m: say(0.95 + f * 0.03, m)) if progress else None,
+        )
+        notes.extend(hasil_lns.catatan)
+        notes.append(cpsat.catatan_sempurna(hasil_lns))
+
     if pakai_cpsat:
         say(0.95, "Mencari sisa perbaikan dengan solver eksak (CP-SAT)")
-        # Penilai yang dipakai solver untuk memutuskan apakah hasilnya layak
-        # dipakai. Sengaja kunci yang sama persis dengan _lebih_baik(), yang
-        # memilih di antara percobaan: kalau dua tempat itu memakai ukuran yang
-        # berbeda, solver bisa menyerahkan jadwal yang menurut ukurannya sendiri
-        # menang tapi menurut host kalah.
-        def nilai(state):
-            s = _build_stats(state, local_players, total_rounds)
-            return (s.partner_repeat_pairs, s.opponent_repeat_pairs,
-                    -s.quality_score)
-
         lapor = cpsat.optimize(
             st, courts_r,
             time_limit=config.cpsat_seconds,

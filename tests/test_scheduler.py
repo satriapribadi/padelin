@@ -2803,3 +2803,155 @@ class TestCpsatMode(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+@unittest.skipUnless(cpsat.tersedia(), "OR-Tools tidak terpasang")
+class TestPenyempurnaanJendela(unittest.TestCase):
+    """Tombol "Sempurnakan jadwal ini" (Config.lns_seconds).
+
+    Yang diuji bukan seberapa banyak yang ditemukannya - itu bergantung setup dan
+    batas waktu - melainkan janji-janji yang harus dipegang apa pun hasil
+    pencariannya: jadwalnya tetap sah, tidak pernah lebih buruk, dan gerbangnya
+    tidak berjalan saat tidak ada yang bisa dikejar.
+    """
+
+    DASAR = dict(courts=4, duration_minutes=150, round_minutes=12,
+                 warmup_minutes=10, effort=8000, attempts=1)
+
+    @staticmethod
+    def _roster(n=26, n_putra=18):
+        return make_players(
+            n, genders=["M"] * n_putra + ["F"] * (n - n_putra))
+
+    @staticmethod
+    def _kunci(sch):
+        """Kunci pembanding yang sama dengan _lebih_baik()."""
+        s = sch.stats
+        return (s.partner_repeat_pairs, s.opponent_repeat_pairs, -s.quality_score)
+
+    def test_bawaan_tidak_menjalankan_apa_pun(self):
+        """lns_seconds=0 harus menghasilkan jadwal yang sama PERSIS.
+
+        Ini yang menjaga tombol Generate biasa tidak ikut melambat, dan sekaligus
+        menjaga jadwal yang sudah pernah dibuat host tetap keluar sama.
+        """
+        players = self._roster()
+        a = build_schedule(players, Config(seed=3, **self.DASAR))
+        b = build_schedule(players, Config(seed=3, lns_seconds=0, **self.DASAR))
+        self.assertEqual(
+            [[(m.team_a, m.team_b) for m in r.matches] for r in a.rounds],
+            [[(m.team_a, m.team_b) for m in r.matches] for r in b.rounds],
+            "lns_seconds=0 mengubah jadwal; ia harus benar-benar tidak berjalan")
+
+    def test_jadwalnya_tetap_sah(self):
+        players = self._roster()
+        sch = build_schedule(players, Config(seed=3, lns_seconds=15, **self.DASAR))
+        assert_structurally_valid(self, sch)
+
+    def test_tidak_pernah_lebih_buruk(self):
+        """Janji utama, dan yang paling mudah rusak diam-diam.
+
+        Dibandingkan dengan kunci lengkap yang dipakai _lebih_baik(), termasuk
+        skor kualitas - bukan cuma jumlah pengulangan, karena penyempurnaan ini
+        justru mengejar giliran dan giliran ada di skor kualitas.
+        """
+        players = self._roster()
+        for seed in (1, 3):
+            with self.subTest(seed=seed):
+                biasa = build_schedule(players, Config(seed=seed, **self.DASAR))
+                halus = build_schedule(
+                    players, Config(seed=seed, lns_seconds=15, **self.DASAR))
+                self.assertLessEqual(
+                    self._kunci(halus), self._kunci(biasa),
+                    f"seed {seed}: penyempurnaan menyerahkan jadwal yang lebih "
+                    f"buruk ({self._kunci(biasa)} -> {self._kunci(halus)})")
+
+    def test_partner_terkunci_tetap_terkunci(self):
+        """Solver menyusun ulang tiga ronde sekaligus - kuncinya harus ikut.
+
+        Babak mixed sengaja TIDAK dipakai di sini: pasangan sesama gender memang
+        mustahil di sana, dan Rules.active_mate melonggarkan kuncinya dengan
+        sengaja (lihat docstring-nya). Menuntutnya di babak itu berarti menguji
+        janji yang tidak pernah dibuat.
+        """
+        players = make_players(16, genders=["M"] * 8 + ["F"] * 8)
+        for i in range(0, 8, 2):
+            players[i].partner_id = i + 1
+            players[i + 1].partner_id = i
+        cfg = Config(seed=5, lns_seconds=15, courts=2, duration_minutes=150,
+                     effort=8000, attempts=1,
+                     segments=[Segment("Putra", 4, "men"),
+                               Segment("Putri", 4, "women")],
+                     interleave_segments=True)
+        sch = build_schedule(players, cfg)
+        assert_structurally_valid(self, sch)
+        kunci = {p.id: p.partner_id for p in players if p.partner_id is not None}
+        for rnd in sch.rounds:
+            for m in rnd.matches:
+                for tim in (m.team_a, m.team_b):
+                    for pid in tim:
+                        if pid in kunci:
+                            self.assertIn(
+                                kunci[pid], tim,
+                                f"ronde {rnd.index}: partner terkunci {pid} pecah")
+
+    def test_babak_bersegmen_tetap_sah(self):
+        """Aturan gender babak ditegakkan walau tiga ronde disusun ulang.
+
+        Kalau pakunya salah atau daftar pasangan sahnya bocor, di sinilah
+        kelihatan: satu peserta putri yang muncul di babak putra langsung
+        menggagalkan assert_structurally_valid.
+        """
+        players = make_players(26, genders=["M"] * 18 + ["F"] * 8)
+        cfg = Config(seed=3, lns_seconds=15, courts=4, duration_minutes=150,
+                     effort=8000, attempts=1,
+                     segments=[Segment("Putra", 3, "men"),
+                               Segment("Putri", 3, "women"),
+                               Segment("Mixed", 5, "mixed")],
+                     interleave_segments=True)
+        assert_structurally_valid(self, build_schedule(players, cfg))
+
+    def test_gerbang_tutup_saat_sudah_rapi(self):
+        """Jadwal yang sudah di batas tunggu tidak boleh membayar solver apa pun.
+
+        Diperiksa dari catatan yang dibaca host, bukan dari stopwatch: kalimat
+        "tidak menemukan apa pun untuk dikerjakan" hanya muncul kalau gerbangnya
+        menutup sebelum satu pun jendela dicoba.
+        """
+        players = self._roster()
+        sch = build_schedule(players, Config(seed=1, lns_seconds=15, **self.DASAR))
+        self.assertLessEqual(sch.stats.longest_wait, sch.stats.wait_floor,
+                             "prasyarat tes: seed 1 harusnya sudah di batas")
+        self.assertTrue(
+            any("tidak menemukan apa pun untuk dikerjakan" in n
+                for n in sch.notes),
+            f"gerbang tidak menutup padahal jadwal sudah rapi; catatan: {sch.notes}")
+
+    def test_catatan_membedakan_dua_keadaan(self):
+        """Host harus bisa membedakan "sudah rapi" dari "sudah dikerjakan".
+
+        Yang dituntut bukan salah satu kalimat tertentu - itu bergantung setup -
+        melainkan bahwa keadaan yang terjadi tercermin di kalimatnya: gerbang
+        yang menutup TIDAK menyebut jumlah, dan pemeriksaan yang berjalan
+        SELALU menyebutnya. Tanpa itu host menunggu lalu tidak tahu apakah
+        waktunya terpakai.
+        """
+        players = self._roster()
+        for seed in (1, 3):
+            with self.subTest(seed=seed):
+                sch = build_schedule(
+                    players, Config(seed=seed, lns_seconds=15, **self.DASAR))
+                cat = [n for n in sch.notes if n.startswith("Penyempurnaan")]
+                self.assertTrue(cat, f"tidak ada catatan: {sch.notes}")
+                rapi = sch.stats.longest_wait <= sch.stats.wait_floor
+                if "tidak menemukan apa pun untuk dikerjakan" in cat[0]:
+                    self.assertTrue(
+                        rapi,
+                        "catatan mengaku tidak ada yang bisa dikerjakan padahal "
+                        f"tunggu {sch.stats.longest_wait} masih di atas batas "
+                        f"{sch.stats.wait_floor}")
+                else:
+                    self.assertRegex(
+                        cat[0], r"\d",
+                        "pemeriksaan berjalan tapi catatannya tidak menyebut "
+                        "satu angka pun")

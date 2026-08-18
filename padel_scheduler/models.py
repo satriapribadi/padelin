@@ -204,6 +204,21 @@ class Config:
     # mana yang terjadi dilaporkan apa adanya di catatan jadwal.
     cpsat_seconds: float = 30.0
     cpsat_workers: int = 8
+    # Anggaran TOTAL (detik) untuk "Sempurnakan jadwal ini": penyempurnaan
+    # jendela-demi-jendela dengan solver eksak, dijalankan di atas jadwal yang
+    # sudah jadi. 0 = tidak dijalankan, dan itu bawaannya.
+    #
+    # Dipisahkan dari cpsat_seconds karena keduanya membeli hal yang berbeda.
+    # cpsat_seconds menyerahkan SELURUH jadwal ke solver, dan itu mati di 12
+    # ronde ke atas. Yang ini menyerahkan 3 ronde sekaligus dengan sisanya
+    # dipaku, jadi submodelnya selalu kecil - diukur, kesembilan jendela pada 26
+    # orang / 11 ronde terbukti optimal masing-masing di bawah 2,5 detik,
+    # sementara model utuh pada setup yang sama tidak selesai dalam 15 detik.
+    #
+    # Anggarannya TOTAL, bukan per jendela: host memilih berapa lama ia mau
+    # menunggu, bukan berapa jendela yang akan dicoba - jumlah jendela tidak
+    # bisa ia perkirakan.
+    lns_seconds: float = 0.0
     # Berapa kali seluruh penjadwalan diulang dengan seed turunan, lalu diambil
     # yang terbaik. Berhenti lebih awal begitu ada percobaan yang mencapai batas
     # bawah teoretis - mencoba lagi setelah itu mustahil menolong.
@@ -286,6 +301,8 @@ class Config:
             raise ValueError("Durasi per ronde minimal 1 menit.")
         if self.attempts < 1:
             raise ValueError("Jumlah percobaan minimal 1.")
+        if self.lns_seconds < 0:
+            raise ValueError("Anggaran penyempurnaan tidak boleh negatif.")
         if self.mode not in MODES:
             raise ValueError(f"Mode tidak dikenal: {self.mode}")
 

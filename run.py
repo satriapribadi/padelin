@@ -156,6 +156,11 @@ def _config_from(payload: dict) -> Config:
         # host sudah menunggu terlalu lama untuk sesuatu yang bisa saja tidak
         # membeli apa pun. Mode lain mengabaikan angka ini.
         cpsat_seconds=max(5, min(300, int(payload.get("cpsat_seconds", 30)))),
+        # Anggaran tombol "Sempurnakan jadwal ini". 0 = tidak dijalankan, dan
+        # itu yang dikirim tombol Generate biasa. Dibatasi 120 detik di atas:
+        # perbaikan yang terukur muncul di 5-22 detik, jadi di atas dua menit
+        # host menunggu untuk sesuatu yang sudah selesai mencari.
+        lns_seconds=max(0.0, min(120.0, float(payload.get("lns_seconds", 0)))),
     )
 
 

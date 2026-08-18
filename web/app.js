@@ -483,7 +483,11 @@ function courtDropPayload() {
   };
 }
 
-function buildPayload() {
+function buildPayload(tambahan) {
+  return Object.assign(_buildPayload(), tambahan || {});
+}
+
+function _buildPayload() {
   const opt = effortSetting();
   return {
     club_id: $('club_id').value ? +$('club_id').value : null,
@@ -709,6 +713,10 @@ function renderCpsatRonde() {
     : `Acara ini ${ronde} ronde - di dalam jangkauan solver.`;
 }
 
+// Apakah server membawa OR-Tools. Dipakai dua tempat: mode CP-SAT di bawah, dan
+// tawaran "Sempurnakan jadwal ini" - keduanya memakai solver yang sama.
+let cpsatAda = false;
+
 /**
  * Tampilkan mode CP-SAT hanya kalau OR-Tools benar-benar ada di server.
  *
@@ -718,6 +726,7 @@ function renderCpsatRonde() {
  * bahwa yang kurang adalah sebuah paket Python.
  */
 function applyCpsatAvailability(ada) {
+  cpsatAda = !!ada;
   const opt = $('mode').querySelector('option[value="americano_cpsat"]');
   if (!opt) return;
   opt.hidden = !ada;
@@ -846,17 +855,26 @@ async function streamSSE(path, payload, onEvent) {
   }
 }
 
-$('generate').onclick = async () => {
-  const btn = $('generate');
-  btn.disabled = true; btn.textContent = 'Menghitung...';
+/**
+ * Susun jadwal lewat server, lalu tampilkan. Dipakai dua tombol:
+ * "Generate" (tanpa argumen) dan "Sempurnakan jadwal ini" (dengan anggaran
+ * penyempurnaan). Keduanya mengirim setup yang sama persis - itu yang membuat
+ * penyempurnaan mendarat di jadwal yang sama sebelum solver mulai, karena
+ * seluruh rangkaian penjadwalan deterministik dari seed.
+ */
+async function jalankanGenerate(opsi) {
+  const o = opsi || {};
+  const btn = $(o.tombol || 'generate');
+  const labelAsli = btn.textContent;
+  btn.disabled = true; btn.textContent = o.sedang || 'Menghitung...';
   $('gen-msg').innerHTML = '';
   $('prog-log').textContent = '';
   $('gen-progress').style.display = '';
-  setProgress(0, 'Mengirim data ke generator');
+  setProgress(0, o.awal || 'Mengirim data ke generator');
 
   let failed = null;
   try {
-    await streamSSE('/api/schedule/stream', buildPayload(), (event, data) => {
+    await streamSSE('/api/schedule/stream', buildPayload(o.payload), (event, data) => {
       if (event === 'progress') {
         setProgress(data.pct, data.message);
         logLine(`${String(data.pct).padStart(5)}%  ${data.message}`);
@@ -880,14 +898,66 @@ $('generate').onclick = async () => {
 
     document.querySelector('.tabs button[data-view="jadwal"]').click();
     renderSchedule();
-    toast('Jadwal siap');
+    toast(o.selesai || 'Jadwal siap');
   } catch (e) {
     $('gen-msg').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
     logLine(e.message, 'err');
   } finally {
-    btn.disabled = false; btn.textContent = 'Generate';
+    btn.disabled = false; btn.textContent = labelAsli;
   }
-};
+}
+
+$('generate').onclick = () => jalankanGenerate();
+
+/**
+ * Tawaran "Sempurnakan jadwal ini".
+ *
+ * Muncul HANYA kalau tunggu terpanjang masih di atas batas yang tak
+ * terhindarkan - ambang numerik yang sama yang membuat kartu "Tunggu
+ * terpanjang" di atas berwarna kuning. Bukan selera: pada setup yang tandanya
+ * menyala, penyempurnaan per kelompok ronde memberi +2,3 sampai +3,8 poin
+ * dalam 7-22 detik; pada setup yang tandanya mati ia tidak pernah menemukan
+ * apa pun, jadi menawarkannya di situ cuma menghabiskan waktu host.
+ *
+ * Juga butuh OR-Tools di server. Kalau paket itu tidak ada, tombolnya tidak
+ * ditampilkan sama sekali daripada gagal setelah ditekan.
+ */
+const LNS_DETIK = 20;
+
+function renderPenyempurnaan(st) {
+  const box = $('lns-box');
+  if (!box) return;
+  box.innerHTML = '';
+  const bisa = cpsatAda && st.longest_wait !== undefined
+    && st.longest_wait > st.wait_floor;
+  if (!bisa) return;
+
+  const wrap = el('div', 'issue info');
+  wrap.appendChild(el('div', 't', 'Masih ada giliran yang bisa dirapikan'));
+  wrap.appendChild(el('div', 'd',
+    `Ada peserta yang duduk ${st.longest_wait} ronde beruntun, sementara `
+    + `pembagian paling merata untuk jumlah mainnya cuma menuntut `
+    + `${st.wait_floor} ronde. Solver eksak bisa menyusun ulang tiga ronde `
+    + `sekaligus - jangkauan yang tidak dimiliki pertukaran biasa.`));
+  const saran = el('div', 'f');
+  const tombol = el('button', 'btn ghost sm',
+    `Sempurnakan jadwal ini (maks ${LNS_DETIK} detik)`);
+  tombol.id = 'lns-run';
+  tombol.onclick = () => jalankanGenerate({
+    tombol: 'lns-run',
+    payload: { lns_seconds: LNS_DETIK },
+    sedang: 'Menyempurnakan...',
+    awal: 'Menyusun jadwal yang sama, lalu menyempurnakannya',
+    selesai: 'Penyempurnaan selesai',
+  });
+  saran.appendChild(tombol);
+  saran.appendChild(el('span', 'hint',
+    ' Jadwalnya tidak akan jadi lebih buruk: hasil solver cuma dipakai kalau '
+    + 'benar-benar lebih baik. Kalau tidak ada yang bisa diperbaiki, jadwal '
+    + 'sekarang dipertahankan dan alasannya ditulis di panel Catatan.'));
+  wrap.appendChild(saran);
+  box.appendChild(wrap);
+}
 
 function renderSchedule() {
   if (!schedule) return;
@@ -927,6 +997,7 @@ function renderSchedule() {
   }
   $('sched-stats').innerHTML = '';
   $('sched-stats').appendChild(grid);
+  renderPenyempurnaan(st);
 
   // Ronde. Card disusun grid, jumlah kolom mengikuti isi tiap card: dengan
   // 1 court satu card hanya memuat satu match, jadi kolom tunggal membuang

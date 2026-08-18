@@ -192,7 +192,8 @@ def optimize(st, courts_r: list[int], *,
              time_limit: float = 30.0,
              workers: int = 8,
              nilai=None,
-             progress=None) -> Hasil:
+             progress=None,
+             beku=None) -> Hasil:
     """Cari jadwal terbaik untuk `st`, lalu tulis hasilnya kembali ke `st`.
 
     `st` harus SUDAH berisi jadwal layak. Jadwal itu dipakai dua kali: sebagai
@@ -329,6 +330,40 @@ def optimize(st, courts_r: list[int], *,
                 lead.append(lo)
             for t in range(meja[r] - 1):
                 m.add(lead[t] < lead[t + 1])
+
+    # --- Ronde yang dipaku (dipakai penyempurnaan jendela) ----------------
+    # `beku` berisi ronde yang isinya TIDAK boleh diubah solver. Dengan itu satu
+    # panggilan optimize() jadi menyelesaikan submasalah 3 ronde alih-alih
+    # seluruh jadwal, dan submasalah itu selalu kecil - di situlah solver eksak
+    # kuat, sementara model utuh mati di 12 ronde ke atas.
+    #
+    # Court diurutkan naik menurut pemain ber-indeks terkecil oleh pemutus
+    # simetri di atas, jadi quad yang ada harus dipasang ke court dalam urutan
+    # yang SAMA. Kalau tidak, pakunya bertentangan dengan pemutus simetri dan
+    # modelnya jadi mustahil - bukan cuma lambat, dan kegagalannya tidak
+    # terlihat sebagai kesalahan pemrograman.
+    if beku:
+        for r in sorted(beku):
+            if not meja[r]:
+                continue
+            quads = sorted((list(q) for q in st.matches[r]), key=lambda q: min(q))
+            if len(quads) != meja[r]:
+                raise ValueError(
+                    f"Ronde {r + 1} punya {len(quads)} match tapi {meja[r]} court.")
+            aktif = set()
+            for t, q in enumerate(quads):
+                for a, b in ((q[0], q[1]), (q[2], q[3])):
+                    pr = (min(a, b), max(a, b))
+                    i = idx_pair[r].get(pr)
+                    if i is None:
+                        raise ValueError(
+                            f"Ronde {r + 1}: pasangan yang sedang dipakai tidak "
+                            f"ada di daftar pasangan sah.")
+                    m.add(pt[r][t][i] == 1)
+                    aktif.add(i)
+            for i in range(len(pairs[r])):
+                if i not in aktif:
+                    m.add(y[r][i] == 0)
 
     # --- Pertemuan antar pemain -------------------------------------------
     # partner[r][{p,q}] : jadi satu tim.  lawan[r][{p,q}] : berhadapan.
@@ -777,3 +812,185 @@ def _pelapor(progress):
                      f"(batas bawah {bawah:,.0f})")
 
     return _Impl()
+
+
+# ---------------------------------------------------------------------------
+# Penyempurnaan jendela (LNS): solver eksak di 3 ronde, sisanya dipaku
+# ---------------------------------------------------------------------------
+
+# Berapa ronde yang dibuka sekaligus. Diukur pada 26 orang / 4 court / 11 ronde:
+# kesembilan jendela 3-ronde TERBUKTI optimal, masing-masing 1,6-2,9 detik,
+# sementara model utuh pada setup yang sama tidak selesai dalam 15 detik. Dinding
+# "12 ronde ke atas" yang mematikan model utuh tidak berlaku untuk submodel.
+JENDELA = 3
+
+# Batas waktu satu jendela. Angka ini bukan yang membatasi total - anggaran
+# totalnya milik host (Config.lns_seconds) - melainkan penjaga supaya satu
+# jendela yang ternyata keras tidak menelan seluruh anggaran sendirian.
+DETIK_PER_JENDELA = 3.0
+
+# Berapa jendela terpanas yang dicoba per sapuan. Diukur: 3 jendela x 2 sapuan
+# memberi mutu rata-rata yang sama dengan menyapu SELURUH jendela (+0,57 lawan
+# +0,56 pada 18 kasus) dengan seperempat waktunya.
+JENDELA_PER_SAPUAN = 3
+
+# Sapuan diulang karena satu perbaikan bisa membuka perbaikan di jendela lain.
+MAKS_SAPUAN = 2
+
+
+@dataclass
+class HasilSempurna:
+    """Apa yang terjadi selama penyempurnaan, apa adanya.
+
+    Host menekan tombol dan menunggu; kalau tidak ada yang berubah ia berhak
+    tahu apakah itu karena jadwalnya sudah rapi atau karena waktunya habis.
+    """
+
+    dijalankan: bool = False
+    # Tidak ada satu pun ronde yang punya pelanggaran - jadwal sudah rapi.
+    gerbang_tutup: bool = False
+    jendela_dicoba: int = 0
+    jendela_membaik: int = 0
+    detik: float = 0.0
+    anggaran_habis: bool = False
+    catatan: list[str] = field(default_factory=list)
+
+
+def _panas_per_ronde(st, ambang: list[int]) -> list[int]:
+    """Seberapa banyak pelanggaran yang dimuat tiap ronde.
+
+    Dua sumber, dan keduanya perlu:
+
+      * rentetan duduk yang MELEBIHI ambang pemiliknya sendiri. Ambang itu
+        dihitung per pemain dari jumlah mainnya (optimizer.wait_thresholds),
+        jadi orang yang memang jarang turun tidak dituduh menunggu terlalu lama.
+      * ronde tempat sepasang orang berhadapan untuk kali kedua atau lebih.
+
+    Ronde tetangga sebuah rentetan ikut dihitung panas: mengeluarkan seseorang
+    dari rentetan butuh tempat untuk memasukkannya, dan tempat itu ada di ronde
+    sebelum atau sesudahnya. Tanpa itu jendela yang terpilih tidak punya ruang
+    gerak dan solver cuma memastikan keadaan yang sama.
+    """
+    R, n = st.n_rounds, st.n
+    panas = [0] * R
+    for p in range(n):
+        r = 0
+        while r < R:
+            if p not in st.byes[r]:
+                r += 1
+                continue
+            mulai = r
+            while r < R and p in st.byes[r]:
+                r += 1
+            if (r - mulai) > ambang[p]:
+                for k in range(max(0, mulai - 1), min(R, r + 1)):
+                    panas[k] += 1
+    for r in range(R):
+        for q in st.matches[r]:
+            a, b, c, d = q
+            for i, j in ((a, c), (a, d), (b, c), (b, d)):
+                if st.oc[st._k(i, j)] > 1:
+                    panas[r] += 1
+    return panas
+
+
+def sempurnakan(st, courts_r: list[int], *, anggaran: float,
+                workers: int = 8, nilai=None, progress=None) -> HasilSempurna:
+    """Perbaiki jadwal yang SUDAH JADI, jendela demi jendela, secara eksak.
+
+    Berbeda dari optimize(): yang ini tidak pernah menyerahkan seluruh jadwal ke
+    solver. Ia memilih jendela 3 ronde yang memuat pelanggaran terbanyak,
+    memakukan sisanya, dan menyelesaikan submasalah itu sampai TERBUKTI optimal.
+
+    Kalau tidak ada satu pun ronde yang memuat pelanggaran, ia tidak menjalankan
+    solver sama sekali - gerbangnya tutup dan ongkosnya nol. Diukur pada 18
+    kasus, gerbang itu menutup di setengahnya, dan tidak satu pun dari yang
+    tertutup memang punya sesuatu untuk dikejar.
+
+    Penjaga "tidak pernah lebih buruk" milik optimize() dipakai apa adanya: tiap
+    jendela hanya diterima kalau `nilai` membaik. Pada 54 percobaan di tiga
+    varian penyetelan, tidak ada satu pun jadwal yang memburuk.
+    """
+    hasil = HasilSempurna()
+    if not tersedia():
+        hasil.catatan.append(
+            "Penyempurnaan butuh OR-Tools, dan paket itu tidak terpasang.")
+        return hasil
+
+    from .optimizer import wait_thresholds
+
+    R = st.n_rounds
+    if R < JENDELA:
+        hasil.catatan.append(
+            f"Acara ini cuma {R} ronde, sementara penyempurnaan membuka "
+            f"{JENDELA} ronde sekaligus.")
+        return hasil
+
+    mulai = time.perf_counter()
+    hasil.dijalankan = True
+    nilai = nilai or _nilai_bawaan
+
+    for sapuan in range(MAKS_SAPUAN):
+        sisa = anggaran - (time.perf_counter() - mulai)
+        if sisa <= 0.5:
+            hasil.anggaran_habis = True
+            break
+        panas = _panas_per_ronde(st, wait_thresholds(st))
+        if not any(panas):
+            # Sapuan pertama: memang sudah rapi. Sapuan berikutnya: baru saja
+            # dirapikan. Keduanya berarti berhenti, tapi hanya yang pertama
+            # berarti tombolnya tidak perlu ditekan.
+            hasil.gerbang_tutup = (sapuan == 0)
+            break
+        urut = sorted(
+            ((sum(panas[a:a + JENDELA]), a) for a in range(R - JENDELA + 1)),
+            key=lambda x: (-x[0], x[1]))
+        kandidat = [a for skor, a in urut if skor > 0][:JENDELA_PER_SAPUAN]
+        ada = False
+        for ke, a in enumerate(kandidat):
+            sisa = anggaran - (time.perf_counter() - mulai)
+            if sisa <= 0.5:
+                hasil.anggaran_habis = True
+                break
+            if progress is not None:
+                progress(min(1.0, (time.perf_counter() - mulai) / max(anggaran, 1e-9)),
+                         f"Menyempurnakan ronde {a + 1}-{a + JENDELA}")
+            hasil.jendela_dicoba += 1
+            lapor = optimize(
+                st, courts_r,
+                time_limit=min(DETIK_PER_JENDELA, sisa),
+                workers=workers, nilai=nilai,
+                beku=set(range(R)) - set(range(a, a + JENDELA)),
+            )
+            if lapor.membaik:
+                hasil.jendela_membaik += 1
+                ada = True
+        if not ada:
+            break
+
+    hasil.detik = time.perf_counter() - mulai
+    return hasil
+
+
+def catatan_sempurna(h: HasilSempurna) -> str:
+    """Satu kalimat untuk host, menyebut angkanya - bukan cuma "selesai"."""
+    if not h.dijalankan:
+        return h.catatan[0] if h.catatan else "Penyempurnaan tidak dijalankan."
+    if h.gerbang_tutup:
+        return ("Penyempurnaan tidak menemukan apa pun untuk dikerjakan: tidak "
+                "ada peserta yang menunggu lebih lama daripada batas jumlah "
+                "mainnya, dan tidak ada pasangan yang berhadapan dua kali. "
+                "Jadwalnya tidak diubah.")
+    if not h.jendela_membaik:
+        pokok = (f"Penyempurnaan memeriksa {h.jendela_dicoba} kelompok ronde "
+                 f"dalam {h.detik:.1f} detik dan tidak menemukan susunan yang "
+                 f"lebih baik. Jadwalnya tidak diubah.")
+        return pokok + (" Anggaran waktunya habis lebih dulu, jadi menambahnya "
+                        "masih mungkin menolong." if h.anggaran_habis else "")
+    pokok = (f"Penyempurnaan memperbaiki {h.jendela_membaik} dari "
+             f"{h.jendela_dicoba} kelompok ronde yang diperiksa, dalam "
+             f"{h.detik:.1f} detik.")
+    if h.anggaran_habis:
+        pokok += (" Anggaran waktunya habis sebelum pemeriksaan selesai, jadi "
+                  "menambahnya masih mungkin menolong.")
+    return pokok

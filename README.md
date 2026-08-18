@@ -177,6 +177,43 @@ membengkak sekitar 200 MB karena OR-Tools membawa numpy, pandas, dan protobuf.
 Kalau OR-Tools tidak terpasang, modenya otomatis disembunyikan dari UI dan sisa
 aplikasi berjalan seperti biasa.
 
+**Sempurnakan jadwal ini**
+Tombol yang muncul di panel Hasil, dan **hanya** kalau ada peserta yang duduk
+lebih lama beruntun daripada batas yang tak terhindarkan untuk jumlah mainnya —
+ambang numerik yang sama yang membuat kartu *Tunggu terpanjang* berwarna kuning.
+Kalau jadwalnya sudah di batas, tombolnya tidak ditawarkan sama sekali.
+
+Yang dijalankannya bukan solver seutuh-jadwal. Ia membuka **tiga ronde
+sekaligus**, memaku sisanya, dan menyelesaikan submasalah itu secara eksak.
+Bedanya besar, dan itu yang membuat pendekatan ini ada: model utuh mati di 12
+ronde ke atas, sementara submodel selalu kecil. Diukur pada 26 orang / 4 court /
+11 ronde, setup yang model utuhnya kembali tanpa perbaikan setelah 15 detik:
+
+| jendela | terbukti optimal | detik |
+|---|---|---|
+| kesembilannya | ya, semua | 1,6–2,9 |
+
+Empat dari sembilan jendela itu menemukan perbaikan yang tidak terjangkau
+pertukaran biasa: 92,1 → 94,6, dengan pengulangan lawan tetap nol. Yang
+diperbaiki giliran — dan giliran memang yang paling sering tertinggal, karena
+pertukaran berpasangan tidak bisa menggeser tiga ronde sekaligus.
+
+Jendela yang dicoba dipilih dari lokasi pelanggarannya, bukan disapu semua.
+Diukur pada 18 kasus: menyapu seluruh jendela memberi mutu rata-rata yang sama
+(+0,56 lawan +0,57) dengan **empat kali** waktunya. Anggaran waktunya total,
+bukan per jendela — host memilih berapa lama ia mau menunggu, bukan berapa
+jendela yang akan dicoba.
+
+Jadwalnya tidak bisa jadi lebih buruk: hasil solver hanya dipakai kalau ukuran
+yang sama yang memilih di antara percobaan menyatakan ia lebih baik. Pada 54
+percobaan di tiga varian penyetelan, tidak satu pun jadwal memburuk. Kalau tidak
+ada yang bisa diperbaiki, jadwal sekarang dipertahankan dan alasannya ditulis di
+panel Catatan — termasuk kalau anggaran waktunya habis lebih dulu, karena itu
+satu-satunya keadaan yang layak dicoba ulang dengan angka lebih besar.
+
+Butuh OR-Tools, sama seperti mode CP-SAT. Tanpa paket itu tombolnya tidak
+ditampilkan.
+
 **Jumlah ronde yang membagi rata**
 Slot main per ronde = 4 × court. Supaya jatah main habis dibagi rata ke `N`
 peserta, `4·C·R` harus habis dibagi `N` — dan kalau tidak, sebagian orang main
@@ -307,7 +344,7 @@ web/
 tools/
   uitest.py                 uji interaksi UI lewat DevTools Protocol
   banding_cpsat.py          adu annealing lawan solver eksak pada setup yang sama
-tests/                      175 tes unit
+tests/                      217 tes unit
 ```
 
 ## Aplikasi desktop (Electron)
@@ -418,7 +455,7 @@ Data acara ada di `%APPDATA%\Padelin` saat dipasang lewat installer, dan
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 209 tes unit
+python -m unittest discover -s tests    # 217 tes unit
 python tools/uitest.py                  # 28 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 python tools/cetaktest.py               # 15 uji jalur cetak & pratinjau (Electron)
