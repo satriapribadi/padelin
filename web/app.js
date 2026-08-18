@@ -951,10 +951,17 @@ function renderPenyempurnaan(st) {
     selesai: 'Penyempurnaan selesai',
   });
   saran.appendChild(tombol);
+  // Kalimat ini pernah berbunyi "jadwalnya tidak akan jadi lebih buruk", dan itu
+  // menyesatkan ke arah yang paling merugikan: yang dijaga adalah URUTANNYA,
+  // dan urutan itu menaruh keunikan lawan di atas skor kualitas. Terukur, satu
+  // jadwal berpindah dari 18 ke 14 pasang lawan berulang dengan skor kualitas
+  // turun 90,5 -> 89,6. Host yang membaca janji lama lalu melihat angka
+  // kualitas turun akan menyimpulkan tombolnya rusak, padahal app sedang
+  // melakukan pertukaran yang dianutnya di semua tempat lain.
   saran.appendChild(el('span', 'hint',
-    ' Jadwalnya tidak akan jadi lebih buruk: hasil solver cuma dipakai kalau '
-    + 'benar-benar lebih baik. Kalau tidak ada yang bisa diperbaiki, jadwal '
-    + 'sekarang dipertahankan dan alasannya ditulis di panel Catatan.'));
+    'Yang dijaga urutannya: partner berulang, lalu lawan berulang, baru skor '
+    + 'kualitas. Jadi skor kualitas bisa turun sedikit kalau lawan berulangnya '
+    + 'ikut berkurang - itu pertukaran yang disengaja, bukan kemunduran.'));
   wrap.appendChild(saran);
   box.appendChild(wrap);
 }

@@ -167,6 +167,11 @@ input[type=date],input[type=time]{color-scheme:dark}
 .issue .t{font-weight:700;font-size:13px;margin-bottom:3px}
 .issue .d{font-size:12.5px;color:var(--muted)}
 .issue .f{font-size:12.5px;margin-top:5px;color:var(--ink);opacity:.85}
+/* Catatan kecil di bawah tombol saran. .hint di app ini selalu ber-scope
+   ke induknya (h2, label, .tl-h, .seg-toggle); tanpa aturan ini ia
+   mewarisi .issue .f dan terbaca sama nyaring dengan teks utama. */
+.issue .f .hint{display:block;margin-top:6px;font-size:11.5px;
+  color:var(--dim);font-style:italic;opacity:1}
 .issue.error{background:var(--bad-dim);border-color:var(--bad)}
 .issue.warning{background:var(--warn-dim);border-color:var(--warn)}
 .issue.info{background:var(--panel-2);border-color:var(--dim)}

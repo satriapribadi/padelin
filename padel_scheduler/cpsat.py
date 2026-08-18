@@ -870,21 +870,38 @@ def _panas_per_ronde(st, ambang: list[int]) -> list[int]:
     dari rentetan butuh tempat untuk memasukkannya, dan tempat itu ada di ronde
     sebelum atau sesudahnya. Tanpa itu jendela yang terpilih tidak punya ruang
     gerak dan solver cuma memastikan keadaan yang sama.
+
+    Rentetan diukur HANYA di ronde tempat peserta itu berhak turun, aturan yang
+    sama yang dipakai statistik di scheduler._telaah_giliran. Tanpa itu peserta
+    putri "menunggu" sepanjang babak putra, padahal ia bukan sedang dilewati -
+    ia sedang tidak berhak, dan tidak ada susunan yang bisa mengubahnya. Diukur
+    pada 26 orang dengan babak Putra 3 / Putri 3 / Mixed 5 berselang-seling,
+    skornya membengkak lima kali lipat: total 145-150 lawan 28-31 yang
+    sebenarnya, dan bengkaknya menumpuk di ronde batas babak - jadi jendela yang
+    terpilih adalah jendela yang tunggunya paling mustahil diperbaiki. Di meet
+    tanpa babak kedua hitungan itu identik.
     """
     R, n = st.n_rounds, st.n
     panas = [0] * R
     for p in range(n):
-        r = 0
-        while r < R:
-            if p not in st.byes[r]:
-                r += 1
+        # Ronde milik p sendiri. Tetangga rentetan juga diambil dari daftar ini,
+        # bukan dari ronde di sebelahnya secara mentah: tempat untuk menukar p
+        # masuk cuma ada di ronde tempat ia berhak turun.
+        milik = [r for r in range(R) if st.rules.eligible_at(r, p)]
+        mulai = None
+        for i, r in enumerate(milik):
+            if p in st.byes[r]:
+                if mulai is None:
+                    mulai = i
                 continue
-            mulai = r
-            while r < R and p in st.byes[r]:
-                r += 1
-            if (r - mulai) > ambang[p]:
-                for k in range(max(0, mulai - 1), min(R, r + 1)):
-                    panas[k] += 1
+            if mulai is not None:
+                if (i - mulai) > ambang[p]:
+                    for rr in milik[max(0, mulai - 1):i + 1]:
+                        panas[rr] += 1
+                mulai = None
+        if mulai is not None and (len(milik) - mulai) > ambang[p]:
+            for rr in milik[max(0, mulai - 1):]:
+                panas[rr] += 1
     for r in range(R):
         for q in st.matches[r]:
             a, b, c, d = q
