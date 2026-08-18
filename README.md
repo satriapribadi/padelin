@@ -149,6 +149,13 @@ detik:
 | 2,7 jam | 12 | — | — | tidak ada | tidak ada | tidak ada |
 | 3 jam | 14 | terbukti | tidak ada | tidak ada | tidak ada | tidak ada |
 
+Tabel ini menunjukkan arah, bukan hasil yang akan Anda dapat persis: solver
+berjalan dengan 8 worker dan batas waktu jam-dinding, jadi sel yang berbunyi
+"terbukti" bisa berbunyi lain saat diulang di mesin lain atau saat mesin yang
+sama sedang sibuk. Lihat catatan soal determinisme di bagian *Catatan*. Yang
+tidak berayun adalah letak dindingnya, dan itulah yang dipakai mengambil
+keputusan.
+
 Di 9 ronde solver menembus SELURUH rentang peserta, termasuk 26 orang dalam 30
 detik. Di 12 ronde ia mati total, bahkan pada 18 orang. Jadi batasnya tajam dan
 letaknya di sekitar **11 ronde** — bukan di jumlah peserta, seperti yang mudah
@@ -521,10 +528,43 @@ babak, daftar peserta beserta rating/gender/pasangan terkunci, dan jadwal yang
 dihasilkan. Nama peserta diganti jadi P1..Pn - yang dibutuhkan untuk
 mereproduksi masalah penjadwalan hanyalah strukturnya, bukan nama anggota klub.
 
+Satu batasnya: kalau jadwalnya dibuat dengan mode CP-SAT atau lewat tombol
+*Sempurnakan jadwal ini*, menjalankan ulang setup yang sama belum tentu
+menghasilkan jadwal yang sama - lihat catatan soal determinisme di bawah.
+Matikan dulu keduanya saat melacak masalah penjadwalan.
+
 ## Catatan
 
 - Database ada di `padel.db` (satu file, gampang di-backup).
-- Jadwal deterministik: seed yang sama menghasilkan jadwal yang sama. Ganti
-  seed untuk variasi lain dengan kualitas setara.
+- Jadwal deterministik **selama solver eksak tidak ikut**: seed yang sama
+  menghasilkan jadwal yang sama. Ganti seed untuk variasi lain dengan kualitas
+  setara. Yang menjaminnya adalah seluruh rangkaian penjadwalan - konstruksi,
+  annealing, perataan, perapian giliran - berjalan dari satu sumber acak yang
+  ditentukan seed.
+- **Dua jalur yang TIDAK deterministik**, dan sebaiknya diketahui sebelum
+  dipakai untuk melacak masalah: mode *Americano + solver eksak (CP-SAT)* dan
+  tombol *Sempurnakan jadwal ini*. Keduanya menjalankan solver dengan 8 worker
+  dan batas waktu jam-dinding, dan di sana hasilnya bergantung pada urutan
+  selesainya thread - bukan pada seed. Diukur dengan input yang sama persis,
+  lima kali berturut-turut di mesin yang sama: mode CP-SAT mendarat di 92,1
+  tanpa bukti optimal tiga kali dan di 94,7 dengan bukti dua kali. Tombol
+  penyempurnaan berayun serupa: delapan kali jalan menghasilkan **empat jadwal
+  yang berbeda** - mutu 94,6 enam kali dan 94,7 dua kali - dan pada sapuan lain
+  ia pernah kembali tanpa perbaikan sama sekali di 92,1.
+
+  Yang berayun cuma sisi mana yang ditemukan solver, bukan kesahihan jadwalnya:
+  hasil solver hanya dipakai kalau benar-benar lebih baik, jadi hasil terburuk
+  dari ayunan itu adalah jadwal yang sama dengan tanpa solver. Untuk melacak
+  masalah, jalankan ulang dengan modenya dimatikan lebih dulu - bagian yang
+  deterministik itulah yang bisa dibandingkan.
+
+  Determinisme di sini bukan hal yang tinggal dinyalakan. Diukur pada setup yang
+  sama: memaksanya dengan `interleave_search` plus batas waktu deterministik
+  memang berhasil - empat kali jalan, satu jadwal - tapi berongkos 4,4× lebih
+  lambat (22 → 98 detik) dan terkunci di 92,1 tanpa bukti, jadi yang hilang
+  justru kemungkinan mendarat di 94,7. Menurunkannya ke satu worker
+  menghilangkan pencarian portofolio yang membuat mode ini berguna. Jadi yang
+  dipilih adalah solver yang kuat dengan hasil yang berayun, dan ayunannya
+  disebut di sini apa adanya alih-alih dijanjikan tidak ada.
 - App ini sengaja dibuat tanpa dependency agar jalan offline dan tidak rusak
   saat Python naik versi.
