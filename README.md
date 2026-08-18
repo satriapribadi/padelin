@@ -48,7 +48,7 @@ kecil dengan durasi panjang.
 
 ## Cara kerja
 
-Tiga lapis yang terpisah rapi:
+Lima lapis yang terpisah rapi:
 
 1. **Konstruksi eksak** — 1-factorization (circle method) pada graf lengkap
    menjamin setiap kombinasi partner muncul tepat sekali, secara struktural.
@@ -62,6 +62,10 @@ Tiga lapis yang terpisah rapi:
    ada pemain yang main dua ronde lebih banyak daripada yang lain dan ada
    pertukaran sah yang memperbaikinya, tukar. Hasilnya selisih maksimal 1, dan
    rata sempurna kalau total slot habis dibagi jumlah pemain.
+5. **Perataan giliran** — annealing tahap kedua yang hanya mengurus siapa duduk
+   kapan, dengan jumlah pasang berulang yang sudah dicapai dipasang sebagai
+   batas keras. Diulang selama tunggu terpanjang masih di atas batas yang tak
+   terhindarkan, maksimal 3 putaran tambahan.
 
 Lapis keempat itu ada karena optimasi saja tidak cukup: annealing meminimalkan
 biaya gabungan, jadi kerataan main bisa tergadai demi variasi lawan — dan makin
@@ -72,6 +76,21 @@ itu kerugian nyata sedangkan sekali bertemu lawan yang sama hampir tak terasa.
 Fungsi biayanya memakai bentuk `c·(c-1)` yang konveks, sehingga pengulangan yang
 tidak terhindarkan tersebar rata — sistem lebih memilih "4 orang mengulang 1×"
 daripada "1 orang mengulang 4×".
+
+Putaran tambahan di lapis kelima ada karena satu anggaran tetap ternyata kurang,
+dan kekurangannya paling terasa justru di setup yang paling bagus. Diukur pada 16
+konfigurasi × 12 seed: **8 setup membaik, 0 memburuk, 8 tidak berubah** — dan
+yang tidak berubah tidak membayar apa pun, karena syaratnya sudah padam sebelum
+putaran pertama berjalan. Yang paling banyak dipungut adalah 26 peserta di 13
+ronde (96,6 → 97,8), satu-satunya jumlah ronde yang membagi jatah main rata untuk
+26 orang — jadi setup yang paling sering disarankan panel kelayakan sekaligus
+yang paling dirugikan anggaran lama.
+
+Syaratnya berpatokan pada tunggu terpanjang, bukan sekadar anggaran yang lebih
+besar untuk semua, karena sebagian setup memang tidak bisa mencapai batasnya:
+format yang dibatasi sesama-bentuk tidak sampai di batas walau anggarannya
+dikali sepuluh. Setup seperti itulah yang menanggung ongkosnya — 1,5 → 3,6 detik
+untuk +0,4 poin — sementara setup yang sudah di batasnya berongkos nol.
 
 ## Fitur
 

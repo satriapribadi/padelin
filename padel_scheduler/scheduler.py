@@ -321,6 +321,11 @@ _SEMUA_FORMAT = frozenset(MATCHUPS)
 # giliran main jadi timpang karena orang yang sudah lama duduk terus dilewati.
 OPPONENT_WEIGHT = 3.0
 
+# Berapa putaran perataan giliran TAMBAHAN yang boleh dijalankan selama tunggu
+# terpanjang masih di atas batas yang tak terhindarkan. Nol = perilaku lama.
+# Angkanya dari pengukuran yang dicatat di _build_once; lihat komentar di sana.
+_GILIRAN_EKSTRA = 3
+
 
 def _kunci_giliran(st: ScheduleState, r: int):
     """Pengurut pasangan menurut antrean giliran: makin depan, makin layak turun.
@@ -1305,50 +1310,40 @@ def _build_round(
 # Statistik
 # ---------------------------------------------------------------------------
 
-def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> ScheduleStats:
-    n = st.n
-    ids = [p.id for p in players]
+@dataclass
+class _Giliran:
+    """Telaah giliran main: angka yang dilaporkan ke host, dan angka yang
+    dipakai penjadwalan untuk tahu kapan berhenti merapikannya.
 
-    # Pasangan yang SENGAJA dikunci host. Mereka berulang tiap ronde - itu
-    # justru formatnya, bukan kegagalan rotasi. Kalau ikut dihitung, meet
-    # pasangan tetap selalu terlihat buruk: tiap pasangan menyumbang
-    # (main - 1) pengulangan, dan skornya kehilangan hampir seluruh 45 poin
-    # jatah partner. Yang diukur metrik ini adalah rotasi yang MELESET, jadi
-    # pasangan terkunci dikeluarkan dari hitungan - bukan disembunyikan:
-    # pasangannya tetap tercetak di jadwal dan di daftar peserta.
-    locked_pairs: set[tuple[int, int]] = set()
-    by_id = {p.id: p for p in players}
-    for p in players:
-        mate = p.partner_id
-        if mate is not None and by_id.get(mate) is not None \
-                and by_id[mate].partner_id == p.id:
-            locked_pairs.add((min(p.id, mate), max(p.id, mate)))
+    Dipisahkan dari _build_stats karena tahap perataan giliran perlu tahu
+    tunggu terpanjang DAN batas bawahnya di tengah pipeline, sebelum statistik
+    lengkap dirakit. Yang penting bukan kerapiannya melainkan bahwa batasnya
+    cuma ada SATU: kalau rumusnya disalin jadi versi kedua di tahap perataan,
+    meet bersegmen dan acara yang court-nya berkurang akan mengejar target yang
+    sebenarnya tak terjangkau - persis kekeliruan yang dijelaskan panjang di
+    bagian (2) di bawah, cuma kali ini akibatnya bukan denda yang salah
+    melainkan waktu tunggu host yang terbakar tanpa hasil.
+    """
 
-    partner_repeat_pairs = partner_repeat_max = 0
-    oppo_repeat_pairs = oppo_repeat_max = 0
-    never_met = 0
-    for i, j in combinations(ids, 2):
-        k = st._k(i, j)
-        pcv, ocv = st.pc[k], st.oc[k]
-        if pcv > 1 and (i, j) not in locked_pairs:
-            partner_repeat_pairs += 1
-            partner_repeat_max = max(partner_repeat_max, pcv)
-        if ocv > 1:
-            oppo_repeat_pairs += 1
-            oppo_repeat_max = max(oppo_repeat_max, ocv)
-        if pcv == 0 and ocv == 0:
-            never_met += 1
+    turn_skips: int
+    longest_wait: int
+    last_first_play: int
+    wait_floor: int
+    # Berapa ronde tiap orang benar-benar BERHAK turun. Dipakai penyebut
+    # duduk-beruntun di _build_stats, jadi ikut dikembalikan daripada dihitung
+    # dua kali.
+    ronde_berhak: dict[int, int]
+    berhak_set: list[set[int]]
+    duduk_berhak: list[set[int]]
 
-    plays = {pid: 0 for pid in ids}
-    for r in range(n_rounds):
-        for q in st.matches[r]:
-            for p in q:
-                plays[p] += 1
-    byes = {pid: st.bye_count[pid] for pid in ids}
 
-    # Duduk-beruntun dihitung setelah blok giliran di bawah, karena penyebutnya
-    # butuh berapa ronde tiap orang benar-benar berhak turun.
+def _telaah_giliran(st: ScheduleState, ids: list[int], n_rounds: int,
+                    plays: dict[int, int]) -> _Giliran:
+    """Hitung serobotan, tunggu terpanjang, dan batas bawah tunggu.
 
+    `plays` = berapa kali tiap peserta benar-benar turun, dihitung dari jadwal
+    akhir oleh pemanggil.
+    """
     # Giliran: berapa kali seseorang turun untuk kali ke-(k+1) padahal masih ada
     # orang lain yang sedang duduk dan belum kebagian kali ke-k. Dihitung ulang
     # dari jadwal akhir, bukan diambil dari hitungan konstruksi - annealing,
@@ -1447,6 +1442,70 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
                 break
             wait_floor = max(wait_floor, L)
             L += 1
+
+    return _Giliran(
+        turn_skips=turn_skips,
+        longest_wait=tunggu_max,
+        last_first_play=last_first_play,
+        wait_floor=wait_floor,
+        ronde_berhak=ronde_berhak,
+        berhak_set=berhak_set,
+        duduk_berhak=duduk_berhak,
+    )
+
+
+def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> ScheduleStats:
+    n = st.n
+    ids = [p.id for p in players]
+
+    # Pasangan yang SENGAJA dikunci host. Mereka berulang tiap ronde - itu
+    # justru formatnya, bukan kegagalan rotasi. Kalau ikut dihitung, meet
+    # pasangan tetap selalu terlihat buruk: tiap pasangan menyumbang
+    # (main - 1) pengulangan, dan skornya kehilangan hampir seluruh 45 poin
+    # jatah partner. Yang diukur metrik ini adalah rotasi yang MELESET, jadi
+    # pasangan terkunci dikeluarkan dari hitungan - bukan disembunyikan:
+    # pasangannya tetap tercetak di jadwal dan di daftar peserta.
+    locked_pairs: set[tuple[int, int]] = set()
+    by_id = {p.id: p for p in players}
+    for p in players:
+        mate = p.partner_id
+        if mate is not None and by_id.get(mate) is not None \
+                and by_id[mate].partner_id == p.id:
+            locked_pairs.add((min(p.id, mate), max(p.id, mate)))
+
+    partner_repeat_pairs = partner_repeat_max = 0
+    oppo_repeat_pairs = oppo_repeat_max = 0
+    never_met = 0
+    for i, j in combinations(ids, 2):
+        k = st._k(i, j)
+        pcv, ocv = st.pc[k], st.oc[k]
+        if pcv > 1 and (i, j) not in locked_pairs:
+            partner_repeat_pairs += 1
+            partner_repeat_max = max(partner_repeat_max, pcv)
+        if ocv > 1:
+            oppo_repeat_pairs += 1
+            oppo_repeat_max = max(oppo_repeat_max, ocv)
+        if pcv == 0 and ocv == 0:
+            never_met += 1
+
+    plays = {pid: 0 for pid in ids}
+    for r in range(n_rounds):
+        for q in st.matches[r]:
+            for p in q:
+                plays[p] += 1
+    byes = {pid: st.bye_count[pid] for pid in ids}
+
+    # Duduk-beruntun dihitung setelah blok giliran di bawah, karena penyebutnya
+    # butuh berapa ronde tiap orang benar-benar berhak turun.
+
+    g = _telaah_giliran(st, ids, n_rounds, plays)
+    turn_skips = g.turn_skips
+    tunggu_max = g.longest_wait
+    last_first_play = g.last_first_play
+    wait_floor = g.wait_floor
+    ronde_berhak = g.ronde_berhak
+    berhak_set = g.berhak_set
+    duduk_berhak = g.duduk_berhak
 
     gaps = []
     for r in range(n_rounds):
@@ -2288,14 +2347,74 @@ def _build_once(players: list[Player], config: Config,
     # pun, jadi kerataan yang baru dijamin rebalance_plays() aman tanpa perlu
     # diratakan ulang.
     say(0.90, "Meratakan giliran main")
+    anggaran_giliran = max(1000, config.effort // 2)
     anneal_giliran(
-        st, max(1000, config.effort // 2), rng,
+        st, anggaran_giliran, rng,
         progress=(lambda f, m: say(0.90 + f * 0.04, m)) if progress else None,
     )
     # Sapuan deterministik penutup: memungut perbaikan giliran yang masih
     # persis gratis dan kebetulan terlewat oleh lintasan acak annealing.
     say(0.94, "Merapikan sisa giliran")
     ratakan_giliran(st)
+
+    # Putaran giliran TAMBAHAN, dan hanya selama tunggu terpanjang masih di ATAS
+    # batas yang tak terhindarkan. Berhenti begitu batasnya tercapai, jadi setup
+    # yang memang sudah di batasnya tidak menjalankan ini sama sekali.
+    #
+    # Sebabnya: anggaran `effort // 2` di atas kurang, bukan mentok. Diukur
+    # dengan mengalikan anggaran itu saja (x1 / x4 / x10), attempts=1, 12 seed,
+    # yang dihitung berapa seed mencapai batas tunggu:
+    #
+    #   26 org / 4 court bebas      6/12 -> 11/12 -> 12/12   mutu 93,03 -> 94,34
+    #   26 org / 4 court 13 ronde   0/12 ->  1/12 ->  8/12   mutu 96,64 -> 98,66
+    #   20 org / 3 court            0/12 ->  0/12 ->  1/11   mutu 91,27 -> 91,77
+    #   16L+10P sesama-bentuk       0/12 ->  0/12 ->  0/12   mutu 90,92 -> 91,50
+    #   26 org sesama-bentuk        0/12 ->  0/12 ->  0/12   mutu 91,03 -> 91,20
+    #
+    # Mutunya naik monoton di kelimanya, dan yang paling banyak tertinggal
+    # justru setup 13 ronde - satu-satunya jumlah ronde yang membagi jatah main
+    # rata untuk 26 peserta, jadi setup yang paling sering disarankan panel
+    # kelayakan sekaligus yang paling banyak dirugikan anggaran lama.
+    #
+    # Kenapa berpatokan pada tunggu terpanjang dan bukan sekadar menaikkan
+    # anggaran untuk semua: dua baris terakhir di atas TIDAK PERNAH mencapai
+    # batasnya walau dikali sepuluh - format yang dibatasi sesama-bentuk memang
+    # mengunci gerakan yang dibutuhkan. Menaikkan anggaran rata untuk semua
+    # membuat setup seperti itu membayar empat kali lipat waktu tunggu host
+    # untuk perbaikan 0,2 poin. Dengan syarat ini, yang sudah di batasnya
+    # berongkos nol dan yang di atasnya membayar sampai batas putaran.
+    #
+    # Batas bawahnya diambil dari _telaah_giliran - fungsi yang sama yang
+    # dipakai statistik yang dilaporkan ke host. Menyalin rumusnya jadi versi
+    # kedua di sini akan membuat meet bersegmen dan acara yang court-nya
+    # berkurang mengejar target yang tak terjangkau.
+    #
+    # Mode CP-SAT: putaran ini berjalan SEBELUM solver, jadi solver dapat titik
+    # awal yang lebih baik - dan mode itu menjalankan _build_once dua kali
+    # (tiap percobaan, lalu sekali lagi untuk pemenang), jadi ongkos waktunya
+    # dibayar dua kali di sana. Disapu pada 3 setup x 3 seed, batas solver 15
+    # detik: mutu tidak turun di satu pun kasus (naik di 4, sama di 5), lawan
+    # berulang tidak memburuk di satu pun, dan pada 26 orang bebas seed 3
+    # solver justru jadi BISA membuktikan optimal - 91,4 tidak terbukti dalam
+    # 18,3 detik menjadi 94,3 terbukti dalam 11,5 detik, karena titik awal yang
+    # lebih rapi memperkecil ruang yang harus ditutup. Ongkosnya ditanggung
+    # setup yang batasnya tak terjangkau: 26 orang sesama-bentuk 18-20 detik
+    # menjadi 22-30 detik untuk +0,2..+0,6 poin.
+    ids_lokal = [lp.id for lp in local_players]
+    for putaran in range(_GILIRAN_EKSTRA):
+        plays_kini = {pid: 0 for pid in ids_lokal}
+        for r in range(total_rounds):
+            for q in st.matches[r]:
+                for pid in q:
+                    plays_kini[pid] += 1
+        g = _telaah_giliran(st, ids_lokal, total_rounds, plays_kini)
+        if g.longest_wait <= g.wait_floor:
+            break
+        say(0.94 + (putaran + 1) * 0.002,
+            f"Tunggu terpanjang {g.longest_wait} ronde, batas {g.wait_floor} - "
+            f"putaran giliran tambahan {putaran + 1}/{_GILIRAN_EKSTRA}")
+        anneal_giliran(st, anggaran_giliran, rng)
+        ratakan_giliran(st)
 
     # --- Solver eksak (mode CP-SAT saja) ---------------------------------
     # Dijalankan PALING AKHIR, dengan jadwal hasil seluruh tahap di atas sebagai
