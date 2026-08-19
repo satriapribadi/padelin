@@ -12,7 +12,7 @@
     "icon": "node electron/make-icon.js",
     "shortcut": "powershell -NoProfile -ExecutionPolicy Bypass -File electron/make-shortcut.ps1",
     "verify:dist": "node electron/verify-artifact.js",
-    "dist": "npm run fetch-python && electron-builder",
+    "dist": "npm run fetch-python && electron-builder --publish never",
     "dist:dir": "npm run fetch-python && electron-builder --dir",
     "prerelease": "node electron/ensure-tag.js",
     "release": "npm run fetch-python && electron-builder --publish always",

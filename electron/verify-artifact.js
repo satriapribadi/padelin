@@ -24,6 +24,14 @@
 // sudah mulai terkirim ketika hook ini berjalan. Untuk memastikan tidak ada
 // yang terlanjur, bangun dulu tanpa publish (`npm run dist`) lalu rilis.
 //
+// "Tanpa publish" itu dulu cuma benar di mesin sendiri. Di CI, electron-builder
+// menjadwalkan unggahan sendiri tanpa diminta - terlihat di uji-kering pertama,
+// yang berhenti dengan "GitHub Personal Access Token is not set" dari
+// PublishManager.scheduleUpload padahal yang dijalankan `npm run dist`. Kalau
+// tokennya kebetulan ada di env, build yang dikira uji coba akan menerbitkan
+// sungguhan. Karena itu `dist` sekarang memakai --publish never secara
+// eksplisit, dan kalimat di atas kembali menjadi janji yang benar di mana pun.
+//
 // Bisa juga dijalankan sendiri terhadap dist-desktop yang sudah ada:
 //
 //   npm run verify:dist
