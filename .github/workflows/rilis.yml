@@ -73,6 +73,18 @@ jobs:
 
       - run: npm ci
 
+      # icon.ico TIDAK ada di repo - ia di-gitignore sebagai artefak turunan,
+      # sumber kebenarannya electron/build/icon.html yang ikut di-commit. Di
+      # mesin sendiri berkasnya sudah lama ada sehingga tidak pernah terasa;
+      # checkout bersih tidak punya apa-apa, dan electron-builder berhenti di
+      # "cannot find specified resource" setelah Python 191 MB telanjur
+      # diunduh. Dirender di sini, sebelum build, supaya gagalnya murah.
+      #
+      # make-icon.js memakai Edge/Chrome yang memang sudah terpasang di image
+      # windows-latest; ia tidak menambah dependensi apa pun.
+      - name: Render ikon dari icon.html
+        run: npm run icon
+
       # Versi inilah yang jadi nama tag (vX.Y.Z) dan yang dibandingkan
       # electron-updater. Dicetak supaya log rilis menyebut apa yang dirilis,
       # bukan cuma bahwa sesuatu dirilis.
