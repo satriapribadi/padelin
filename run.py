@@ -312,26 +312,6 @@ def api_economics(payload: dict) -> dict:
     men_e = sum(1 for p in pemain if p.gender == "M")
     women_e = sum(1 for p in pemain if p.gender == "F")
 
-    options = compare(
-        n_players=n,
-        econ=econ,
-        court_options=court_options,
-        hour_options=sorted({1.0, 1.5, 2.0, 2.5, 3.0, round(hours, 2)}),
-        round_minutes=cfg.round_minutes,
-        warmup_minutes=cfg.warmup_minutes,
-        segments=seg_ekonomi,
-        men=men_e,
-        women=women_e,
-    )
-    # Skenario yang sedang dipakai tidak boleh terpangkas oleh batas tampilan.
-    def _is_current(o):
-        return o.courts == courts and abs(o.hours - hours) < 0.01
-
-    shown = options[:24]
-    if not any(_is_current(o) for o in shown):
-        current = next((o for o in options if _is_current(o)), None)
-        if current is not None:
-            shown = [current] + shown[:23]
     # Court yang dilepas di tengah acara: ongkos DAN waktu main dua-duanya turun,
     # jadi dua-duanya dikoreksi. Skenario pembanding "tambah 1 court" memakai pola
     # sewa yang sama plus satu court sepanjang acara - court tambahan yang ikut
@@ -354,6 +334,53 @@ def api_economics(payload: dict) -> dict:
                           court_hours_plus=chp,
                           matches_per_round_plus=mpr_plus)
 
+    options = compare(
+        n_players=n,
+        econ=econ,
+        court_options=court_options,
+        hour_options=sorted({1.0, 1.5, 2.0, 2.5, 3.0, round(hours, 2)}),
+        round_minutes=cfg.round_minutes,
+        warmup_minutes=cfg.warmup_minutes,
+        segments=seg_ekonomi,
+        men=men_e,
+        women=women_e,
+    )
+
+    def _is_current(o):
+        return o.courts == courts and abs(o.hours - hours) < 0.01
+
+    # Baris bertanda * dan titik tersorot di grafik adalah setup host sendiri,
+    # jadi angkanya harus angka yang SAMA dengan kartu skenario di atasnya -
+    # yaitu up["base"], yang sudah memakai court-jam yang benar-benar dibayar
+    # dan match yang benar-benar berjalan. compare() tidak tahu apa-apa soal
+    # court yang dilepas di tengah acara dan selalu menagih court x jam penuh:
+    # pada 2 court 2 jam yang satu court-nya dilepas di menit ke-60 ia melaporkan
+    # biaya 365.050 dan pil "rugi", sementara kartu di atasnya menyebut 275.050
+    # dan aman. Dua-duanya tidak bisa benar, dan yang salah justru baris yang
+    # dicari host pertama kali.
+    #
+    # Hanya baris itu yang dikoreksi. Pola sewa untuk jumlah court LAIN tidak
+    # bisa ditebak dari sini (lihat upgrade_analysis), jadi alternatif tetap
+    # dihitung court x jam penuh - dan `court_hours` di respons memberi tahu
+    # penampil supaya bedanya disebut, bukan dibiarkan terbaca sebagai harga
+    # court tambahan.
+    #
+    # Tanpa courts_after ini tidak mengubah apa pun: up["base"] dihitung dengan
+    # argumen yang sama seperti barisnya di compare().
+    options = [up["base"] if _is_current(o) else o for o in options]
+    if not any(_is_current(o) for o in options):
+        options.append(up["base"])
+    # Kunci urut sama dengan compare(): waktu main terbanyak dulu. Baris yang
+    # dikoreksi bergeser ke tempat yang sesuai menit mainnya yang sebenarnya.
+    options.sort(key=lambda o: (-o.play_minutes_per_player, o.total_cost))
+
+    # Skenario yang sedang dipakai tidak boleh terpangkas oleh batas tampilan.
+    shown = options[:24]
+    if not any(_is_current(o) for o in shown):
+        current = next((o for o in options if _is_current(o)), None)
+        if current is not None:
+            shown = [current] + shown[:23]
+
     return {
         "current": vars(up["base"]),
         "plus_one_court": vars(up["plus_one_court"]),
@@ -362,6 +389,11 @@ def api_economics(payload: dict) -> dict:
             if k not in ("base", "plus_one_court")
         },
         "options": [vars(o) for o in shown],
+        # Court-jam yang benar-benar dibayar untuk setup host, None kalau
+        # court tidak berkurang di tengah acara. Penampil memakainya untuk
+        # menyebut bahwa baris * berdiri di atas pola sewa yang berbeda
+        # daripada alternatifnya.
+        "court_hours": ch,
         # `ch` ikut: kalau court dilepas di tengah acara, ladder ini harus
         # berdiri di atas biaya yang sama dengan kartu "biaya total" di
         # sebelahnya. None kalau tidak ada courts_after, dan fungsinya jatuh ke

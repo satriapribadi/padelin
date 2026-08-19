@@ -294,6 +294,82 @@ class TestEconomics(unittest.TestCase):
         self.assertFalse(up["worth_it"])
 
 
+class TestPanelBiayaSatuDasar(unittest.TestCase):
+    """Semua angka di tab Biaya harus berdiri di atas biaya yang sama.
+
+    Panelnya punya tiga penyaji dengan sumber berbeda - kartu skenario dari
+    upgrade_analysis, tabel & grafik dari compare(), ladder fee dari
+    fee_for_target_margin - dan hanya yang pertama tahu soal court yang dilepas
+    di tengah acara. Host membaca ketiganya sekaligus, jadi yang diuji di sini
+    bukan salah satunya benar, tapi ketiganya sepakat.
+    """
+
+    def _payload(self, **ubah):
+        p = {
+            "title": "Uji", "courts": 2, "duration_minutes": 120,
+            "round_minutes": 12, "warmup_minutes": 10, "mode": "americano",
+            "players": [{"id": i, "name": f"Pemain {i + 1}", "rating": 3.0}
+                        for i in range(8)],
+            "economics": {"court_price_per_hour": 90000,
+                          "fee_per_player": 36257, "other_costs": 5050},
+        }
+        p.update(ubah)
+        return p
+
+    def _baris_host(self, d):
+        cur = d["current"]
+        baris = [o for o in d["options"]
+                 if o["courts"] == cur["courts"]
+                 and abs(o["hours"] - cur["hours"]) < 0.01]
+        self.assertEqual(len(baris), 1,
+                         "setup host harus muncul tepat sekali di tabel")
+        return baris[0]
+
+    def test_baris_bintang_sama_dengan_kartu_saat_court_berkurang(self):
+        # 2 court 2 jam, court turun jadi 1 dari ronde 6: yang dibayar 3,17
+        # court-jam, bukan 4. Sebelum diperbaiki tabel dan grafik melaporkan
+        # 365.050 dengan pil "rugi" untuk baris yang justru ditandai sebagai
+        # setup host, sementara kartu di atasnya menyebut 290.050 dan aman.
+        d = run.api_economics(self._payload(courts_after=1, courts_from_round=6))
+        cur, baris = d["current"], self._baris_host(d)
+        self.assertIsNotNone(d["court_hours"])
+        self.assertLess(d["court_hours"], 2 * 2.0)
+        for kunci in ("total_cost", "profit", "margin_pct",
+                      "play_minutes_per_player", "labels"):
+            self.assertEqual(baris[kunci], cur[kunci],
+                             f"'{kunci}' di tabel beda dengan kartu skenario")
+        self.assertNotIn("rugi", baris["labels"])
+
+    def test_ladder_fee_juga_memakai_biaya_yang_sama(self):
+        d = run.api_economics(self._payload(courts_after=1, courts_from_round=6))
+        modal = d["current"]["cost_per_player"]
+        for m, fee in d["fee_suggestions"].items():
+            # Fee target margin = modal / (1 - margin), dibulatkan ke atas ke
+            # Rp 5.000. Batas atasnya modal penuh court x jam, yang di setup ini
+            # 26% lebih tinggi - itu yang dulu tampil.
+            ideal = modal / (1 - int(m) / 100)
+            self.assertGreaterEqual(fee, ideal)
+            self.assertLess(fee, ideal + 5000)
+
+    def test_tanpa_court_berkurang_tidak_ada_yang_berubah(self):
+        # Jaring pengaman untuk koreksi di api_economics: acara yang court-nya
+        # utuh harus melewati jalur yang sama tanpa tergeser sedikit pun.
+        d = run.api_economics(self._payload())
+        cur, baris = d["current"], self._baris_host(d)
+        self.assertIsNone(d["court_hours"])
+        self.assertEqual(baris["total_cost"], cur["total_cost"])
+        self.assertEqual(baris["total_cost"], 2 * 2.0 * 90000 + 5050)
+        self.assertEqual(baris["play_minutes_per_player"],
+                         cur["play_minutes_per_player"])
+
+    def test_tabel_urut_dari_waktu_main_terbanyak(self):
+        # Judul panelnya menjanjikan urutan ini, dan baris host yang dikoreksi
+        # ikut diurut ulang - menit mainnya turun, jadi tempatnya juga berubah.
+        d = run.api_economics(self._payload(courts_after=1, courts_from_round=6))
+        menit = [o["play_minutes_per_player"] for o in d["options"]]
+        self.assertEqual(menit, sorted(menit, reverse=True))
+
+
 class TestExports(unittest.TestCase):
     @classmethod
     def setUpClass(cls):

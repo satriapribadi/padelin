@@ -2524,7 +2524,14 @@ async function renderEconomics() {
     const tile = statTileHTML;
 
     $('econ-now').innerHTML = '<div class="stat-grid">' +
-      tile('Biaya total', rp(c.total_cost), `${c.courts} court x ${c.hours} jam`) +
+      // Keterangan kartu harus menyebut sewa yang benar-benar ditagih. Kalau
+      // court berkurang di tengah acara, "2 court x 2 jam" membaca 4 court-jam
+      // sementara angka di atasnya dihitung dari 3,17 - keterangan yang
+      // membantah angkanya sendiri, dan satu-satunya petunjuk bahwa biayanya
+      // lebih rendah daripada court x jam malah hilang.
+      tile('Biaya total', rp(c.total_cost), d.court_hours == null
+        ? `${c.courts} court x ${c.hours} jam`
+        : `${+d.court_hours.toFixed(2)} court-jam, court berkurang`) +
       tile('Pemasukan', rp(c.revenue), `${c.n_players} x fee`) +
       tile('Untung', rp(c.profit), `margin ${c.margin_pct}%`, c.profit >= 0 ? 'good' : 'bad') +
       tile('Modal / peserta', rpUp(c.break_even_fee), 'fee minimal / peserta') +
@@ -2582,8 +2589,20 @@ async function renderEconomics() {
         `<td class="num">${o.margin_pct}%</td>` +
         `<td>${o.labels.slice(0, 2).map((l) => `<span class="pill ${l === 'rugi' ? 'b' : l.includes('layak') || l.includes('semua') ? 'g' : 'w'}">${esc(l)}</span>`).join('')}</td></tr>`;
     });
+    // Kalau court berkurang di tengah acara, baris * berdiri di atas pola sewa
+    // yang berbeda daripada baris lain: yang dibayar cuma court-jam yang benar
+    // benar disewa, sedangkan alternatifnya - jumlah court lain, yang pola
+    // sewanya tidak bisa ditebak - dihitung court x jam penuh. Tanpa disebut,
+    // selisih biaya antar baris terbaca sebagai harga court tambahan, dan itu
+    // angka yang salah untuk memutuskan.
+    const cj = d.court_hours == null ? '' :
+      ` Barisnya memakai pola sewamu, ${+d.court_hours.toFixed(2)} court-jam,`
+      + ' karena court berkurang di tengah acara. Baris lain dihitung court'
+      + ' Ã— jam penuh, jadi selisih biaya antar baris bukan harga court'
+      + ' tambahan - pakai kartu "Kalau tambah 1 court" untuk itu.';
     $('econ-table').innerHTML = html + '</tbody></table>' +
-      '<div style="font-size:11.5px;color:var(--muted);margin-top:10px">* = setup yang sedang kamu pilih.</div>';
+      '<div style="font-size:11.5px;color:var(--muted);margin-top:10px">'
+      + '* = setup yang sedang kamu pilih.' + cj + '</div>';
   } catch (e) {
     $('econ-now').innerHTML = `<div class="msg err">${esc(e.message)}</div>`;
   }
