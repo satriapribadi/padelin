@@ -471,6 +471,22 @@ ke aplikasi maupun ke repo.
 
 Naikkan `version` di `package.json` tiap merilis — itu yang dibandingkan.
 
+**Merilis tanpa mesin Windows.** Perintah di atas menuntut Windows, dan bukan
+cuma karena NSIS: `electron/fetch-python.js` berhenti sendiri kalau
+`process.platform` bukan `win32`, pembongkaran zip-nya memakai PowerShell, dan
+penyematan ikon memanggil `rcedit-x64.exe`. Di macOS/Linux ketiganya gugur dan
+yang keluar adalah installer tanpa Python maupun OR-Tools — tertangkap
+`verify-artifact.js` lewat ukurannya, jadi ia batal terunggah, tapi tetap saja
+membuang satu build.
+
+Jalan keluarnya menjalankan rantai yang sama di runner Windows:
+**Actions → Rilis → Run workflow** (`.github/workflows/rilis.yml`). Dipicu
+manual, bukan tiap push — rilis langsung terlihat oleh setiap aplikasi terpasang,
+jadi itu keputusan host, bukan akibat sampingan sebuah commit. Sekali saja
+sebelum dipakai: tambahkan secret repo `GH_TOKEN` (Settings → Secrets and
+variables → Actions) dengan izin tulis ke repo rilis saja. Runner Windows di repo
+privat dihitung 2× menit; satu build ~186 MB memakan sekitar 10–20 menit.
+
 ### Menjalankan tanpa memasang
 
 Tidak ada paket portable. Yang dulu ada — `npm run portable`, penghasil

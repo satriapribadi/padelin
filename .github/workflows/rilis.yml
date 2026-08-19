@@ -1,0 +1,89 @@
+# Bangun installer Windows lalu terbitkan rilisnya, tanpa perlu mesin Windows.
+#
+# Alasan workflow ini ada: satu-satunya target build proyek ini adalah installer
+# NSIS Windows, dan tiga bagian rantainya memang cuma jalan di Windows -
+# electron/fetch-python.js berhenti sendiri kalau process.platform bukan win32,
+# pembongkaran zip-nya memakai PowerShell Expand-Archive, dan penyematan ikon
+# memanggil rcedit-x64.exe. Di macOS/Linux ketiganya gugur, dan yang keluar
+# adalah installer tanpa Python maupun OR-Tools. Runner windows-latest
+# menjalankan rantai yang SAMA PERSIS dengan yang dijalankan di mesin Windows,
+# jadi tidak ada satu baris pun kode build yang perlu diubah demi CI.
+#
+# Dipicu manual, bukan otomatis tiap push: rilis mengunggah installer ~186 MB ke
+# repo publik padelin-rilis dan langsung terlihat oleh setiap aplikasi terpasang
+# (electron-updater memeriksanya sendiri). Itu keputusan host, bukan akibat
+# sampingan dari sebuah commit.
+#
+# Sekali saja sebelum dipakai: tambahkan secret repo bernama GH_TOKEN, isinya
+# token dengan izin TULIS ke satriapribadi/padelin-rilis saja. Token itu tidak
+# pernah masuk ke installer maupun ke kode - ia cuma dipakai runner saat
+# membuat tag dan mengunggah.
+
+name: Rilis
+
+on:
+  workflow_dispatch:
+
+# Izin bawaan dipersempit: workflow ini tidak menulis apa pun ke repo kode.
+# Yang menulis ke repo rilis adalah GH_TOKEN, bukan token bawaan Actions.
+permissions:
+  contents: read
+
+# Dua rilis yang berjalan bersamaan akan berebut tag dan aset yang sama.
+concurrency:
+  group: rilis
+  cancel-in-progress: false
+
+jobs:
+  rilis:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      # Python-nya BUKAN yang dibundel ke installer - yang dibundel diunduh
+      # sendiri oleh fetch-python.js sebagai distribusi embeddable. Yang ini
+      # cuma pemilik pip yang memasang OR-Tools ke dalamnya, dan wheel-nya
+      # ditarget eksplisit (--python-version, --platform win_amd64), jadi versi
+      # di sini tidak menentukan apa yang sampai ke pengguna.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # Gagal di sini berarti gagal dalam hitungan detik, bukan setelah build
+      # ~186 MB yang sia-sia. electron/ensure-tag.js sebenarnya memeriksa hal
+      # yang sama, tapi pesannya menyebut "setel GH_TOKEN" - di CI yang benar
+      # adalah menambah SECRET, dan tebakan yang salah di situ mahal.
+      - name: Pastikan secret GH_TOKEN ada
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "Secret GH_TOKEN belum ada di repo ini."
+            echo "Settings -> Secrets and variables -> Actions -> New repository secret,"
+            echo "nama GH_TOKEN, isinya token dengan izin tulis ke padelin-rilis."
+            exit 1
+          fi
+
+      - run: npm ci
+
+      # Versi inilah yang jadi nama tag (vX.Y.Z) dan yang dibandingkan
+      # electron-updater. Dicetak supaya log rilis menyebut apa yang dirilis,
+      # bukan cuma bahwa sesuatu dirilis.
+      - name: Sebutkan versi yang akan dirilis
+        shell: bash
+        run: node -p "'Merilis v' + require('./package.json').version"
+
+      # npm menjalankan "prerelease" (electron/ensure-tag.js, pembuat tag) lebih
+      # dulu dengan sendirinya, lalu "release" (fetch-python + electron-builder
+      # --publish always).
+      - name: Bangun dan terbitkan
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: npm run release
