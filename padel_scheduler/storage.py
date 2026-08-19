@@ -555,6 +555,29 @@ def delete_player(conn, player_id: int) -> None:
 # Acara
 # ---------------------------------------------------------------------------
 
+def court_hours_of(cfg: dict) -> float:
+    """Court-jam yang benar-benar disewa menurut satu config acara.
+
+    Bukan court x jam: acara yang melepas court kedua di tengah jalan membayar
+    lebih sedikit, dan angka inilah yang muncul di daftar acara, rekap klub, dan
+    laporan laba/rugi - salah di sini berarti laba klub ikut salah, jauh
+    setelah acaranya lewat.
+
+    Config di sini bentuk dict (dari schedule_json/request_json), bukan
+    models.Config, jadi models.Config.court_hours() tidak bisa dipakai langsung.
+    Rumusnya sama, dan dipanggil dari dua tempat - penyimpan acara dan buku besar
+    yang membacanya kembali - supaya keduanya tidak bisa menyimpang.
+    """
+    menit = float(cfg.get("duration_minutes", 0) or 0)
+    courts = int(cfg.get("courts", 0) or 0)
+    if not (cfg.get("courts_after") and cfg.get("courts_from_round")):
+        return courts * menit / 60.0
+    rm = float(cfg.get("round_minutes", 0) or 0)
+    awal = min(menit, float(cfg.get("warmup_minutes", 0) or 0)
+               + (int(cfg["courts_from_round"]) - 1) * rm)
+    return (courts * awal + int(cfg["courts_after"]) * (menit - awal)) / 60.0
+
+
 def save_event(conn, request: dict, schedule: dict,
                event_id: int | None = None) -> int:
     """Simpan (atau perbarui) satu acara beserta daftar pesertanya."""
@@ -565,18 +588,7 @@ def save_event(conn, request: dict, schedule: dict,
     hours = float(cfg.get("duration_minutes", 0)) / 60.0
     courts = int(cfg.get("courts", 0))
     n_players = len(schedule.get("players", []))
-    # Court-jam yang benar-benar disewa. Bukan court x jam: acara yang melepas
-    # court kedua di tengah jalan membayar lebih sedikit, dan angka inilah yang
-    # muncul di daftar acara dan rekap klub - salah di sini berarti laporan laba
-    # klub ikut salah, jauh setelah acaranya lewat.
-    court_hours = courts * hours
-    if cfg.get("courts_after") and cfg.get("courts_from_round"):
-        menit = float(cfg.get("duration_minutes", 0))
-        rm = float(cfg.get("round_minutes", 0) or 0)
-        awal = min(menit, float(cfg.get("warmup_minutes", 0) or 0)
-                   + (int(cfg["courts_from_round"]) - 1) * rm)
-        court_hours = (courts * awal
-                       + int(cfg["courts_after"]) * (menit - awal)) / 60.0
+    court_hours = court_hours_of(cfg)
     total_cost = (court_hours * float(econ.get("court_price_per_hour") or 0)
                   + float(econ.get("other_costs") or 0))
     revenue = n_players * float(econ.get("fee_per_player") or 0)
@@ -797,4 +809,144 @@ def club_summary(conn, club_id: int) -> dict:
         "attendances": int(row["attendances"]),
         "avg_quality": round(float(row["avg_quality"]), 1),
         "members": int(members["n"]),
+    }
+
+
+def host_ledger(conn, club_id: int | None = None, since: str = "",
+                until: str = "") -> dict:
+    """Buku besar acara yang sudah lewat: mana yang untung, mana yang nombok.
+
+    Menjawab pertanyaan yang tidak bisa dijawab panel Biaya: panel itu meramal
+    SATU acara sebelum dijalankan, sedangkan yang ditanya host sesudahnya adalah
+    "dari sepuluh meet terakhir, saya untung atau rugi, dan yang rugi kenapa".
+    Angkanya dibaca dari kolom yang sudah disimpan saat acara disimpan
+    (total_cost/revenue/profit), bukan dihitung ulang dari setup - setup boleh
+    berubah setelahnya, tapi yang sudah dibayar tidak.
+
+    `since`/`until` inklusif, format YYYY-MM-DD, dibandingkan terhadap tanggal
+    acara (atau tanggal simpan kalau acaranya tidak bertanggal - acara tanpa
+    tanggal tetap harus masuk hitungan, karena uangnya tetap keluar).
+    """
+    where, params = " WHERE 1=1", []
+    if club_id:
+        where += " AND e.club_id = ?"
+        params.append(int(club_id))
+    tanggal = "COALESCE(NULLIF(e.event_date,''), substr(e.created_at,1,10))"
+    if since:
+        where += f" AND {tanggal} >= ?"
+        params.append(since)
+    if until:
+        where += f" AND {tanggal} <= ?"
+        params.append(until)
+
+    rows = conn.execute(
+        f"SELECT e.id, e.title, {tanggal} AS tanggal, e.event_date, "
+        "e.venue_name, e.n_players, e.courts, e.duration_min, e.rounds, "
+        "e.mode, e.quality_score, e.total_cost, e.revenue, e.profit, "
+        "e.request_json, c.name AS club_name "
+        "FROM events e LEFT JOIN clubs c ON c.id = e.club_id"
+        + where + f" ORDER BY {tanggal} DESC, e.id DESC",
+        params,
+    ).fetchall()
+
+    events, per_venue, per_month = [], {}, {}
+    for r in rows:
+        d = dict(r)
+        try:
+            req = json.loads(d.pop("request_json") or "{}")
+        except (TypeError, ValueError):
+            req = {}
+        econ = req.get("economics") or {}
+        # Config acara ada di request; court-jam dihitung dengan rumus yang sama
+        # yang dipakai saat menyimpannya.
+        court_hours = court_hours_of(req)
+        fee = float(econ.get("fee_per_player") or 0)
+        n = int(d["n_players"] or 0)
+        revenue = float(d["revenue"] or 0)
+        cost = float(d["total_cost"] or 0)
+        profit = float(d["profit"] or 0)
+
+        d.update({
+            "court_hours": round(court_hours, 2),
+            "court_price_per_hour": float(econ.get("court_price_per_hour") or 0),
+            "other_costs": float(econ.get("other_costs") or 0),
+            "fee_per_player": fee,
+            "total_cost": round(cost, 2),
+            "revenue": round(revenue, 2),
+            "profit": round(profit, 2),
+            "margin_pct": round(profit / revenue * 100.0, 1) if revenue else 0.0,
+            "cost_per_player": round(cost / n, 2) if n else 0.0,
+            # Selisih fee terhadap modal per peserta: inilah jawaban "yang rugi
+            # kenapa" dalam satuan yang bisa langsung dipakai host - berapa fee
+            # kurang dipasang per orang.
+            "fee_gap": round(fee - (cost / n), 2) if n else 0.0,
+        })
+        events.append(d)
+
+        v = per_venue.setdefault(
+            d["venue_name"] or "(tanpa venue)",
+            {"venue_name": d["venue_name"] or "(tanpa venue)", "events": 0,
+             "revenue": 0.0, "total_cost": 0.0, "profit": 0.0,
+             "court_hours": 0.0})
+        v["events"] += 1
+        v["revenue"] += revenue
+        v["total_cost"] += cost
+        v["profit"] += profit
+        v["court_hours"] += court_hours
+
+        bulan = (d["tanggal"] or "")[:7] or "(tanpa tanggal)"
+        m = per_month.setdefault(
+            bulan, {"month": bulan, "events": 0, "revenue": 0.0,
+                    "total_cost": 0.0, "profit": 0.0, "attendances": 0})
+        m["events"] += 1
+        m["revenue"] += revenue
+        m["total_cost"] += cost
+        m["profit"] += profit
+        m["attendances"] += n
+
+    def _rapikan(kumpulan, kunci):
+        out = []
+        for x in kumpulan:
+            x["margin_pct"] = (round(x["profit"] / x["revenue"] * 100.0, 1)
+                               if x["revenue"] else 0.0)
+            for k in ("revenue", "total_cost", "profit", "court_hours"):
+                if k in x:
+                    x[k] = round(x[k], 2)
+            out.append(x)
+        return sorted(out, key=kunci)
+
+    revenue_all = sum(e["revenue"] for e in events)
+    cost_all = sum(e["total_cost"] for e in events)
+    profit_all = revenue_all - cost_all
+    n_laba = sum(1 for e in events if e["profit"] > 0)
+    n_rugi = sum(1 for e in events if e["profit"] < 0)
+    hadir = sum(int(e["n_players"] or 0) for e in events)
+
+    summary = {
+        "events": len(events),
+        "laba": n_laba,
+        "rugi": n_rugi,
+        # Impas dihitung terpisah, bukan dilebur ke "laba": acara yang persis
+        # balik modal bukan keuntungan, dan host yang melihat "8 laba" padahal
+        # 3 di antaranya impas akan salah menilai harga feenya.
+        "impas": len(events) - n_laba - n_rugi,
+        "revenue": round(revenue_all, 2),
+        "total_cost": round(cost_all, 2),
+        "profit": round(profit_all, 2),
+        "margin_pct": (round(profit_all / revenue_all * 100.0, 1)
+                       if revenue_all else 0.0),
+        "attendances": hadir,
+        "profit_per_event": (round(profit_all / len(events), 2)
+                             if events else 0.0),
+        "profit_per_attendance": round(profit_all / hadir, 2) if hadir else 0.0,
+        "best": max(events, key=lambda e: e["profit"], default=None),
+        "worst": min(events, key=lambda e: e["profit"], default=None),
+    }
+    return {
+        "events": events,
+        "summary": summary,
+        # Venue diurut dari yang paling banyak menghasilkan; bulan menurut waktu.
+        "per_venue": _rapikan(per_venue.values(), lambda x: -x["profit"]),
+        "per_month": _rapikan(per_month.values(), lambda x: x["month"]),
+        "filter": {"club_id": club_id or None, "since": since, "until": until},
     }

@@ -1767,9 +1767,35 @@ async function saveEvent(asNew) {
 $('save-event').onclick = () => saveEvent(false);
 $('save-event-new').onclick = () => saveEvent(true);
 
+// Laporan laba/rugi: acara yang SUDAH dijalankan, bukan yang direncanakan.
+// Dibuka sebagai halaman lewat GET, bukan form POST seperti laporan jadwal -
+// tidak ada jadwal yang perlu dibawa, cuma penyaringnya, jadi alamatnya bisa
+// dimuat ulang dan di-bookmark.
+$('open-ledger').onclick = () => {
+  const since = $('ledger-since').value;
+  const until = $('ledger-until').value;
+  if (since && until && since > until) {
+    return toast('Rentang tanggalnya terbalik - "dari" lebih akhir daripada "sampai"');
+  }
+  const q = new URLSearchParams();
+  const cid = currentClubId();
+  if (cid) q.set('club_id', cid);
+  if (since) q.set('since', since);
+  if (until) q.set('until', until);
+  const qs = q.toString();
+  window.open('/api/host-report' + (qs ? `?${qs}` : ''), '_blank');
+};
+
 async function loadEvents() {
   try {
     const d = await loadPaged('events');
+    // Laporan laba/rugi hanya bisa menghitung acara yang tersimpan, jadi
+    // jumlahnya disebut di sebelah tombolnya - host yang baru menutup 5 meet
+    // tanpa menyimpannya akan melihat laporan kosong dan mengira fiturnya rusak.
+    $('ledger-hint').textContent = d.total
+      ? `${d.total} acara tersimpan${pager.events.search ? ' (penyaring pencarian tidak ikut ke laporan)' : ''}`
+      + '. Laporan menghitung acara yang disimpan lewat "Simpan ke database".'
+      : 'Belum ada acara tersimpan - laporannya akan kosong sampai ada yang disimpan.';
     if (!d.items.length) {
       $('events').innerHTML = `<div class="empty">${pager.events.search ? 'Tidak ada yang cocok.' : 'Belum ada jadwal tersimpan.'}</div>`;
       renderPager($('events-pager'), d, () => {});
@@ -2598,7 +2624,7 @@ async function renderEconomics() {
     const cj = d.court_hours == null ? '' :
       ` Barisnya memakai pola sewamu, ${+d.court_hours.toFixed(2)} court-jam,`
       + ' karena court berkurang di tengah acara. Baris lain dihitung court'
-      + ' Ã— jam penuh, jadi selisih biaya antar baris bukan harga court'
+      + ' × jam penuh, jadi selisih biaya antar baris bukan harga court'
       + ' tambahan - pakai kartu "Kalau tambah 1 court" untuk itu.';
     $('econ-table').innerHTML = html + '</tbody></table>' +
       '<div style="font-size:11.5px;color:var(--muted);margin-top:10px">'

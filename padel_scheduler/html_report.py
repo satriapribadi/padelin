@@ -341,6 +341,17 @@ def _rupiah(value: float) -> str:
     return "Rp " + f"{round(value):,}".replace(",", ".")
 
 
+def _jam(value: float) -> str:
+    """Angka jam/court-jam gaya Indonesia: koma desimal, nol ekor dibuang.
+
+    Bukan f"{v:g}": court-jam kerap tidak bulat (2 court 2 jam yang satu
+    court-nya dilepas di menit ke-60 = 3,1666...), dan %g mencetak "3.16667" -
+    presisi yang tidak berarti apa-apa bagi host, dengan titik yang di dokumen
+    ini sudah dipakai sebagai pemisah ribuan pada Rupiah.
+    """
+    return f"{value:.2f}".rstrip("0").rstrip(".").replace(".", ",")
+
+
 def _clock(minutes: int, start_clock: str | None) -> str:
     if not start_clock:
         return f"+{minutes} mnt"
@@ -380,7 +391,13 @@ def build_html(
     logo: str = "",
     fee: float = 0.0,
 ) -> str:
-    """Rakit laporan HTML lengkap sebagai satu dokumen mandiri."""
+    """Rakit laporan HTML lengkap sebagai satu dokumen mandiri.
+
+    Tidak ada angka margin host di sini, dan itu keputusan: laporan inilah yang
+    dibagikan ke grup peserta, lengkap dengan fee yang mereka bayar. Sisi uang
+    host tinggal di laporan laba/rugi (host_report.py), yang dibuka sendiri dari
+    tab Riwayat dan tidak pernah ikut terkirim ke siapa pun.
+    """
     names = {p.id: p.name for p in schedule.players}
     genders = {p.id: p.gender for p in schedule.players}
     cfg = schedule.config

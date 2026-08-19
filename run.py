@@ -37,6 +37,7 @@ from padel_scheduler import (
 from padel_scheduler import cpsat, storage
 from padel_scheduler.capacity import rounds_from_duration
 from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_analysis
+from padel_scheduler.host_report import build_host_report
 from padel_scheduler.html_report import build_html
 from padel_scheduler.models import (
     COURT_NAME_MAX,
@@ -772,6 +773,35 @@ class Handler(BaseHTTPRequestHandler):
                 kwargs["club_id"] = int(cid) if cid.isdigit() else None
             with storage.session() as conn:
                 self._send_json(fn(conn, **kwargs))
+        elif path == "/api/host-report":
+            # GET, bukan POST seperti /api/report: laporan ini tidak membawa
+            # jadwal apa pun - cuma penyaring - jadi alamatnya bisa dimuat ulang,
+            # di-bookmark, dan dibuka lagi bulan depan tanpa mengklik apa pun di
+            # aplikasi.
+            cid = (query.get("club_id") or [""])[0]
+            club_id = int(cid) if cid.isdigit() else None
+            since = (query.get("since") or [""])[0].strip()
+            until = (query.get("until") or [""])[0].strip()
+            try:
+                with storage.session() as conn:
+                    ledger = storage.host_ledger(conn, club_id, since, until)
+                    club = storage.get_club(conn, club_id) if club_id else None
+                html = build_host_report(
+                    ledger,
+                    club_name=(club or {}).get("name", ""),
+                    logo=(club or {}).get("logo") or "",
+                )
+                self._send_bytes(html.encode("utf-8"),
+                                 "text/html; charset=utf-8")
+            except Exception as exc:  # noqa: BLE001
+                # Dijawab sebagai halaman, bukan JSON: yang membukanya jendela
+                # browser, dan JSON mentah di situ tidak memberi tahu host apa
+                # pun yang bisa ia lakukan.
+                self.log_gagal(exc)
+                self._send_bytes(
+                    f"<p style='font-family:sans-serif;padding:30px'>"
+                    f"Gagal membuat laporan laba/rugi: {exc}</p>"
+                    .encode("utf-8"), "text/html; charset=utf-8")
         elif path == "/api/events/get":
             try:
                 eid = int((query.get("id") or ["0"])[0])

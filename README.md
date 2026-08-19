@@ -332,6 +332,30 @@ keputusannya sadar, bukan menebak.
 - Teks siap tempel ke grup WhatsApp, plus jadwal per pemain
 - CSV untuk Excel / Google Sheets
 
+**Laporan laba / rugi host**
+Pertanyaan sebelum acara ("kalau saya sewa 3 court dan menagih 75.000, untung
+berapa?") dijawab panel Biaya. Pertanyaan sesudahnya berbeda: "dari meet yang
+sudah saya selenggarakan, saya untung atau rugi, dan yang rugi kenapa?" Tab
+Riwayat → **Buka laporan laba / rugi** merakit jawabannya sebagai satu halaman
+siap cetak, dengan penyaring rentang tanggal:
+
+- ringkasan: jumlah acara, pemasukan, biaya, untung, margin, untung per acara dan
+  per kehadiran. Untung / rugi / **impas** dihitung terpisah — acara yang persis
+  balik modal bukan keuntungan, dan meleburnya ke "untung" membuat fee terasa
+  sudah pas padahal seluruh kerja host tidak dibayar
+- tabel per acara: fee, modal per peserta, biaya, pemasukan, untung, margin, dan
+  status sebagai **kata** (bukan hanya warna — laporan ini sering dicetak
+  hitam-putih)
+- **acara yang nombok**, masing-masing dengan sebabnya dalam satuan yang bisa
+  dipakai: "fee kurang Rp 12.500 per orang", plus court-jam × harga sewanya,
+  karena menaikkan fee bukan satu-satunya jalan keluar
+- rekap per venue dan per bulan
+
+Angkanya dibaca dari kolom yang disimpan saat acara disimpan, bukan dihitung
+ulang dari setup — setup boleh berubah setelahnya, uang yang sudah keluar tidak.
+Court yang dilepas di tengah acara sudah ikut: biayanya dari court-jam yang
+benar-benar disewa.
+
 **Master data (SQLite)**
 Klub (dengan logo), venue (harga sewa mengisi panel Biaya otomatis), pemain,
 riwayat acara, dan statistik lintas acara — siapa yang rajin datang, siapa yang
@@ -371,7 +395,8 @@ padel_scheduler/
   economics.py              biaya, margin, trade-off court
   storage.py                SQLite: klub, venue, pemain, acara
   report.py                 ekspor teks / CSV / JSON
-  html_report.py            laporan HTML siap cetak
+  html_report.py            laporan jadwal HTML siap cetak
+  host_report.py            laporan laba/rugi acara yang sudah lewat
   presets.py                format meet siap pilih
 web/
   app.js                    antarmuka (module, tanpa framework)

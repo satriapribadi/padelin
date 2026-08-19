@@ -1024,6 +1024,69 @@ def main() -> int:
                     f"({d['kb']} KB)")
         check("Buka laporan membawa jadwal yang tampil", laporan_bawa_jadwal)
 
+        # --- 12e. laporan laba/rugi -------------------------------------
+        # Tombolnya membuka halaman lewat window.open, jadi yang diperiksa dua
+        # hal: alamat yang dibangun (penyaring benar-benar ikut) dan halaman
+        # yang keluar dari alamat itu. Memeriksa alamatnya saja pernah tidak
+        # cukup di proyek ini - lihat "Grafik trade-off memuat pilihan aktif".
+        def laporan_laba_rugi():
+            b.js("document.querySelector('.tabs button[data-view=\"riwayat\"]')"
+                 ".click(); true")
+            b.wait_for("document.getElementById('open-ledger')", timeout=8,
+                       label="tombol laporan laba/rugi")
+            # Promise-nya harus jadi nilai yang di-await, bukan objek yang
+            # di-JSON.stringify - JSON.stringify(Promise) menghasilkan "{}" dan
+            # tesnya lalu gagal di tempat yang tidak menjelaskan apa pun.
+            hasil = b.js("""(async () => {
+              const asli = window.open;
+              let alamat = null;
+              window.open = (u) => { alamat = u; return null; };
+              const set = (id, v) => { document.getElementById(id).value = v; };
+              try {
+                set('ledger-since', '2026-01-01');
+                set('ledger-until', '2026-12-31');
+                document.getElementById('open-ledger').click();
+              } finally { window.open = asli; }
+              if (!alamat) return JSON.stringify({ada: false});
+
+              // Rentang terbalik harus ditolak sebelum jendela dibuka.
+              let ditolak = true;
+              window.open = () => { ditolak = false; return null; };
+              try {
+                set('ledger-since', '2026-12-31');
+                set('ledger-until', '2026-01-01');
+                document.getElementById('open-ledger').click();
+              } finally { window.open = asli; }
+              set('ledger-since', ''); set('ledger-until', '');
+
+              const r = await fetch(alamat);
+              const h = await r.text();
+              return JSON.stringify({
+                ada: true, alamat, ditolak, status: r.status,
+                seksi: [...new DOMParser().parseFromString(h, 'text/html')
+                  .querySelectorAll('h2')].map(x => x.firstChild.textContent),
+                hint: document.getElementById('ledger-hint').textContent,
+              });
+            })()""")
+            d = json.loads(hasil)
+            assert d["ada"], "tombol laporan laba/rugi tidak membuka apa pun"
+            assert "/api/host-report" in d["alamat"], d["alamat"]
+            for perlu in ("since=2026-01-01", "until=2026-12-31"):
+                assert perlu in d["alamat"], \
+                    f"penyaring tidak ikut ke alamat: {d['alamat']}"
+            assert d["ditolak"], \
+                "rentang tanggal terbalik tetap membuka laporan"
+            assert d["status"] == 200, f"laporan menjawab {d['status']}"
+            # Halamannya harus benar-benar berisi buku besarnya, bukan cuma
+            # terbuka: acara yang tersimpan di database uji ini nyata.
+            assert "Ringkasan" in d["seksi"], d["seksi"]
+            assert any("Laba / rugi per acara" in x for x in d["seksi"]) \
+                or not d["seksi"], f"tabel per acara tidak ada: {d['seksi']}"
+            assert "acara tersimpan" in d["hint"], d["hint"]
+            return (f"{len(d['seksi'])} seksi, penyaring tanggal ikut, "
+                    f"rentang terbalik ditolak")
+        check("Laporan laba/rugi terbuka dengan penyaringnya", laporan_laba_rugi)
+
         # --- 13. tidak ada error JS sepanjang sesi ------------------------
         def no_errors():
             errs = b.js("window.__errs")

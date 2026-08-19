@@ -26,7 +26,8 @@ from padel_scheduler.economics import (
     fee_for_target_margin,
     upgrade_analysis,
 )
-from padel_scheduler.html_report import build_html
+from padel_scheduler.host_report import build_host_report
+from padel_scheduler.html_report import _rupiah, build_html
 from padel_scheduler.report import (
     batas_keunikan,
     from_dict,
@@ -1039,6 +1040,165 @@ class TestLogServer(unittest.TestCase):
         # Yang dibungkam log_error, jadi satu kejadian tetap satu baris.
         h = self._handler(path="/api/tidak-ada")
         self.assertEqual(self._tercatat(lambda: h.log_error("code %d", 404)), "")
+
+
+class TestLaporanLabaRugi(unittest.TestCase):
+    """Buku besar acara yang sudah lewat, dan laporan cetaknya.
+
+    Bedanya dengan panel Biaya: panel itu meramal satu acara sebelum dijalankan,
+    yang ini menjumlahkan acara yang sudah dibayar. Karena itu angkanya diambil
+    dari kolom yang tersimpan, bukan dihitung ulang dari setup - dan tes di sini
+    menjaga keduanya tidak bisa menyimpang.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.db = Path(self.tmp.name) / "t.db"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _simpan(self, conn, cid, *, title, tanggal, fee, harga, lain=0.0,
+                n=8, courts=2, venue="Arena", courts_after=None,
+                courts_from_round=None):
+        sch = make_schedule(n=n, courts=courts, refs=0, balls=0)
+        req = {
+            "title": title, "event_date": tanggal, "club_id": cid,
+            "venue": venue, "courts": courts, "duration_minutes": 120,
+            "round_minutes": 12, "warmup_minutes": 10,
+            "economics": {"court_price_per_hour": harga, "fee_per_player": fee,
+                          "other_costs": lain},
+        }
+        if courts_after:
+            req["courts_after"] = courts_after
+            req["courts_from_round"] = courts_from_round
+        data = to_dict(sch)
+        # Config jadwal harus ikut membawa pola sewanya, sama seperti yang
+        # dikirim aplikasi - save_event menghitung biaya dari config, bukan dari
+        # request.
+        data["config"].update({k: req[k] for k in
+                               ("courts", "duration_minutes", "round_minutes",
+                                "warmup_minutes")})
+        if courts_after:
+            data["config"]["courts_after"] = courts_after
+            data["config"]["courts_from_round"] = courts_from_round
+        return storage.save_event(conn, req, data)
+
+    def _isi(self, conn):
+        cid = storage.ensure_default_club(conn)
+        # Untung: fee 50.000 x 8 = 400.000, biaya 2x2 jam x 90.000 = 360.000.
+        self._simpan(conn, cid, title="Untung", tanggal="2026-08-09",
+                     fee=50000, harga=90000, venue="Arena")
+        # Rugi: fee 30.000 x 8 = 240.000 dengan biaya yang sama.
+        self._simpan(conn, cid, title="Nombok", tanggal="2026-08-16",
+                     fee=30000, harga=90000, venue="Arena")
+        # Impas persis: biaya 360.000 / 8 = 45.000 per orang.
+        self._simpan(conn, cid, title="Impas", tanggal="2026-07-05",
+                     fee=45000, harga=90000, venue="Lapangan Lain")
+        return cid
+
+    def test_untung_rugi_impas_dihitung_terpisah(self):
+        with storage.session(self.db) as conn:
+            self._isi(conn)
+            led = storage.host_ledger(conn)
+        s = led["summary"]
+        self.assertEqual(s["events"], 3)
+        self.assertEqual((s["laba"], s["rugi"], s["impas"]), (1, 1, 1))
+        # Impas TIDAK dihitung sebagai untung: host yang melihat "2 untung"
+        # padahal satu di antaranya balik modal akan menyimpulkan feenya sudah
+        # pas, padahal seluruh kerjanya tidak dibayar.
+        self.assertEqual(s["revenue"], 400000 + 240000 + 360000)
+        self.assertEqual(s["total_cost"], 360000 * 3)
+        self.assertEqual(s["profit"], 40000 - 120000 + 0)
+        self.assertEqual(s["attendances"], 24)
+
+    def test_urut_dari_yang_terbaru_dan_selisih_fee_disebut(self):
+        with storage.session(self.db) as conn:
+            self._isi(conn)
+            led = storage.host_ledger(conn)
+        self.assertEqual([e["title"] for e in led["events"]],
+                         ["Nombok", "Untung", "Impas"])
+        rugi = led["events"][0]
+        self.assertEqual(rugi["cost_per_player"], 45000)
+        # fee_gap negatif = fee kurang dipasang sebanyak itu per orang. Inilah
+        # jawaban "yang rugi kenapa" dalam satuan yang bisa langsung dipakai.
+        self.assertEqual(rugi["fee_gap"], 30000 - 45000)
+
+    def test_rekap_per_venue_dan_per_bulan(self):
+        with storage.session(self.db) as conn:
+            self._isi(conn)
+            led = storage.host_ledger(conn)
+        venue = {v["venue_name"]: v for v in led["per_venue"]}
+        self.assertEqual(venue["Arena"]["events"], 2)
+        self.assertEqual(venue["Arena"]["profit"], 40000 - 120000)
+        self.assertEqual(venue["Lapangan Lain"]["events"], 1)
+        bulan = {m["month"]: m for m in led["per_month"]}
+        self.assertEqual(sorted(bulan), ["2026-07", "2026-08"])
+        self.assertEqual(bulan["2026-08"]["events"], 2)
+        self.assertEqual(bulan["2026-07"]["attendances"], 8)
+
+    def test_rentang_tanggal_inklusif(self):
+        with storage.session(self.db) as conn:
+            self._isi(conn)
+            hanya_agustus = storage.host_ledger(conn, since="2026-08-01",
+                                                until="2026-08-31")
+            batas_persis = storage.host_ledger(conn, since="2026-08-16",
+                                               until="2026-08-16")
+        self.assertEqual(hanya_agustus["summary"]["events"], 2)
+        self.assertEqual(batas_persis["summary"]["events"], 1)
+        self.assertEqual(batas_persis["events"][0]["title"], "Nombok")
+
+    def test_court_jam_sama_dengan_yang_dipakai_saat_menyimpan(self):
+        # Buku besar membaca court-jam dari request_json, sementara biaya yang
+        # tersimpan dihitung dari config jadwal. Keduanya harus sampai ke angka
+        # yang sama - kalau tidak, laporan menyebut "3,17 court-jam" di sebelah
+        # biaya yang ditagih untuk 4.
+        with storage.session(self.db) as conn:
+            cid = storage.ensure_default_club(conn)
+            self._simpan(conn, cid, title="Court turun", tanggal="2026-08-20",
+                         fee=50000, harga=90000, lain=5050,
+                         courts_after=1, courts_from_round=6)
+            led = storage.host_ledger(conn)
+        e = led["events"][0]
+        self.assertLess(e["court_hours"], 2 * 2.0)
+        terpakai = (e["total_cost"] - e["other_costs"]) / e["court_price_per_hour"]
+        self.assertAlmostEqual(e["court_hours"], terpakai, places=2)
+
+    def test_laporan_menyebut_yang_nombok_beserta_sebabnya(self):
+        with storage.session(self.db) as conn:
+            self._isi(conn)
+            led = storage.host_ledger(conn)
+        h = build_host_report(led, club_name="Klub Uji")
+        self.assertIn("Laba / rugi per acara", h)
+        self.assertIn("Acara yang nombok", h)
+        self.assertIn("Nombok", h)
+        # Sebabnya disebut dalam satuan yang bisa dipakai, bukan cuma "rugi".
+        self.assertIn("fee kurang Rp 15.000 per orang", h)
+        # Status selalu kata, tidak hanya warna - laporan ini dicetak, sering
+        # hitam-putih. Istilahnya "laba", mengikuti judul laporannya.
+        for kata in ("laba", "rugi", "impas"):
+            self.assertIn(f">{kata}</span>", h)
+        # Kolom uang tanpa "Rp" di tiap sel; satuannya di judul.
+        self.assertIn("angka uang dalam Rupiah", h)
+
+    def test_laporan_kosong_tidak_meledak(self):
+        with storage.session(self.db) as conn:
+            led = storage.host_ledger(conn)
+        h = build_host_report(led)
+        self.assertIn("Belum ada acara tersimpan", h)
+        # Yang kosong tidak boleh menampilkan tabel atau kartu berisi nol.
+        self.assertNotIn("Laba / rugi per acara", h)
+        self.assertIn("Simpan ke database", h)
+
+    def test_judul_acara_di_escape(self):
+        with storage.session(self.db) as conn:
+            cid = storage.ensure_default_club(conn)
+            self._simpan(conn, cid, title="<script>alert(1)</script>",
+                         tanggal="2026-08-09", fee=50000, harga=90000)
+            led = storage.host_ledger(conn)
+        h = build_host_report(led)
+        self.assertNotIn("<script>alert(1)</script>", h)
+        self.assertIn("&lt;script&gt;", h)
 
 
 class TestStorage(unittest.TestCase):
