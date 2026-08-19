@@ -107,6 +107,11 @@ COURT_PREFERENCES: tuple[str, ...] = (
     "women_only", "men_only", "same_gender", "mixed_team",
 )
 
+# Panjang maksimum nama court pilihan host. Angkanya datang dari lebar kolom
+# court di kartu ronde (layar maupun cetak): di atas ini nama tim mulai
+# terdorong keluar kartunya.
+COURT_NAME_MAX = 14
+
 
 @dataclass
 class PreferenceViolation:
@@ -261,6 +266,14 @@ class Config:
     # boleh berhadapan dengan tim seperti apa. Host memakainya untuk mencegah
     # pertandingan yang timpang, mis. dua putra melawan dua putri.
     allowed_matchups: list[str] | None = None
+    # Nama court pilihan host, indeks 0 = court 1. Kosong (atau lebih pendek
+    # daripada jumlah court) berarti court itu memakai nama bawaan "C1", "C2".
+    #
+    # Disimpan di Config, bukan di tiap Round, karena namanya milik LAPANGAN
+    # dan tidak berubah antar ronde. Menaruhnya per ronde berarti mengganti
+    # satu nama harus menyentuh 13 tempat, dan jadwal lama yang dibuka dari
+    # riwayat akan punya ronde yang namanya sudah tidak sama satu sama lain.
+    court_names: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
         if self.courts < 1:
@@ -305,6 +318,21 @@ class Config:
             raise ValueError("Anggaran penyempurnaan tidak boleh negatif.")
         if self.mode not in MODES:
             raise ValueError(f"Mode tidak dikenal: {self.mode}")
+        # Nama court dinormalkan, bukan ditolak: ia cuma label. Baris baru
+        # dibuang karena namanya masuk ke teks WhatsApp per baris, dan
+        # panjangnya dipotong karena kolom court di kartu ronde punya lebar
+        # terbatas - nama 60 huruf mendorong nama tim keluar dari kartunya,
+        # baik di layar maupun di PDF cetak.
+        self.court_names = [
+            " ".join(str(n or "").split())[:COURT_NAME_MAX]
+            for n in (self.court_names or [])
+        ]
+
+    def court_label(self, court: int) -> str:
+        """Nama yang ditampilkan untuk satu court: pilihan host atau "C{n}"."""
+        nama = (self.court_names[court - 1]
+                if 0 < court <= len(self.court_names) else "")
+        return nama or f"C{court}"
 
     def total_segment_rounds(self) -> int:
         return sum(s.rounds for s in self.segments)

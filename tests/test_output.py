@@ -12,6 +12,7 @@ import unittest
 from pathlib import Path
 
 from padel_scheduler import (
+    COURT_NAME_MAX,
     Config,
     Economics,
     Player,
@@ -786,6 +787,79 @@ class TestLaporanMemakaiJadwalYangTampil(unittest.TestCase):
         p = self._payload(sch, seed_setup=1)
         del p["schedule"]["stats"]["quality_score"]
         self.assertIsNone(run._schedule_supplied(p))
+
+
+class TestNamaCourt(unittest.TestCase):
+    """Nama court pilihan host harus muncul di SEMUA yang dibaca peserta.
+
+    Bukan cuma di kartu ronde: host mengganti nama supaya peserta menemukan
+    lapangannya, dan teks WhatsApp-lah yang benar-benar dibaca peserta. Nama
+    yang cuma berubah di layar host justru bentuk kegagalan yang paling
+    membingungkan - keduanya menyebut lapangan yang sama dengan dua nama.
+    """
+
+    def _bikin(self, court_names):
+        players = [Player(id=i, name=f"Pemain {i + 1}", rating=3.0)
+                   for i in range(9)]
+        return build_schedule(players, Config(
+            courts=2, duration_minutes=60, round_minutes=10, mode="americano",
+            effort=2000, referees_per_court=1, court_names=court_names))
+
+    def test_nama_masuk_ke_semua_keluaran(self):
+        sch = self._bikin(["Indoor A", "Outdoor 2"])
+        for keluaran in (to_text(sch), to_personal_text(sch), to_csv(sch),
+                         build_html(sch)):
+            self.assertIn("Indoor A", keluaran)
+            self.assertIn("Outdoor 2", keluaran)
+        # Nomor court tetap ada di CSV sebagai kolom sendiri: yang membuka di
+        # Excel menyortir dan menghitung per court, dan nama bisa saja sama.
+        baris = to_csv(sch).strip().split("\n")
+        self.assertEqual(baris[0].split(",")[3:5], ["court", "nama_court"])
+        self.assertEqual(baris[1].split(",")[3], "1")
+
+    def test_court_tanpa_nama_pakai_bawaan(self):
+        sch = self._bikin(["Indoor A"])
+        self.assertEqual(sch.config.court_label(2), "C2")
+        self.assertIn("C2", to_text(sch))
+
+    def test_nama_dinormalkan_dan_dipotong(self):
+        cfg = Config(courts=2, duration_minutes=60,
+                     court_names=["  Indoor\n  A  ", "N" * 40])
+        self.assertEqual(cfg.court_names[0], "Indoor A")
+        self.assertEqual(len(cfg.court_names[1]), COURT_NAME_MAX)
+
+    def test_nama_bertahan_lewat_serialisasi(self):
+        sch = self._bikin(["Indoor A", "Outdoor 2"])
+        pulang = from_dict(json.loads(json.dumps(to_dict(sch))))
+        self.assertEqual(pulang.config.court_names, ["Indoor A", "Outdoor 2"])
+
+    def test_endpoint_menulis_ulang_teks_tanpa_menjadwal_ulang(self):
+        """Ganti nama tidak boleh menyusun ulang jadwalnya.
+
+        Susunan yang berubah saat host cuma mengganti label berarti jadwal
+        yang sudah diumumkan ke peserta diam-diam jadi jadwal lain.
+        """
+        sch = self._bikin([])
+        data = json.loads(json.dumps(to_dict(sch)))
+        data["config"]["court_names"] = ["Indoor A", "Outdoor 2"]
+        hasil = run.api_schedule_text({
+            "title": "Uji", "schedule": data,
+            # Setup sengaja menyebut seed lain: yang dipakai harus jadwal
+            # kiriman, bukan hasil generate ulang dari setup ini.
+            "courts": 2, "duration_minutes": 60, "mode": "americano",
+            "seed": sch.config.seed + 7, "effort": 2000,
+            "players": [{"id": p.id, "name": p.name, "rating": p.rating}
+                        for p in sch.players],
+        })
+        self.assertIn("Indoor A", hasil["text"])
+        self.assertIn("Indoor A", hasil["personal_text"])
+        self.assertIn("Indoor A", hasil["csv"])
+        self.assertEqual(susunan(from_dict(data)), susunan(sch))
+
+    def test_endpoint_menolak_tanpa_jadwal(self):
+        from padel_scheduler.scheduler import ScheduleError
+        with self.assertRaises(ScheduleError):
+            run.api_schedule_text({"title": "Uji"})
 
 
 class TestLogServer(unittest.TestCase):

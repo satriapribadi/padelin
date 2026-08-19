@@ -13,6 +13,7 @@ Pemakaian singkat:
 from .capacity import CapacityReport, Issue, analyze, suggest_setup
 from .economics import Economics, Option, compare, evaluate, upgrade_analysis
 from .models import (
+    COURT_NAME_MAX,
     COURT_PREFERENCES,
     MODES,
     SEGMENT_RULES,
@@ -31,6 +32,7 @@ from .report import from_dict, to_csv, to_dict, to_text
 from .scheduler import ScheduleError, build_schedule
 
 __all__ = [
+    "COURT_NAME_MAX",
     "COURT_PREFERENCES",
     "MODES",
     "SEGMENT_RULES",

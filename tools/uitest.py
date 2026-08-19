@@ -555,6 +555,70 @@ def main() -> int:
                         " + ' ronde'")
         check("Generate jadwal", generate)
 
+        # --- 3a. ganti nama court -----------------------------------------
+        # Nama court muncul di empat tempat: kartu ronde di layar, teks
+        # WhatsApp, jadwal per pemain, dan CSV. Tiga yang terakhir dibuat
+        # server, jadi yang diuji bukan cuma labelnya berubah di layar - tapi
+        # bahwa teks yang disalin host ikut berubah.
+        def ganti_nama_court():
+            jml_court = b.js("document.querySelectorAll("
+                             "'#court-names input[data-court]').length")
+            assert jml_court > 0, "kotak isian nama court tidak muncul"
+
+            # Rekam jawaban endpoint penulisan ulang teks.
+            b.js("""(() => {
+              window.__cn = [];
+              const asli = window.fetch;
+              window.fetch = async (u, o) => {
+                const res = await asli(u, o);
+                if (String(u).includes('/api/schedule/text')) {
+                  res.clone().json().then(d => window.__cn.push(d))
+                     .catch(() => {});
+                }
+                return res;
+              };
+            })(); true""")
+
+            b.js("""(() => {
+              const i = document.querySelector(
+                '#court-names input[data-court="1"]');
+              i.value = 'Indoor A';
+              i.dispatchEvent(new Event('input', {bubbles:true}));
+              i.dispatchEvent(new Event('change', {bubbles:true}));
+            })(); true""")
+
+            label = b.js("document.querySelector('#rounds .match .c')"
+                         ".textContent")
+            assert label == "Indoor A", f"kartu ronde masih menyebut '{label}'"
+
+            # Kolom court melebar mengikuti nama - kalau tidak, nama terpanjang
+            # menabrak nama tim di sebelahnya.
+            lebar = b.js("getComputedStyle(document.querySelector('#rounds "
+                         ".rounds')).getPropertyValue('--courtw').trim()")
+            assert lebar and int(lebar.replace("px", "")) > 24, \
+                f"kolom court tidak melebar untuk nama panjang: '{lebar}'"
+
+            b.wait_for("window.__cn.length > 0", timeout=15,
+                       label="teks ditulis ulang server")
+            d = b.js("window.__cn[0]")
+            for kunci in ("text", "personal_text", "csv"):
+                assert "Indoor A" in (d.get(kunci) or ""), \
+                    f"nama court tidak masuk ke {kunci}"
+            assert "C2" in d["text"], "court yang tidak diganti kehilangan namanya"
+
+            # Dikosongkan lagi harus kembali ke nama bawaan, bukan jadi kosong.
+            b.js("""(() => {
+              const i = document.querySelector(
+                '#court-names input[data-court="1"]');
+              i.value = '';
+              i.dispatchEvent(new Event('input', {bubbles:true}));
+            })(); true""")
+            balik = b.js("document.querySelector('#rounds .match .c')"
+                         ".textContent")
+            assert balik == "C1", f"tidak kembali ke nama bawaan: '{balik}'"
+            return f"{jml_court} court bisa dinamai, teks server ikut berubah"
+        check("Ganti nama court", ganti_nama_court)
+
         # --- 3b. log kemajuan terisi dari server --------------------------
         def proglog():
             lines = b.js("document.querySelectorAll('#prog-log div').length")

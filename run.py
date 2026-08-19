@@ -38,7 +38,12 @@ from padel_scheduler import cpsat, storage
 from padel_scheduler.capacity import rounds_from_duration
 from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_analysis
 from padel_scheduler.html_report import build_html
-from padel_scheduler.models import COURT_PREFERENCES, MATCHUP_LABELS, MATCHUPS
+from padel_scheduler.models import (
+    COURT_NAME_MAX,
+    COURT_PREFERENCES,
+    MATCHUP_LABELS,
+    MATCHUPS,
+)
 from padel_scheduler.presets import PRESETS
 from padel_scheduler.report import (
     format_date_id,
@@ -156,6 +161,11 @@ def _config_from(payload: dict) -> Config:
         # host sudah menunggu terlalu lama untuk sesuatu yang bisa saja tidak
         # membeli apa pun. Mode lain mengabaikan angka ini.
         cpsat_seconds=max(5, min(300, int(payload.get("cpsat_seconds", 30)))),
+        # Nama court pilihan host. Dipotong panjangnya dan dibersihkan oleh
+        # Config sendiri, jadi di sini cukup dipastikan bentuknya daftar teks -
+        # payload lama tidak punya field ini sama sekali, dan itu berarti
+        # semua court memakai nama bawaan.
+        court_names=[str(n or "") for n in (payload.get("court_names") or [])],
         # Anggaran tombol "Sempurnakan jadwal ini". 0 = tidak dijalankan, dan
         # itu yang dikirim tombol Generate biasa. Dibatasi 120 detik di atas:
         # perbaikan yang terukur muncul di 5-22 detik, jadi di atas dua menit
@@ -390,6 +400,30 @@ def _schedule_supplied(payload: dict):
         return None
 
 
+def api_schedule_text(payload: dict) -> dict:
+    """Tulis ulang teks WA, jadwal per pemain, dan CSV untuk jadwal yang ADA.
+
+    Dipakai saat host mengganti nama court. Nama itu muncul di ketiga teks,
+    dan ketiganya lahir di server saat jadwal dibuat - tanpa endpoint ini
+    satu-satunya cara menyegarkannya adalah menjadwal ulang, yaitu membayar
+    seluruh optimasi (belasan detik sampai lima menit di mode CP-SAT) hanya
+    untuk mengganti label. Susunan pertandingannya sendiri tidak disentuh:
+    yang dipakai persis jadwal yang dikirim.
+    """
+    sch = _schedule_supplied(payload)
+    if sch is None:
+        raise ScheduleError(
+            "Jadwal yang mau ditulis ulang tidak ikut dikirim, atau bentuknya "
+            "tidak utuh.")
+    clock = payload.get("start_clock") or None
+    return {
+        "text": to_text(sch, start_clock=clock,
+                        title=payload.get("title") or "JADWAL PADEL"),
+        "personal_text": to_personal_text(sch, start_clock=clock),
+        "csv": to_csv(sch),
+    }
+
+
 def api_schedule(payload: dict) -> dict:
     sch = _generate(payload)
     clock = payload.get("start_clock") or None
@@ -511,6 +545,7 @@ ROUTES = {
     "/api/analyze": api_analyze,
     "/api/economics": api_economics,
     "/api/schedule": api_schedule,
+    "/api/schedule/text": api_schedule_text,
     "/api/events/save": api_event_save,
     "/api/events/delete": api_event_delete,
     "/api/players/bulk": api_players_bulk,
@@ -647,6 +682,9 @@ class Handler(BaseHTTPRequestHandler):
                 # menyembunyikan modenya - lebih baik tidak menawarkan daripada
                 # menawarkan lalu gagal setelah host mengisi seluruh formulir.
                 "cpsat": cpsat.tersedia(),
+                # Batas panjang nama court, supaya kotak isian di UI memotong
+                # di angka yang sama dengan yang dipakai server.
+                "court_name_max": COURT_NAME_MAX,
             })
         elif path == "/api/master":
             # Satu panggilan memuat master data yang dibutuhkan UI.

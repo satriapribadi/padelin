@@ -66,6 +66,14 @@ let currentEventId = null;
 let scheduleStamp = null;
 let presets = {};
 let analyzeTimer = null;
+// Nama court pilihan host. Indeks 0 = court 1; entri kosong berarti court itu
+// memakai nama bawaan "C1", "C2", ... Yang tersimpan bersama acaranya adalah
+// schedule.config.court_names - daftar ini salinannya, supaya nama tetap
+// terbawa saat host menekan Generate lagi.
+let courtNames = [];
+// Batas panjang nama court. Datang dari server (/api/presets) supaya kotak
+// isian memotong di angka yang sama dengan yang dipotong Config.
+let courtNameMax = 14;
 
 // ---------------------------------------------------------------------------
 // Kartu statistik
@@ -510,6 +518,11 @@ function _buildPayload() {
     attempts: opt.attempts,
     cpsat_seconds: +$('cpsat_seconds').value,
     segments: getSegments(),
+    // Nama court ikut dikirim supaya ia bertahan melewati Generate berikutnya
+    // dan ikut tersimpan di riwayat. Ia tidak mengubah susunan apa pun - itu
+    // sebabnya ia juga tidak masuk schedulingStamp(): mengganti nama court
+    // tidak membuat jadwal yang di layar jadi basi.
+    court_names: courtNames,
     interleave_segments: $('interleave').checked,
     allowed_matchups: selectedMatchups(),
     players: players.map((p) => ({
@@ -1003,6 +1016,10 @@ function renderPenyempurnaan(st) {
 
 function renderSchedule() {
   if (!schedule) return;
+  // Nama court dibaca dari jadwal yang tampil, bukan dari sisa isian
+  // sebelumnya: jadwal yang dibuka dari riwayat membawa namanya sendiri, dan
+  // itu yang harus muncul di kartu ronde maupun di kotak isiannya.
+  courtNames = ((schedule.config || {}).court_names || []).slice();
   playerById = new Map(schedule.players.map((p) => [p.id, p]));
   const st = schedule.stats;
   const plays = Object.values(st.plays_per_player);
@@ -1041,68 +1058,8 @@ function renderSchedule() {
   $('sched-stats').appendChild(grid);
   renderPenyempurnaan(st);
 
-  // Ronde. Card disusun grid, jumlah kolom mengikuti isi tiap card: dengan
-  // 1 court satu card hanya memuat satu match, jadi kolom tunggal membuang
-  // lebar panel dan memaksa scroll berkali-kali lipat.
-  const maxMatches = schedule.rounds.reduce(
-    (t, r) => Math.max(t, r.matches.length), 1);
-  // Jumlah kolom TIDAK diturunkan lagi mengikuti banyaknya match. Card dengan
-  // 4 match tidak butuh card yang lebih LEBAR - ia hanya lebih tinggi. Dulu
-  // 3 court atau lebih jatuh ke satu kolom, dan itu membatalkan pemadatan:
-  // card selebar halaman membuat kolom tim (1fr) melar, sehingga nama kedua tim
-  // terlempar ke ujung kiri dan kanan dengan "vs" terdampar di tengah - mata
-  // harus menyeberangi ruang kosong untuk membaca satu pertandingan.
-  const cols = maxMatches === 1 ? 3 : 2;
-  const box = el('div', `rounds cols-${cols}`);
-
-  let seg = null;
-  schedule.rounds.forEach((r) => {
-    if (r.segment && r.segment !== seg) {
-      seg = r.segment;
-      box.appendChild(el('div', 'segbar', esc(seg)));
-    }
-    const card = el('div', 'round');
-    const time = schedule.config.warmup_minutes !== undefined
-      ? `+${r.start_min}m` : '';
-    card.appendChild(el('div', 'round-head',
-      `<span class="n">R${r.index}</span><span class="t">${esc(time)}</span>`));
-
-    r.matches.forEach((m) => {
-      // Peran disingkat W/B: di card sempit nama lengkap "wasit"/"ballboy"
-      // memakan ruang yang dibutuhkan namanya sendiri.
-      const duty = [];
-      (r.roles || []).forEach((x) => {
-        if (x.court !== m.court) return;
-        duty.push(`${x.role === 'wasit' ? 'W' : 'B'} ${gname(x.player_id)}`);
-      });
-      const pool = m.pool ? `<span class="pool">${esc(m.pool)}</span>` : '';
-      const team = (t) => t.map((x) => gname(x.id)).join(' &amp; ');
-      card.appendChild(el('div', 'match',
-        `<span class="c">C${m.court}</span>` +
-        `<span class="tm">${team(m.team_a)}${pool}</span>` +
-        `<span class="vs">vs</span>` +
-        `<span class="tm b">${team(m.team_b)}</span>` +
-        `<span class="duty">${duty.join(' · ')}</span>`));
-    });
-
-    const busy = new Set((r.roles || []).map((x) => x.player_id));
-    const idle = r.byes.filter((b) => !busy.has(b.id));
-    if (idle.length) {
-      card.appendChild(el('div', 'resting',
-        'Istirahat: ' + idle.map((b) => gname(b.id)).join(', ')));
-    }
-    box.appendChild(card);
-  });
-  $('rounds').innerHTML = '';
-  // Legenda hanya muncul kalau gendernya memang terisi. Roster tanpa L/P
-  // menghasilkan nama netral semua, dan menjelaskan warna yang tidak ada di
-  // mana pun cuma bikin bingung.
-  if (showGender) {
-    $('rounds').appendChild(el('div', 'gkey',
-      '<span><b class="g-m">&#9679; Nama biru</b> laki-laki</span>'
-      + '<span><b class="g-f">&#9679; Nama pink</b> perempuan</span>'));
-  }
-  $('rounds').appendChild(box);
+  renderCourtNames();
+  renderRounds();
 
   // Rekap
   // Kolom dibuat ADITIF: main + wasit + ballboy + istirahat = jumlah ronde.
@@ -1150,6 +1107,183 @@ function renderSchedule() {
   $('notes').innerHTML = notes || '<div class="empty">Tidak ada catatan.</div>';
 
   renderMatrix();
+}
+
+/**
+ * Kartu ronde. Dipisah dari renderSchedule supaya mengganti nama court cukup
+ * menggambar ulang bagian ini - kartu statistik, rekap, grafik keterlibatan,
+ * dan matriks tidak berubah sedikit pun oleh sebuah label, dan menggambar
+ * ulang semuanya berarti kotak isian nama kehilangan fokus di tengah ketik.
+ */
+function renderRounds() {
+  const showGender = schedule.players.some((p) => p.gender);
+  // Ronde. Card disusun grid, jumlah kolom mengikuti isi tiap card: dengan
+  // 1 court satu card hanya memuat satu match, jadi kolom tunggal membuang
+  // lebar panel dan memaksa scroll berkali-kali lipat.
+  const maxMatches = schedule.rounds.reduce(
+    (t, r) => Math.max(t, r.matches.length), 1);
+  // Jumlah kolom TIDAK diturunkan lagi mengikuti banyaknya match. Card dengan
+  // 4 match tidak butuh card yang lebih LEBAR - ia hanya lebih tinggi. Dulu
+  // 3 court atau lebih jatuh ke satu kolom, dan itu membatalkan pemadatan:
+  // card selebar halaman membuat kolom tim (1fr) melar, sehingga nama kedua tim
+  // terlempar ke ujung kiri dan kanan dengan "vs" terdampar di tengah - mata
+  // harus menyeberangi ruang kosong untuk membaca satu pertandingan.
+  const cols = maxMatches === 1 ? 3 : 2;
+  const box = el('div', `rounds cols-${cols}`);
+  // Lebar kolom court dikunci di sini, bukan dibiarkan melar mengikuti isi:
+  // dengan lebar otomatis, "C1" dan "Indoor A" di kartu yang sama menggeser
+  // kolom tim baris demi baris, dan mata kehilangan garis lurus untuk
+  // menyusuri lawan.
+  box.style.setProperty('--courtw', `${courtColWidth()}px`);
+
+  let seg = null;
+  schedule.rounds.forEach((r) => {
+    if (r.segment && r.segment !== seg) {
+      seg = r.segment;
+      box.appendChild(el('div', 'segbar', esc(seg)));
+    }
+    const card = el('div', 'round');
+    const time = schedule.config.warmup_minutes !== undefined
+      ? `+${r.start_min}m` : '';
+    card.appendChild(el('div', 'round-head',
+      `<span class="n">R${r.index}</span><span class="t">${esc(time)}</span>`));
+
+    r.matches.forEach((m) => {
+      // Peran disingkat W/B: di card sempit nama lengkap "wasit"/"ballboy"
+      // memakan ruang yang dibutuhkan namanya sendiri.
+      const duty = [];
+      (r.roles || []).forEach((x) => {
+        if (x.court !== m.court) return;
+        duty.push(`${x.role === 'wasit' ? 'W' : 'B'} ${gname(x.player_id)}`);
+      });
+      const pool = m.pool ? `<span class="pool">${esc(m.pool)}</span>` : '';
+      const team = (t) => t.map((x) => gname(x.id)).join(' &amp; ');
+      card.appendChild(el('div', 'match',
+        `<span class="c">${esc(courtLabel(m.court))}</span>` +
+        `<span class="tm">${team(m.team_a)}${pool}</span>` +
+        `<span class="vs">vs</span>` +
+        `<span class="tm b">${team(m.team_b)}</span>` +
+        `<span class="duty">${duty.join(' · ')}</span>`));
+    });
+
+    const busy = new Set((r.roles || []).map((x) => x.player_id));
+    const idle = r.byes.filter((b) => !busy.has(b.id));
+    if (idle.length) {
+      card.appendChild(el('div', 'resting',
+        'Istirahat: ' + idle.map((b) => gname(b.id)).join(', ')));
+    }
+    box.appendChild(card);
+  });
+  $('rounds').innerHTML = '';
+  // Legenda hanya muncul kalau gendernya memang terisi. Roster tanpa L/P
+  // menghasilkan nama netral semua, dan menjelaskan warna yang tidak ada di
+  // mana pun cuma bikin bingung.
+  if (showGender) {
+    $('rounds').appendChild(el('div', 'gkey',
+      '<span><b class="g-m">&#9679; Nama biru</b> laki-laki</span>'
+      + '<span><b class="g-f">&#9679; Nama pink</b> perempuan</span>'));
+  }
+  $('rounds').appendChild(box);
+}
+
+/** Court yang benar-benar bermain di jadwal ini, urut naik.
+ *
+ * Bukan config.courts: court yang dilepas di tengah acara tetap tercatat di
+ * setup, tapi tidak punya satu pun match untuk diberi nama - menawarkan kotak
+ * isian untuknya berarti host menamai court yang tidak muncul di mana pun.
+ */
+function courtsInSchedule() {
+  const set = new Set();
+  (schedule?.rounds || []).forEach(
+    (r) => (r.matches || []).forEach((m) => set.add(m.court)));
+  return [...set].sort((a, b) => a - b);
+}
+
+/** Nama tampilan satu court: pilihan host, atau "C1" kalau belum diganti. */
+function courtLabel(n) {
+  return (courtNames[n - 1] || '').trim() || `C${n}`;
+}
+
+/** Lebar kolom court (px) supaya nama terpanjang muat tanpa membuat kolom tim
+ *  bergoyang antar baris. 24px = lebar lama, cukup untuk "C1".."C9". */
+function courtColWidth() {
+  const panjang = courtsInSchedule()
+    .reduce((t, c) => Math.max(t, courtLabel(c).length), 2);
+  return Math.max(24, Math.min(96, Math.round(panjang * 6.4) + 2));
+}
+
+/**
+ * Kotak isian nama court, satu per court yang bermain.
+ *
+ * Nama disimpan di schedule.config.court_names, bukan cuma di variabel modul,
+ * karena di situlah tempatnya ikut serta ke tiga tujuan sekaligus: laporan
+ * cetak dan tombol Simpan mengirim objek `schedule` apa adanya, dan endpoint
+ * yang menulis ulang teks WhatsApp juga membacanya dari sana.
+ */
+function renderCourtNames() {
+  const host = $('court-names');
+  if (!host) return;
+  const courts = courtsInSchedule();
+  if (!courts.length) { host.innerHTML = ''; return; }
+
+  host.innerHTML = '<div class="cn-h">Nama court '
+    + `<span class="hint">kosongkan untuk kembali ke C1, C2, ...; `
+    + `maksimal ${courtNameMax} huruf. Nama ikut ke teks WhatsApp, CSV, `
+    + `dan laporan cetak - tekan Simpan lagi supaya ikut tersimpan.</span>`
+    + '</div><div class="cn-row">'
+    + courts.map((c) => `<label>C${c}`
+      + `<input type="text" data-court="${c}" maxlength="${courtNameMax}" `
+      + `placeholder="C${c}" value="${esc(courtNames[c - 1] || '')}"></label>`)
+      .join('')
+    + '</div>';
+
+  host.querySelectorAll('input[data-court]').forEach((inp) => {
+    const idx = +inp.dataset.court - 1;
+    // Mengetik cuma menggambar ulang kartu ronde - murah, dan host melihat
+    // namanya mendarat di tempatnya sambil mengetik.
+    inp.oninput = () => {
+      courtNames[idx] = inp.value;
+      simpanNamaCourt();
+      renderRounds();
+    };
+    // Teks WhatsApp, jadwal per pemain, dan CSV lahir di server, jadi ia
+    // disegarkan saat isian ditinggalkan - bukan tiap huruf.
+    inp.onchange = () => { simpanNamaCourt(); refreshScheduleTexts(); };
+  });
+}
+
+/** Tempelkan nama court ke jadwal yang sedang tampil. */
+function simpanNamaCourt() {
+  if (!schedule) return;
+  // Entri kosong di ekor dibuang supaya jadwal yang namanya tidak pernah
+  // diganti tersimpan persis seperti jadwal lama: daftar kosong.
+  // Array.from, bukan map: kalau host menamai court 3 lebih dulu, indeks 0
+  // dan 1 masih lubang - dan lubang tetap lubang di hasil map, lalu
+  // JSON.stringify mengubahnya jadi null di tengah daftar nama.
+  const bersih = Array.from(courtNames, (n) => (n || '').trim());
+  while (bersih.length && !bersih[bersih.length - 1]) bersih.pop();
+  courtNames = bersih;
+  schedule.config.court_names = bersih.slice();
+}
+
+/**
+ * Tulis ulang teks WhatsApp, jadwal per pemain, dan CSV di server.
+ *
+ * Ketiganya dibuat server saat jadwal jadi, jadi mengganti nama court tanpa
+ * ini akan menyalin teks yang masih berbunyi "C1" padahal layar sudah
+ * berbunyi lain. Jadwal yang tampil dikirim apa adanya - server cuma menulis
+ * ulang teksnya, tidak menjadwal ulang apa pun.
+ */
+async function refreshScheduleTexts() {
+  if (!schedule) return;
+  try {
+    const d = await api('/api/schedule/text', { ...buildPayload(), schedule });
+    schedule.text = d.text;
+    schedule.personal_text = d.personal_text;
+    schedule.csv = d.csv;
+  } catch (e) {
+    toast(`Nama court belum masuk ke teks salinan: ${e.message}`);
+  }
 }
 
 // Peta id -> peserta untuk jadwal yang sedang ditampilkan. Dulu tiap nama
@@ -1755,6 +1889,10 @@ function applyRequest(req) {
   $('interleave').checked = !!req.interleave_segments;
   (req.segments || []).forEach((s) => addSeg(s.label, s.rounds, s.rule));
   renderMatchups(req.allowed_matchups || null);
+  // Acara lama tidak punya nama court; dipulihkan sebagai kosong, bukan
+  // dibiarkan mewarisi nama dari acara yang dibuka sebelumnya - "Indoor A"
+  // milik venue lain yang menempel di jadwal ini akan terbaca sebagai fakta.
+  courtNames = (req.court_names || []).slice();
   players = (req.players || []).map((p) => ({ ...p }));
   nextId = players.reduce((m, p) => Math.max(m, p.id + 1), 0);
   if (req.economics) {
@@ -2534,6 +2672,7 @@ async function loadClubSummary() {
       .map(([k, v]) => `<option value="${k}">${esc(v.label)}</option>`).join('');
     $('preset-desc').textContent = presets.single ? presets.single.description : '';
     matchupTypes = d.matchups || [];
+    if (d.court_name_max) courtNameMax = d.court_name_max;
     renderMatchups();
     applyCpsatAvailability(!!d.cpsat);
   } catch (e) { /* biarkan default */ }

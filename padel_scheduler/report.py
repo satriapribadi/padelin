@@ -250,7 +250,7 @@ def to_text(schedule: Schedule, start_clock: str | None = None,
             label = rnd.court_labels.get(m.court, "")
             suffix = f" [{label}]" if label else ""
             out.append(
-                f"  C{m.court}{suffix}: "
+                f"  {cfg.court_label(m.court)}{suffix}: "
                 f"{names[m.team_a[0]]} & {names[m.team_a[1]]}"
                 f"  vs  "
                 f"{names[m.team_b[0]]} & {names[m.team_b[1]]}"
@@ -311,6 +311,7 @@ def to_personal_text(schedule: Schedule, start_clock: str | None = None) -> str:
     giliran saya wasit" -- daftar lengkap 12 ronde justru bikin bingung.
     """
     names = {p.id: p.name for p in schedule.players}
+    cfg = schedule.config
     lines: list[str] = ["*JADWAL PER PEMAIN*", ""]
 
     for p in sorted(schedule.players, key=lambda x: x.name.lower()):
@@ -327,7 +328,8 @@ def to_personal_text(schedule: Schedule, start_clock: str | None = None) -> str:
                 )
                 partner = [x for x in mate if x != p.id][0]
                 lines.append(
-                    f"  R{rnd.index} {when} C{m.court}: dgn {names[partner]} "
+                    f"  R{rnd.index} {when} {cfg.court_label(m.court)}: "
+                    f"dgn {names[partner]} "
                     f"vs {names[opp[0]]} & {names[opp[1]]}"
                 )
                 break
@@ -335,7 +337,8 @@ def to_personal_text(schedule: Schedule, start_clock: str | None = None) -> str:
                 continue
             duty = next((r for r in rnd.roles if r.player_id == p.id), None)
             if duty:
-                lines.append(f"  R{rnd.index} {when}: {duty.role} court {duty.court}")
+                lines.append(f"  R{rnd.index} {when}: {duty.role} di "
+                             f"{cfg.court_label(duty.court)}")
             elif p.id in rnd.byes:
                 lines.append(f"  R{rnd.index} {when}: istirahat")
         st = schedule.stats
@@ -357,7 +360,7 @@ def to_csv(schedule: Schedule) -> str:
     buf = io.StringIO()
     w = csv.writer(buf)
     w.writerow([
-        "ronde", "segmen", "mulai_menit", "court", "pool",
+        "ronde", "segmen", "mulai_menit", "court", "nama_court", "pool",
         "tim_a_1", "tim_a_2", "tim_b_1", "tim_b_2",
         "wasit", "ballboy", "istirahat",
     ])
@@ -366,11 +369,12 @@ def to_csv(schedule: Schedule) -> str:
         refs = {r.court: names[r.player_id] for r in rnd.roles if r.role == "wasit"}
         balls = {r.court: names[r.player_id] for r in rnd.roles if r.role == "ballboy"}
         if not rnd.matches:
-            w.writerow([rnd.index, rnd.segment, rnd.start_min, "", "",
+            w.writerow([rnd.index, rnd.segment, rnd.start_min, "", "", "",
                         "", "", "", "", "", "", idle])
         for m in rnd.matches:
             w.writerow([
                 rnd.index, rnd.segment, rnd.start_min, m.court,
+                schedule.config.court_label(m.court),
                 rnd.court_labels.get(m.court, ""),
                 names[m.team_a[0]], names[m.team_a[1]],
                 names[m.team_b[0]], names[m.team_b[1]],

@@ -158,7 +158,7 @@ table{width:100%; border-collapse:collapse}
    Tugas ditaruh di kolom kanan sendiri - bukan di tengah - supaya blok
    "A & B vs C & D" tetap sejajar di semua baris dan mata bisa menyusuri satu
    kolom saja saat mencari lawan. */
-.m{display:grid; grid-template-columns:24px 1fr 16px 1fr 104px;
+.m{display:grid; grid-template-columns:var(--courtw,24px) 1fr 16px 1fr 104px;
   align-items:baseline; gap:0 6px;
   padding:4px 9px; border-bottom:1px solid #f0f2f5; font-size:11px}
 .m:last-of-type{border-bottom:none}
@@ -172,7 +172,7 @@ table{width:100%; border-collapse:collapse}
    terpakai; bentuk lima kolom di atas tinggal cadangan kalau suatu saat ada
    card selebar halaman lagi. Bentuknya sengaja dibiarkan sama persis dengan
    web/style.css - laporan ini memang harus terbaca seperti tab Jadwal. */
-.cols-2 .m,.cols-3 .m{grid-template-columns:24px 1fr 16px 1fr}
+.cols-2 .m,.cols-3 .m{grid-template-columns:var(--courtw,24px) 1fr 16px 1fr}
 .duty{color:var(--muted); font-size:9.5px; text-align:right;
   white-space:nowrap; overflow:hidden; text-overflow:ellipsis}
 .cols-2 .duty,.cols-3 .duty{grid-column:1 / -1; white-space:normal}
@@ -350,6 +350,24 @@ def _clock(minutes: int, start_clock: str | None) -> str:
         return f"+{minutes} mnt"
     total = hh * 60 + mm + minutes
     return f"{(total // 60) % 24:02d}:{total % 60:02d}"
+
+
+def _lebar_kolom_court(schedule: Schedule) -> int:
+    """Lebar kolom nama court (px), dari nama terpanjang yang dipakai.
+
+    Kolomnya dikunci, bukan dibiarkan melar mengikuti isi: dengan lebar
+    otomatis, "C1" dan "Lapangan A" di kartu yang sama membuat kolom tim
+    tergeser baris demi baris, dan mata kehilangan garis lurus untuk menyusuri
+    lawan. Yang dihitung cuma court yang benar-benar bermain - court yang
+    disewa tapi tidak terisi tidak punya baris untuk dilebarkan.
+
+    24px = lebar lama, cukup untuk "C1".."C9"; 6,4px per huruf adalah lebar
+    rata-rata huruf tebal 10px pada font laporan.
+    """
+    cfg = schedule.config
+    dipakai = {m.court for r in schedule.rounds for m in r.matches}
+    panjang = max((len(cfg.court_label(c)) for c in dipakai), default=2)
+    return max(24, min(96, round(panjang * 6.4) + 2))
 
 
 def build_html(
@@ -582,7 +600,8 @@ def build_html(
     # memakan satu baris penuh A4 dengan separuh isinya ruang kosong.
     max_matches = max((len(r.matches) for r in schedule.rounds), default=1)
     cols = 3 if max_matches == 1 else 2
-    parts.append(f"<div class='rounds cols-{cols}'>")
+    parts.append(f"<div class='rounds cols-{cols}' "
+                 f"style='--courtw:{_lebar_kolom_court(schedule)}px'>")
 
     current_segment = None
     for rnd in schedule.rounds:
@@ -609,7 +628,8 @@ def build_html(
             duty_html = (f"<span class='duty'>{' · '.join(duty_bits)}</span>"
                          if duty_bits else "")
             parts.append(
-                f"<div class='m'><span class='court'>C{m.court}</span>"
+                f"<div class='m'><span class='court'>"
+                f"{_e(cfg.court_label(m.court))}</span>"
                 f"<span class='team'>{_nm(m.team_a[0])} &amp; "
                 f"{_nm(m.team_a[1])}{pool_html}</span>"
                 f"<span class='vs'>vs</span>"

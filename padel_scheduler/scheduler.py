@@ -2688,6 +2688,7 @@ def _build_once(players: list[Player], config: Config,
         courts_from_round=aturan_court[1],
         cpsat_seconds=config.cpsat_seconds,
         cpsat_workers=config.cpsat_workers,
+        court_names=config.court_names,
     )
 
     # Format match yang dilarang tapi tetap muncul. Bisa terjadi kalau susunan
