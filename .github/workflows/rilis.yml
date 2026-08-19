@@ -92,10 +92,45 @@ jobs:
         shell: bash
         run: node -p "'Merilis v' + require('./package.json').version"
 
-      # npm menjalankan "prerelease" (electron/ensure-tag.js, pembuat tag) lebih
-      # dulu dengan sendirinya, lalu "release" (fetch-python + electron-builder
-      # --publish always).
+      # npm menjalankan "prerelease" (electron/ensure-tag.js, yang memastikan tag
+      # DAN rilisnya sudah ada) lebih dulu dengan sendirinya, lalu "release"
+      # (fetch-python + electron-builder --publish always).
       - name: Bangun dan terbitkan
         env:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
         run: npm run release
+
+      # Rilis yang "sukses" tapi isinya tidak lengkap adalah kegagalan yang
+      # tidak berbunyi - dan itu betul-betul terjadi di v1.1.7: dua publisher
+      # electron-builder membuat DUA rilis untuk tag yang sama, installer dan
+      # blockmap terpisah di rilis yang berbeda, exit code tetap 0. Penyebabnya
+      # sudah ditutup di ensure-tag.js; pemeriksaan ini yang memastikan
+      # penutupnya masih bekerja, dan menangkap bentuk lain dari kerusakan yang
+      # sama kalau suatu saat muncul.
+      - name: Periksa rilis yang terbit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v$(node -p "require('./package.json').version")"
+          REPO=$(node -p "require('./package.json').build.publish[0].owner + '/' + require('./package.json').build.publish[0].repo")
+
+          JML=$(gh api "repos/$REPO/releases" --jq "[.[] | select(.tag_name==\"$TAG\")] | length")
+          echo "rilis dengan tag $TAG: $JML"
+          if [ "$JML" != "1" ]; then
+            echo "Harus tepat satu rilis untuk $TAG, ada $JML - kemungkinan rilis kembar."
+            exit 1
+          fi
+
+          ASET=$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets[].name')
+          echo "aset terunggah:"; echo "$ASET" | sed 's/^/  /'
+          for wajib in "latest.yml" ".exe" ".exe.blockmap"; do
+            echo "$ASET" | grep -q -- "$wajib" || {
+              echo "Aset yang memuat '$wajib' tidak ada di rilis $TAG."
+              echo "Tanpa latest.yml aplikasi terpasang tidak pernah melihat pembaruan;"
+              echo "tanpa blockmap pembaruannya mundur ke unduhan utuh ~200 MB."
+              exit 1
+            }
+          done
+          echo "Rilis $TAG lengkap."

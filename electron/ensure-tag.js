@@ -1,4 +1,4 @@
-// Pastikan tag rilis sudah ada SEBELUM electron-builder mencoba membuat rilisnya.
+// Pastikan tag DAN rilisnya sudah ada sebelum electron-builder mengunggah apa pun.
 //
 // GitHub menolak membuat tag secara implisit lewat endpoint rilis dengan token
 // yang dipakai proyek ini: POST /releases dengan draft:false untuk tag yang
@@ -21,7 +21,19 @@
 // sumber - itu yang ditunjuk semua tag sebelumnya, dan repo rilis memang tidak
 // menyimpan kode.
 //
-// Aman diulang: kalau tagnya sudah ada, ia tidak melakukan apa-apa.
+// Rilisnya ikut dibuat di sini karena electron-builder menjalankan SATU
+// publisher per artefak, dan keduanya memeriksa "apakah rilisnya sudah ada" pada
+// detik yang sama. Terukur di runner CI: dua publisher (installer dan blockmap)
+// sama-sama dijawab "release doesn't exist", sama-sama membuatnya, dan GitHub
+// dengan senang hati menerima DUA rilis yang menunjuk tag yang sama - satu
+// berisi installer + latest.yml, satu lagi cuma blockmap. Buildnya melapor
+// sukses; yang rusak baru terlihat dari daftar rilis. Di mesin sendiri
+// balapannya tidak pernah menang karena unggahannya berjalan lebih lambat.
+//
+// Dengan rilisnya sudah ada lebih dulu, kedua publisher menemukan yang sama dan
+// tidak ada yang membuat apa pun.
+//
+// Aman diulang: kalau tag dan rilisnya sudah ada, ia tidak melakukan apa-apa.
 //
 // Bisa dijalankan sendiri:
 //
@@ -89,6 +101,7 @@ async function main() {
   const ada = await api(token, `/repos/${owner}/${repo}/git/ref/tags/${tag}`);
   if (ada.status === 200) {
     console.log(`  * tag ${tag} sudah ada  ${ada.data.object.sha.slice(0, 7)}`);
+    await pastikanRilis(token, owner, repo, tag, tag.replace(/^v/, ''));
     return;
   }
   if (ada.status !== 404) {
@@ -113,15 +126,55 @@ async function main() {
   });
   if (buat.status === 201) {
     console.log(`  * tag ${tag} dibuat  ${sha.slice(0, 7)} (${cabang})`);
+    await pastikanRilis(token, owner, repo, tag, tag.replace(/^v/, ''));
     return;
   }
   // Balapan dengan proses lain yang membuat tag sama: hasil akhirnya tetap yang
   // kita inginkan, jadi bukan kegagalan.
   if (buat.status === 422 && /already exists/i.test(buat.teks)) {
     console.log(`  * tag ${tag} sudah ada  ${sha.slice(0, 7)}`);
+    await pastikanRilis(token, owner, repo, tag, tag.replace(/^v/, ''));
     return;
   }
   gagal(`Tidak bisa membuat tag ${tag} di ${owner}/${repo}.\n    ${ringkas(buat)}\n`
+    + `    Token butuh izin contents=write pada repo itu.`);
+}
+
+/**
+ * Pastikan rilis untuk tag ini ada, supaya tidak ada yang membuatnya berdua.
+ *
+ * Namanya dibuat sama dengan yang dipakai electron-builder (versi tanpa "v"),
+ * jadi rilis yang lahir di sini tidak bisa dibedakan dari yang lahir di sana -
+ * daftar rilis tetap seragam dengan versi-versi sebelumnya.
+ *
+ * draft:false disengaja dan penting: rilis draft tidak terlihat tanpa token,
+ * jadi aplikasi terpasang tidak akan pernah menemukan pembaruannya. Itu alasan
+ * yang sama yang membuat releaseType:release dipasang eksplisit di package.json.
+ */
+async function pastikanRilis(token, owner, repo, tag, versi) {
+  const ada = await api(token, `/repos/${owner}/${repo}/releases/tags/${tag}`);
+  if (ada.status === 200) {
+    console.log(`  * rilis ${tag} sudah ada  id=${ada.data.id}`);
+    return;
+  }
+  if (ada.status !== 404) {
+    gagal(`Tidak bisa memeriksa rilis ${tag} di ${owner}/${repo}.\n    ${ringkas(ada)}`);
+  }
+
+  const buat = await api(token, `/repos/${owner}/${repo}/releases`, {
+    method: 'POST',
+    body: { tag_name: tag, name: versi, draft: false, prerelease: false },
+  });
+  if (buat.status === 201) {
+    console.log(`  * rilis ${tag} dibuat  id=${buat.data.id}`);
+    return;
+  }
+  // Kalah balapan dengan proses lain: yang kita mau tetap tercapai.
+  if (buat.status === 422 && /already_exists|already exists/i.test(buat.teks)) {
+    console.log(`  * rilis ${tag} sudah ada (dibuat proses lain)`);
+    return;
+  }
+  gagal(`Tidak bisa membuat rilis ${tag} di ${owner}/${repo}.\n    ${ringkas(buat)}\n`
     + `    Token butuh izin contents=write pada repo itu.`);
 }
 
