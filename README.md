@@ -487,6 +487,14 @@ sebelum dipakai: tambahkan secret repo `GH_TOKEN` (Settings → Secrets and
 variables → Actions) dengan izin tulis ke repo rilis saja. Runner Windows di repo
 privat dihitung 2× menit; satu build ~186 MB memakan sekitar 10–20 menit.
 
+Workflow yang sama punya **uji-kering**: matikan sakelar `terbitkan` saat menekan
+Run workflow, dan seluruh rantai berjalan sampai installer jadi — ikon dirender,
+Python + OR-Tools diunduh, NSIS dibangun, `verify-artifact.js` ikut memeriksa —
+tanpa membuat tag, rilis, atau mengunggah apa pun, dan tanpa butuh secret sama
+sekali. Ini yang dipakai untuk menguji perubahan pada rantai build; menerbitkan
+rilis sungguhan hanya untuk mengetahui bahwa sebuah berkas tidak ada terlalu
+mahal, dan itu betul-betul pernah terjadi (`icon.ico`).
+
 ### Menjalankan tanpa memasang
 
 Tidak ada paket portable. Yang dulu ada — `npm run portable`, penghasil
