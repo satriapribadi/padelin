@@ -381,7 +381,7 @@ web/
 tools/
   uitest.py                 uji interaksi UI lewat DevTools Protocol
   banding_cpsat.py          adu annealing lawan solver eksak pada setup yang sama
-tests/                      218 tes unit
+tests/                      224 tes unit
 ```
 
 ## Aplikasi desktop (Electron)
@@ -492,8 +492,8 @@ Data acara ada di `%APPDATA%\Padelin` saat dipasang lewat installer, dan
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 218 tes unit
-python tools/uitest.py                  # 29 uji interaksi di browser sungguhan
+python -m unittest discover -s tests    # 224 tes unit
+python tools/uitest.py                  # 30 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 python tools/cetaktest.py               # 15 uji jalur cetak & pratinjau (Electron)
 python tools/apptest.py                 # 18 uji aplikasi desktop sungguhan
