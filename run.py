@@ -362,8 +362,13 @@ def api_economics(payload: dict) -> dict:
             if k not in ("base", "plus_one_court")
         },
         "options": [vars(o) for o in shown],
+        # `ch` ikut: kalau court dilepas di tengah acara, ladder ini harus
+        # berdiri di atas biaya yang sama dengan kartu "biaya total" di
+        # sebelahnya. None kalau tidak ada courts_after, dan fungsinya jatuh ke
+        # court x durasi seperti sebelumnya.
         "fee_suggestions": {
-            str(int(m)): fee_for_target_margin(n, cfg.courts, hours, econ, m)
+            str(int(m)): fee_for_target_margin(n, cfg.courts, hours, econ, m,
+                                               court_hours=ch)
             for m in (20, 30, 40, 50)
         },
     }

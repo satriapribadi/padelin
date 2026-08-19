@@ -20,7 +20,12 @@ from padel_scheduler import (
     build_schedule,
     storage,
 )
-from padel_scheduler.economics import compare, fee_for_target_margin, upgrade_analysis
+from padel_scheduler.economics import (
+    compare,
+    evaluate,
+    fee_for_target_margin,
+    upgrade_analysis,
+)
 from padel_scheduler.html_report import build_html
 from padel_scheduler.report import (
     batas_keunikan,
@@ -241,6 +246,38 @@ class TestEconomics(unittest.TestCase):
         econ2 = Economics(250000, fee, 100000)
         o = compare(26, econ2, court_options=[4], hour_options=[2.0])[0]
         self.assertAlmostEqual(o.margin_pct, 30.0, delta=0.5)
+
+    def test_target_margin_fee_follows_court_hours_actually_paid(self):
+        # Court yang dilepas di tengah acara: ladder "fee untuk target margin"
+        # harus berdiri di atas biaya yang SAMA dengan kartu "biaya total".
+        # Sebelum diperbaiki ia menagih court x durasi penuh, dan pada setup ini
+        # menyarankan 60.000 untuk margin 20% padahal modalnya menuntut 45.000 -
+        # host membaca dua angka yang tidak bisa dua-duanya benar.
+        econ = Economics(court_price_per_hour=90000, fee_per_player=34382,
+                         other_costs=5050)
+        fee = fee_for_target_margin(8, 2, 2.0, econ, 20.0, court_hours=3.0)
+        o = evaluate(8, 2, 2.0, Economics(90000, fee, 5050), court_hours=3.0)
+        self.assertGreaterEqual(o.margin_pct, 20.0)
+        # Pembulatan ke atas Rp 5.000 saja, bukan sepertiga biaya sewa.
+        self.assertLess(o.margin_pct, 20.0 + 100 * 5000 / fee)
+
+    def test_keep_same_margin_fee_uses_plus_scenario_court_hours(self):
+        # Margin yang dijaga diambil dari base yang sudah dikoreksi court_hours,
+        # jadi fee-nya harus ditagih dengan court_hours_plus - bukan
+        # (court+1) x jam penuh, yang menaikkan fee untuk margin yang tidak
+        # pernah diminta.
+        econ = Economics(court_price_per_hour=90000, fee_per_player=50000,
+                         other_costs=5050)
+        up = upgrade_analysis(8, 2, 2.0, econ, court_hours=3.0,
+                              matches_per_round=[2, 2, 2, 2, 1, 1, 1, 1],
+                              court_hours_plus=5.0,
+                              matches_per_round_plus=[2] * 8)
+        naive = fee_for_target_margin(8, 3, 2.0, econ, up["base"].margin_pct)
+        self.assertLess(up["fee_to_keep_same_margin"], naive)
+        o = evaluate(8, 3, 2.0,
+                     Economics(90000, up["fee_to_keep_same_margin"], 5050),
+                     court_hours=5.0)
+        self.assertGreaterEqual(o.margin_pct, up["base"].margin_pct)
 
     def test_extra_court_costs_money_and_buys_play_time(self):
         up = upgrade_analysis(26, 4, 2.0, self.econ)

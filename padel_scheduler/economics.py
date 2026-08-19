@@ -202,13 +202,24 @@ def fee_for_target_margin(
     econ: Economics,
     target_margin_pct: float,
     round_to: int = 5000,
+    court_hours: float | None = None,
 ) -> float:
     """Fee per peserta agar margin mencapai target.
 
     fee = biaya_per_peserta / (1 - margin), lalu dibulatkan ke atas ke kelipatan
     yang wajar untuk diumumkan (default Rp 5.000).
+
+    `court_hours` sama artinya dengan di evaluate(): court-jam yang benar-benar
+    dibayar, untuk acara yang court-nya dilepas di tengah jam sewa. Tanpa itu
+    fungsi ini menagih court x durasi penuh, dan panel "fee untuk target margin"
+    berdiri di atas biaya yang lebih besar daripada kartu "biaya total" di
+    sebelahnya - host membaca dua angka yang tidak bisa dua-duanya benar. Pada
+    2 court 2 jam yang satu court-nya dilepas di menit ke-60 (90.000/jam,
+    8 peserta), selisihnya bukan pembulatan: margin 20% disarankan 60.000
+    padahal modalnya cuma menuntut 45.000.
     """
-    total_cost = courts * hours * econ.court_price_per_hour + econ.other_costs
+    billed = court_hours if court_hours is not None else courts * hours
+    total_cost = billed * econ.court_price_per_hour + econ.other_costs
     if n_players <= 0:
         return 0.0
     cost_pp = total_cost / n_players
@@ -270,7 +281,12 @@ def upgrade_analysis(
     keep_margin_fee = 0.0
     if econ.fee_per_player > 0 and base.revenue > 0:
         keep_margin_fee = fee_for_target_margin(
-            n_players, courts + 1, hours, econ, base.margin_pct
+            n_players, courts + 1, hours, econ, base.margin_pct,
+            # Skenario pembandingnya court_hours_plus, bukan (courts+1) x jam:
+            # margin yang dijaga diambil dari base yang SUDAH dikoreksi, jadi
+            # menagihnya dengan biaya yang belum dikoreksi menaikkan fee untuk
+            # margin yang tidak pernah diminta.
+            court_hours=court_hours_plus,
         )
 
     return {
