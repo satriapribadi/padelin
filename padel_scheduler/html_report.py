@@ -295,7 +295,13 @@ table{width:100%; border-collapse:collapse}
 .madeby{display:inline-flex; align-items:center; gap:6px}
 .madeby svg{width:14px; height:14px; color:var(--muted)}
 .foot{margin-top:16px; padding-top:8px; border-top:1px solid var(--line);
-  color:var(--muted); font-size:9px; display:flex; justify-content:space-between}
+  color:var(--muted); font-size:9px; display:flex; justify-content:space-between;
+  gap:12px; align-items:baseline}
+/* Parameter reproduksi. Yang paling panjang dan paling boleh menyusut dari
+   ketiga bagian footer, jadi hanya ia yang diberi izin membungkus - judul dan
+   merek tetap satu baris. */
+.foot .repro{flex:1 1 auto; text-align:center; font-variant-numeric:tabular-nums}
+.foot>span:first-child, .foot .madeby{flex:0 0 auto; white-space:nowrap}
 
 .toolbar{position:sticky; top:0; background:#fff; padding:10px 0 16px;
   margin:-32px auto 8px; max-width:900px; display:flex; gap:9px; z-index:5}
@@ -336,9 +342,19 @@ def _e(s) -> str:
     return html.escape(str(s), quote=True)
 
 
+def _ribu(value: float) -> str:
+    """Angka dengan pemisah ribuan gaya Indonesia: 160000 -> "160.000"."""
+    return f"{round(value):,}".replace(",", ".")
+
+
+def _angka(value: float) -> str:
+    """Desimal tanpa nol menggantung: 30.0 -> "30", 2.5 -> "2,5"."""
+    return f"{value:g}".replace(".", ",")
+
+
 def _rupiah(value: float) -> str:
     """Rp dengan pemisah ribuan gaya Indonesia (titik)."""
-    return "Rp " + f"{round(value):,}".replace(",", ".")
+    return "Rp " + _ribu(value)
 
 
 def _jam(value: float) -> str:
@@ -879,8 +895,31 @@ def build_html(
                 f"tapi komposisi court tidak memungkinkan.</div>"
             )
 
+    # Parameter yang menentukan jadwal ini, di cetakan kecil paling bawah.
+    #
+    # Tanpa seed, laporan yang sudah dibagikan tidak bisa dibuat ulang: host
+    # mengubah satu angka di form, menekan Generate, dan susunan yang tadi
+    # hilang untuk selamanya karena ia tidak ingat memakai variasi berapa.
+    # Mode ikut dicatat karena badge di kepala laporan menampilkan susunan
+    # babak, bukan mode, begitu acaranya bersegmen - jadi mode tidak terbaca
+    # di mana pun kalau tidak di sini.
+    repro = [
+        MODE_LABELS.get(cfg.mode, cfg.mode),
+        f"variasi (seed) {cfg.seed}",
+        f"effort {_ribu(cfg.effort)}",
+        f"{cfg.attempts} percobaan",
+    ]
+    # Penyempurnaan dibatasi WAKTU, bukan iterasi, jadi ia satu-satunya bagian
+    # yang bisa berhenti di titik berbeda pada komputer yang berbeda. Disebut
+    # apa adanya supaya host tahu kenapa hasil ulangannya kadang tidak persis
+    # sama walau seed-nya benar.
+    if cfg.lns_seconds:
+        repro.append(f"penyempurnaan {_angka(cfg.lns_seconds)}s "
+                     f"(hasil ulangan bisa sedikit beda)")
+
     parts.append(
         f"<div class='foot'><span>{_e(title)}</span>"
+        f"<span class='repro'>{_e('  ·  '.join(repro))}</span>"
         f"<span class='madeby'>{APP_MARK} Dibuat dengan Padelin</span></div>"
     )
     parts.append("</div></body></html>")

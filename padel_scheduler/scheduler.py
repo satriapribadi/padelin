@@ -2688,6 +2688,12 @@ def _build_once(players: list[Player], config: Config,
         courts_from_round=aturan_court[1],
         cpsat_seconds=config.cpsat_seconds,
         cpsat_workers=config.cpsat_workers,
+        # Ikut dibawa supaya jadwal ini tahu ia sudah lewat penyempurnaan.
+        # Laporan cetak mencantumkannya di cetakan kecil - penyempurnaan
+        # dibatasi WAKTU, jadi ia satu-satunya bagian yang bisa berhenti di
+        # titik berbeda saat jadwal yang sama dibuat ulang, dan pembaca yang
+        # mengulangnya harus tahu itu.
+        lns_seconds=config.lns_seconds,
         court_names=config.court_names,
     )
 
