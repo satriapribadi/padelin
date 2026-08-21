@@ -679,6 +679,47 @@ def main() -> int:
                        if kosong else " (sedang ditawarkan)"))
         check("Blok penyempurnaan tidak menempel kartu statistik", jarak_tawaran)
 
+        # Cacat yang sama satu tingkat di bawah: pesan hasil simpan mendarat
+        # 0px di bawah barisan tombol, dan karena tombolnya bersudut bulat,
+        # kotak yang menempel rata terbaca seperti menindihnya. Dilaporkan host
+        # dari layar sungguhan, jadi diuji dari geometri sungguhan.
+        def jarak_pesan_simpan():
+            d = b.js("""(() => {
+              const box = document.getElementById('save-msg');
+              const row = document.querySelector('#view-jadwal .btn-row');
+              if (!box || !row) return null;
+              // Wadahnya biasanya kosong - anak boneka disisipkan sebentar,
+              // karena yang diuji aturan CSS-nya.
+              const simpan = box.innerHTML;
+              const semula = box.getBoundingClientRect().height;
+              const celah_kosong = Math.round(
+                box.getBoundingClientRect().top - row.getBoundingClientRect().bottom);
+              if (!semula) box.innerHTML = '<div class="msg ok">x</div>';
+              const pesan = box.querySelector('.msg').getBoundingClientRect();
+              const j = Math.round(pesan.top - row.getBoundingClientRect().bottom);
+              // Pesan terakhir tidak boleh menambah jarak di atas padding kartu.
+              const kartu = box.closest('.card').getBoundingClientRect();
+              const bawah = Math.round(kartu.bottom - pesan.bottom);
+              if (!semula) box.innerHTML = simpan;
+              return {jarak: j, kosong: !semula, celah_kosong: celah_kosong,
+                      bawah: bawah};
+            })()""")
+            if d is None:
+                return "elemen tidak ada - dilewati"
+            if d["kosong"] and d["celah_kosong"] > 6:
+                raise AssertionError(
+                    f"wadah kosong menyisakan celah {d['celah_kosong']}px")
+            if d["jarak"] < 6:
+                raise AssertionError(
+                    f"pesan simpan menempel barisan tombol (jarak {d['jarak']}px)")
+            if d["bawah"] > 24:
+                raise AssertionError(
+                    f"pesan terakhir menyisakan {d['bawah']}px di bawah, "
+                    "lebih longgar daripada padding kartu")
+            return (f"jarak {d['jarak']}px, sisa bawah kartu {d['bawah']}px"
+                    + (", wadah kosong tanpa celah hantu" if d["kosong"] else ""))
+        check("Pesan simpan tidak menempel barisan tombol", jarak_pesan_simpan)
+
         # --- 4. grafik keterlibatan ---------------------------------------
         def engagement():
             b.wait_for("document.querySelector('#engagement svg')",
