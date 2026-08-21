@@ -5,20 +5,36 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-Mode = Literal["americano", "tiered", "mexicano", "team", "americano_cpsat"]
+Mode = Literal["americano", "tiered", "mexicano", "team", "americano_cpsat",
+               "americano_solver"]
 
 # Semua mode yang didukung generator.
 #
-# "americano_cpsat" memakai aturan yang sama persis dengan "americano" - yang
-# berbeda cuma MESIN pencariannya: solver eksak CP-SAT (OR-Tools) menggantikan
-# simulated annealing. Sengaja dibuat sebagai mode tersendiri, bukan sakelar di
-# dalam americano, supaya jadwal yang sudah pernah dibuat host tetap keluar
-# persis sama seperti sebelumnya.
+# "americano_cpsat" dan "americano_solver" memakai aturan yang sama persis
+# dengan "americano"; yang berbeda cuma PERAN solver eksak di dalamnya -
+# penyempurna di ujung, atau mesin dasarnya sendiri. Keduanya sengaja dibuat
+# sebagai mode tersendiri, bukan sakelar di dalam americano, supaya jadwal yang
+# sudah pernah dibuat host tetap keluar persis sama seperti sebelumnya.
 MODES: tuple[str, ...] = ("americano", "tiered", "mexicano", "team",
-                          "americano_cpsat")
+                          "americano_cpsat", "americano_solver")
 
-# Mode yang dijalankan dengan solver eksak, bukan annealing.
+# Mode yang menjalankan solver eksak DI UJUNG rangkaian: seluruh mesin biasa
+# jalan lebih dulu sampai selesai, dan hasilnya dipakai sebagai titik awal
+# (hint) sekaligus pembanding. Solver di sini penyempurna.
 CPSAT_MODES: tuple[str, ...] = ("americano_cpsat",)
+
+# Mode yang memakai solver eksak sebagai MESIN DASAR: annealing tidak dijalankan
+# sama sekali, dan jadwalnya disusun langsung oleh CP-SAT dari konstruksi awal
+# tanpa hint. Yang tersisa dari rangkaian lama cuma perapian setelahnya
+# (pemerataan main, giliran) - dan itu pun dijaga supaya tidak memburukkan
+# hasil solver.
+#
+# Dipisah dari CPSAT_MODES karena keduanya membeli hal yang berbeda, dan yang
+# ini LEBIH LEMAH di setup besar - lihat catatan panjang di scheduler.py pada
+# blok "Solver eksak sebagai mesin dasar". Ia ada supaya jadwal yang dipegang
+# host benar-benar keluar dari solver, bukan dari pencarian acak yang dirapikan
+# solver.
+CPSAT_BASE_MODES: tuple[str, ...] = ("americano_solver",)
 
 # Aturan komposisi pemain dalam satu segmen jadwal.
 #   open        -> siapa saja boleh main & berpasangan dengan siapa saja
@@ -209,6 +225,30 @@ class Config:
     # mana yang terjadi dilaporkan apa adanya di catatan jadwal.
     cpsat_seconds: float = 30.0
     cpsat_workers: int = 8
+    # Paksa solver memberi hasil yang SAMA setiap kali dijalankan dengan input
+    # yang sama. Mati secara bawaan, dan itu keputusan yang diukur.
+    #
+    # Solver ini normalnya menjalankan beberapa worker yang berlomba dengan batas
+    # waktu jam-dinding, jadi yang menang berbeda-beda tiap kali - dua kali jalan
+    # dengan seed yang sama bisa mendarat di jadwal yang berbeda. Menyalakan
+    # sakelar ini menukar perlombaan itu dengan pembagian giliran yang tertib
+    # (interleave_search) plus batas waktu deterministik.
+    #
+    # Yang dibeli: jadwal bisa dibuat ulang dari mode + seed, jadi laporan yang
+    # sudah dibagikan tidak hilang untuk selamanya, dan masalah penjadwalan bisa
+    # dilacak dengan membandingkan dua jalan yang seharusnya sama.
+    #
+    # Yang dibayar, diukur pada 12 orang / 2 court / 9 ronde dengan waktu tunggu
+    # yang disetarakan (3x jalan, seed sama): mutu 97,7 lawan 98,0-99,2, dan
+    # lawan berulang 11 lawan 7-10. Jadi ia kalah dari KETIGA jalan yang tidak
+    # deterministik, bukan cuma dari yang terbaik - perlombaan antar worker
+    # memang bagian dari kekuatan solver ini.
+    #
+    # Satu lagi yang tidak kelihatan di angka: cpsat_seconds berhenti berarti
+    # detik. Batas deterministik dihitung dalam satuan kerja solver, dan berapa
+    # detik satuan itu memakan waktu berbeda antar mesin - lihat
+    # UNIT_DET_PER_DETIK di cpsat.py.
+    cpsat_deterministic: bool = False
     # Anggaran TOTAL (detik) untuk "Sempurnakan jadwal ini": penyempurnaan
     # jendela-demi-jendela dengan solver eksak, dijalankan di atas jadwal yang
     # sudah jadi. 0 = tidak dijalankan, dan itu bawaannya.

@@ -89,6 +89,7 @@
             <!-- Disembunyikan kalau OR-Tools tidak terpasang; lihat
                  applyCpsatAvailability() di app.js. -->
             <option value="americano_cpsat" hidden>Americano + solver eksak (CP-SAT)</option>
+            <option value="americano_solver" hidden>Solver eksak sebagai mesin dasar (CP-SAT)</option>
           </select>
         </div>
       </div>
@@ -98,11 +99,22 @@
             <input type="number" id="cpsat_seconds" value="30" min="5" max="300"></div>
           <div></div>
         </div>
-        <div class="seg-total">Aturannya sama persis dengan Americano; yang
-          berbeda cuma mesin pencariannya. Setelah optimasi biasa selesai,
-          solver eksak mencari sisa perbaikan - dan kalau sempat, membuktikan
-          tidak ada lagi yang tersisa. Jadwalnya tidak pernah lebih buruk
-          daripada Americano, tapi Anda menunggu selama batas waktu ini.</div>
+        <!-- Isinya diganti per mode oleh renderSolverPeran() di app.js: dua
+             mode memakai blok yang sama tapi peran solvernya berlawanan, dan
+             teks yang cuma benar untuk salah satunya lebih buruk daripada tidak
+             ada teks. -->
+        <div class="seg-total" id="cpsat-peran"></div>
+        <label class="seg-toggle">
+          <input type="checkbox" id="cpsat_deterministic">
+          <span>Hasil bisa diulang
+            <span class="hint">jadwal yang sama tiap kali dijalankan, jadi
+              laporan yang sudah dibagikan bisa dirakit ulang dari seed. Solver
+              jalan di 1 thread, jadi ia memeriksa lebih sedikit kemungkinan -
+              diukur pada 12 orang / 2 court: mutu terkunci di 98,5 sementara
+              tanpa sakelar ini berayun 98,5-99,0. Batas waktu di atas jadi
+              perkiraan, bukan detik yang pasti.</span>
+          </span>
+        </label>
         <!-- Aturan operasi yang paling penting, dan satu-satunya yang tidak
              bisa ditebak host dari mana pun. Diukur pada 4 court: di 9 ronde
              solver menembus sampai 26 peserta, di 12 ronde ia mati total

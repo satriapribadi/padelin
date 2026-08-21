@@ -1,14 +1,24 @@
-"""Adu mesin: annealing yang sekarang lawan solver CP-SAT, pada setup yang sama.
+"""Adu mesin: annealing, solver-sebagai-penyempurna, dan solver-sebagai-dasar.
 
-Dipakai untuk menjawab satu pertanyaan yang selama ini tidak punya jawaban:
-apakah angka pengulangan yang dicapai annealing itu memang batasnya, atau masih
-ada yang lebih baik dan kita cuma tidak menemukannya.
+Dipakai untuk menjawab dua pertanyaan yang tidak punya jawaban tanpa diukur:
+
+  1. apakah angka pengulangan yang dicapai annealing itu memang batasnya, atau
+     masih ada yang lebih baik dan kita cuma tidak menemukannya;
+  2. berapa sebenarnya sumbangan annealing di mode CP-SAT - dijawab dengan
+     menjalankan solver TANPA annealing sama sekali, di setup yang sama.
+
+Tiga mesin yang diadu:
+
+    SA        mode "americano"          annealing saja
+    CP-SAT    mode "americano_cpsat"    annealing lalu solver di ujungnya
+    DASAR     mode "americano_solver"   solver dari nol, tanpa annealing
 
     python tools/banding_cpsat.py
     python tools/banding_cpsat.py --detik 60 --seed 1 2 3
+    python tools/banding_cpsat.py --mesin SA DASAR      # cuma dua kolom
 
-Yang dicetak: pasang partner berulang, pasang lawan berulang, skor kualitas,
-dan waktu - untuk kedua mesin, plus status solver (terbukti optimal atau tidak).
+Yang dicetak: pasang partner berulang, pasang lawan berulang, skor kualitas, dan
+waktu - untuk tiap mesin, plus status solver (terbukti optimal atau tidak).
 """
 
 from __future__ import annotations
@@ -36,6 +46,19 @@ KASUS = [
     ("10L+6P / 2 court / sesama bentuk", 16, 2, 12, 10,
      ["LL-LL", "LP-LP", "PP-PP"]),
 ]
+
+
+# Mesin yang diadu. SA selalu jadi pembanding: dua kolom lainnya diukur relatif
+# terhadapnya, karena itulah yang dipakai host kalau ia tidak menyalakan apa pun.
+MESIN = {
+    "SA": "americano",
+    "CP-SAT": "americano_cpsat",
+    "DASAR": "americano_solver",
+}
+
+# Awalan catatan jadwal yang memuat status solver, per mode. Dipisah karena
+# kalimatnya memang berbeda - lihat _catatan_cpsat dan _catatan_dasar.
+_AWALAN_STATUS = ("Mode CP-SAT", "Solver sebagai mesin dasar")
 
 
 def roster(n: int, pria: int | None, rng: random.Random) -> list[Player]:
@@ -73,7 +96,14 @@ def main() -> int:
                     help="seed yang diuji")
     ap.add_argument("--kasus", default="",
                     help="jalankan hanya kasus yang labelnya memuat teks ini")
+    ap.add_argument("--mesin", nargs="+", default=list(MESIN),
+                    choices=list(MESIN),
+                    help="mesin yang diadu (SA selalu jadi pembandingnya)")
     args = ap.parse_args()
+
+    # SA adalah garis dasarnya, jadi ia ikut walau tidak diminta - tanpa itu
+    # kolom lain tidak punya apa-apa untuk dibandingkan.
+    mesin = ["SA"] + [m for m in args.mesin if m != "SA"]
 
     kasus = [k for k in KASUS if args.kasus.lower() in k[0].lower()]
     if not kasus:
@@ -86,40 +116,50 @@ def main() -> int:
           f"{'detik':>7}  status")
     print("-" * 96)
 
-    menang = kalah = seri = 0
+    # Per mesin: [menang, kalah, seri] terhadap SA.
+    tally = {m: [0, 0, 0] for m in mesin if m != "SA"}
     for label, n, courts, rounds, pria, matchups in kasus:
         for seed in args.seed:
             rng = random.Random(seed)
             players = roster(n, pria, rng)
-            baris = []
-            for mode, nama in (("americano", "SA"),
-                               ("americano_cpsat", "CP-SAT")):
-                sch, wall = jalankan(mode, [Player(**vars(p)) for p in players],
+            baris = {}
+            for nama in mesin:
+                sch, wall = jalankan(MESIN[nama],
+                                     [Player(**vars(p)) for p in players],
                                      courts, rounds, matchups, seed, args.detik)
                 s = sch.stats
-                status = next((c for c in sch.notes if c.startswith("Mode CP-SAT")),
-                              "")
+                status = next((c for c in sch.notes
+                               if c.startswith(_AWALAN_STATUS)), "")
                 if status:
-                    status = ("TERBUKTI OPTIMAL" if "TERBUKTI" in status
-                              else "terbaik dalam batas waktu")
-                baris.append((nama, s.partner_repeat_pairs,
-                              s.opponent_repeat_pairs, s.quality_score,
-                              wall, status))
-            for nama, ptn, lwn, mutu, wall, status in baris:
+                    if "TERBUKTI" in status:
+                        status = "TERBUKTI OPTIMAL"
+                    elif "TIDAK dipakai" in status or "TIDAK sampai" in status:
+                        status = "jadwal solver DIBUANG"
+                    else:
+                        status = "terbaik dalam batas waktu"
+                baris[nama] = (s.partner_repeat_pairs, s.opponent_repeat_pairs,
+                               s.quality_score, wall, status)
+            for nama in mesin:
+                ptn, lwn, mutu, wall, status = baris[nama]
                 print(f"{label + ' s' + str(seed):<38} {nama:<7} {ptn:>4} "
                       f"{lwn:>4} {mutu:>6.2f} {wall:>7.1f}  {status}")
-            a, b = baris[0], baris[1]
-            kunci_a, kunci_b = (a[1], a[2], -a[3]), (b[1], b[2], -b[3])
-            if kunci_b < kunci_a:
-                menang += 1
-            elif kunci_b > kunci_a:
-                kalah += 1
-            else:
-                seri += 1
+
+            def kunci(nama):
+                ptn, lwn, mutu, *_ = baris[nama]
+                return (ptn, lwn, -mutu)
+
+            for nama in tally:
+                if kunci(nama) < kunci("SA"):
+                    tally[nama][0] += 1
+                elif kunci(nama) > kunci("SA"):
+                    tally[nama][1] += 1
+                else:
+                    tally[nama][2] += 1
             print()
 
-    print(f"CP-SAT lebih baik di {menang}, lebih buruk di {kalah}, "
-          f"sama di {seri} dari {menang + kalah + seri} kasus.")
+    for nama, (menang, kalah, seri) in tally.items():
+        print(f"{nama} lebih baik dari SA di {menang}, lebih buruk di {kalah}, "
+              f"sama di {seri} dari {menang + kalah + seri} kasus.")
     return 0
 
 

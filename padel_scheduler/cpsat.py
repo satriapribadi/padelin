@@ -62,6 +62,43 @@ from .models import matchup_code
 # dengan integer, sementara bobot di Weights bisa pecahan.
 SKALA = 100
 
+# Jadwal apa yang dipegang host kalau solver gagal. Bunyinya berbeda menurut
+# peran solver: sebagai penyempurna, yang tersisa adalah jadwal utuh dari mesin
+# biasa; sebagai mesin dasar, yang tersisa cuma konstruksi awal yang belum
+# dioptimasi siapa pun - dan itu keadaan yang jauh lebih perlu diketahui host.
+_CADANGAN = {
+    False: "Jadwal dari mesin biasa yang dipakai.",
+    True: ("Yang dipakai jadwal konstruksi awal, yang belum dioptimasi sama "
+           "sekali. Naikkan batas waktu solver, atau pakai mode Americano "
+           "biasa yang mengoptimasinya dengan annealing."),
+}
+
+# Berapa satuan waktu deterministik yang kira-kira sepadan dengan satu detik
+# jam-dinding, DI SATU WORKER. Dipakai hanya kalau host menyalakan
+# Config.cpsat_deterministic - lihat blok panjang di bawah soal kenapa satu.
+#
+# Batas waktu deterministik CP-SAT tidak dihitung dalam detik melainkan dalam
+# satuan kerja solver - itu justru intinya, karena detik tidak bisa
+# direproduksi. Konsekuensinya angka "batas waktu (detik)" di UI berhenti
+# berarti detik, dan yang bisa dilakukan cuma menerjemahkannya sebaik mungkin.
+#
+# Diukur di mesin pengembangan pada 12 orang / 2 court / 9 ronde dengan satu
+# worker: 6 satuan memakan 4,1 detik, 12 satuan 10,7 detik, 24 satuan 22,0
+# detik - jadi sekitar 1,1 satuan per detik di dua pengukuran yang lebih besar.
+#
+# Ini PERKIRAAN dan sengaja disebut begitu: mesin yang lebih lambat memakan lebih
+# banyak detik untuk satuan yang sama. Itulah kenapa ada FAKTOR_CADANGAN_DET.
+UNIT_DET_PER_DETIK = 1.1
+
+# Batas jam-dinding yang tetap dipasang di mode deterministik, sebagai kelipatan
+# dari yang diminta host. Bukan pengganti batas deterministik - penjaga supaya
+# mesin yang jauh lebih lambat tidak membuat host menunggu tanpa ujung.
+#
+# Kalau penjaga ini yang menggigit, hasilnya TIDAK lagi deterministik, dan itu
+# harus dikatakan alih-alih dibiarkan jadi janji yang diam-diam batal. Lihat
+# Hasil.deterministik.
+FAKTOR_CADANGAN_DET = 3.0
+
 # Rating dipetakan ke satuan sepersepuluh (3.5 -> 35). Presisi 0.1 jauh lebih
 # halus daripada yang dipakai host mana pun, dan menahan angka tetap kecil.
 SKALA_RATING = 10
@@ -100,6 +137,9 @@ class Hasil:
     # Benar-benar LEBIH BAIK dari jadwal sebelumnya, bukan cuma setara.
     membaik: bool = False
     n_variabel: int = 0
+    # Apakah pencarian ini benar-benar bisa diulang. Hanya benar kalau host
+    # memintanya DAN penjaga jam-dinding tidak menggigit di tengah jalan.
+    deterministik: bool = False
     catatan: list[str] = field(default_factory=list)
 
 
@@ -193,7 +233,10 @@ def optimize(st, courts_r: list[int], *,
              workers: int = 8,
              nilai=None,
              progress=None,
-             beku=None) -> Hasil:
+             beku=None,
+             dasar: bool = False,
+             deterministic: bool = False,
+             seed: int = 0) -> Hasil:
     """Cari jadwal terbaik untuk `st`, lalu tulis hasilnya kembali ke `st`.
 
     `st` harus SUDAH berisi jadwal layak. Jadwal itu dipakai dua kali: sebagai
@@ -215,6 +258,22 @@ def optimize(st, courts_r: list[int], *,
     `courts_r` cuma dipakai untuk melaporkan; jumlah court yang dipakai model
     diambil dari jadwal yang sudah ada, supaya jumlah slot main tidak berubah
     diam-diam dari yang sudah disepakati tahap sebelumnya.
+
+    `dasar=True` menjalankan solver sebagai MESIN DASAR, bukan penyempurna:
+    hint tidak dipasang sama sekali, jadi solver mencari dari nol dan jadwal
+    yang keluar benar-benar hasil pencariannya sendiri - bukan jadwal annealing
+    yang dipungut ulang. Yang TIDAK ikut dilepas adalah pembandingnya: `st`
+    tetap harus berisi jadwal layak (hasil konstruksi awal), dan kalau solver
+    tidak sanggup melampauinya dalam batas waktu, jadwal itulah yang
+    dipertahankan. Tanpa jaring itu batas waktu yang terlalu pendek berarti host
+    memegang jadwal yang lebih buruk daripada yang sudah ada di tangan.
+
+    `deterministic=True` menukar perlombaan antar worker dengan pembagian giliran
+    yang tertib, dan `time_limit` dibaca sebagai satuan kerja solver alih-alih
+    detik - dua-duanya syarat supaya jalan yang sama memberi jadwal yang sama.
+    `seed` dipakai sebagai benih solver di mode itu, jadi mengganti seed host
+    tetap memberi variasi lain yang sama-sama bisa diulang. Ongkos mutunya nyata;
+    lihat Config.cpsat_deterministic.
     """
     nilai = nilai or _nilai_bawaan
     hasil = Hasil()
@@ -583,12 +642,69 @@ def optimize(st, courts_r: list[int], *,
     # --- Hint dari jadwal yang sudah ada ----------------------------------
     # Tanpa ini solver mulai dari nol dan sering menghabiskan seluruh batas
     # waktu cuma untuk mencapai mutu yang sudah dipegang konstruksi greedy.
-    _pasang_hint(m, st, pairs, idx_pair, y, pt, at, meja)
+    #
+    # Justru itu yang diminta mode "solver sebagai dasar": di sana jadwal harus
+    # benar-benar keluar dari pencarian solver, jadi hint-nya sengaja tidak
+    # dipasang. Ongkosnya nyata dan sudah diukur - lihat blok "Solver eksak
+    # sebagai mesin dasar" di scheduler.py.
+    if not dasar:
+        _pasang_hint(m, st, pairs, idx_pair, y, pt, at, meja)
+    else:
+        # Fakta tentang CARA solver dijalankan, bukan klaim tentang hasilnya:
+        # hasilnya belum diketahui di titik ini, dan solver masih bisa kalah dari
+        # konstruksi awal. Yang menilai hasil adalah catatan di scheduler.py.
+        hasil.catatan.append(
+            "Solver dijalankan sebagai mesin dasar: tanpa hint dari annealing, "
+            "jadi pencariannya mulai dari nol."
+        )
 
     # --- Jalankan ---------------------------------------------------------
     solver = cp_model.CpSolver()
-    solver.parameters.max_time_in_seconds = max(1.0, float(time_limit))
-    solver.parameters.num_workers = max(1, int(workers))
+    if deterministic:
+        # SATU worker, dan itu keputusan yang sudah diukur dua kali.
+        #
+        # Yang dicoba lebih dulu adalah cara yang dianjurkan dokumentasi
+        # OR-Tools: delapan worker dengan `interleave_search` - worker berbagi
+        # giliran alih-alih berlomba - plus batas waktu deterministik. Cara itu
+        # jauh lebih cepat (sekitar 10 detik lawan 22 detik untuk anggaran yang
+        # sama) dan HAMPIR selalu memberi jadwal yang sama. "Hampir" itulah
+        # masalahnya: pada empat jalan berturut-turut dengan input yang sama
+        # persis, satu jalan mendarat di objective 61.200 sementara tiga lainnya
+        # di 61.120. Sapuan berikutnya di mesin yang lebih senggang memberi empat
+        # dari empat sama, jadi penyimpangannya bergantung beban mesin - persis
+        # sifat yang membuat janji "bisa diulang" tidak bisa dipegang.
+        #
+        # Sakelar yang kadang-kadang berhasil lebih buruk daripada tidak ada
+        # sakelar: host memakai seed dari laporan, mendapat jadwal lain, lalu
+        # menyimpulkan seed-nya salah dicatat. Dengan satu worker tidak ada
+        # perlombaan maupun pembagian giliran antar thread, jadi determinismenya
+        # datang dari algoritmanya - bukan dari mesin yang kebetulan senggang.
+        #
+        # `workers` yang diminta pemanggil sengaja diabaikan di sini, dan itu
+        # dilaporkan ke host lewat catatan di bawah.
+        solver.parameters.num_workers = 1
+        solver.parameters.interleave_search = True
+        solver.parameters.max_deterministic_time = (
+            max(1.0, float(time_limit)) * UNIT_DET_PER_DETIK)
+        solver.parameters.random_seed = int(seed)
+        # Penjaga jam-dinding, bukan batas yang diharapkan menggigit. Kalau ia
+        # menggigit, hasilnya tidak deterministik lagi - diperiksa di bawah.
+        batas_cadangan = max(1.0, float(time_limit)) * FAKTOR_CADANGAN_DET
+        solver.parameters.max_time_in_seconds = batas_cadangan
+        if int(workers) > 1:
+            # Host memilih 8 thread lalu mendapat 1. Kalau itu tidak disebut,
+            # yang ia lihat cuma solver yang tiba-tiba menemukan lebih sedikit,
+            # dan ia akan mencari sebabnya di setupnya sendiri.
+            hasil.catatan.append(
+                f"Sakelar 'hasil bisa diulang' menyala, jadi solver dijalankan "
+                f"di 1 thread alih-alih {int(workers)}: perlombaan antar thread "
+                f"itulah yang membuat hasilnya tidak bisa diulang. Solver "
+                f"memeriksa lebih sedikit kemungkinan dalam waktu yang sama."
+            )
+    else:
+        batas_cadangan = None
+        solver.parameters.num_workers = max(1, int(workers))
+        solver.parameters.max_time_in_seconds = max(1.0, float(time_limit))
     # Hint yang tidak layak DIBUANG DIAM-DIAM oleh CP-SAT. Tidak ada peringatan,
     # tidak ada status berbeda - solver cuma mulai dari nol, dan seluruh
     # keunggulan mode ini hilang tanpa jejak.
@@ -613,6 +729,23 @@ def optimize(st, courts_r: list[int], *,
     hasil.n_variabel = len(m.proto.variables)
     hasil.terbukti_optimal = status == cp_model.OPTIMAL
 
+    # Janji "bisa diulang" hanya berlaku kalau yang menghentikan pencarian adalah
+    # batas deterministiknya, bukan penjaga jam-dinding. Kalau penjaga yang
+    # menggigit, mesin ini terlalu lambat untuk anggaran yang diminta, dan
+    # diamnya soal itu berarti host mengulang lalu mendapat jadwal lain tanpa
+    # tahu kenapa.
+    if deterministic:
+        hasil.deterministik = (batas_cadangan is None
+                               or solver.wall_time < batas_cadangan * 0.98)
+        if not hasil.deterministik:
+            hasil.catatan.append(
+                f"Hasil solver ini TIDAK bisa diulang walau sakelarnya menyala: "
+                f"pencariannya dihentikan penjaga waktu di "
+                f"{solver.wall_time:.1f} detik sebelum anggaran deterministiknya "
+                f"habis. Turunkan batas waktu solver supaya anggaran itu selesai "
+                f"di dalam penjaganya."
+            )
+
     if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
         hasil.status = {
             cp_model.INFEASIBLE: "mustahil",
@@ -620,7 +753,7 @@ def optimize(st, courts_r: list[int], *,
         }.get(status, "tidak ketemu solusi")
         hasil.catatan.append(
             f"CP-SAT tidak menemukan jadwal dalam {hasil.detik:.1f} detik "
-            f"({hasil.status}). Jadwal dari mesin biasa yang dipakai."
+            f"({hasil.status}). {_CADANGAN[dasar]}"
         )
         return hasil
 
@@ -652,7 +785,7 @@ def optimize(st, courts_r: list[int], *,
         hasil.status = "solusi tidak utuh"
         hasil.catatan.append(
             "Solusi CP-SAT tidak bisa dibaca kembali jadi jadwal utuh. "
-            "Jadwal dari mesin biasa yang dipakai."
+            + _CADANGAN[dasar]
         )
         return hasil
 
@@ -846,6 +979,10 @@ JENDELA_PER_SAPUAN = 3
 MAKS_SAPUAN = 2
 
 
+# Apa yang sebenarnya membatasi penyempurnaan, menurut mode yang dipakai.
+_ANGGARAN = {False: "Anggaran waktunya", True: "Jatah jendelanya"}
+
+
 @dataclass
 class HasilSempurna:
     """Apa yang terjadi selama penyempurnaan, apa adanya.
@@ -855,6 +992,9 @@ class HasilSempurna:
     """
 
     dijalankan: bool = False
+    # Apakah seluruh rangkaian ini bisa diulang. Hanya benar kalau host
+    # memintanya DAN tidak ada satu jendela pun yang jatuh ke penjaga waktu.
+    deterministik: bool = False
     # Tidak ada satu pun ronde yang punya pelanggaran - jadwal sudah rapi.
     gerbang_tutup: bool = False
     jendela_dicoba: int = 0
@@ -920,7 +1060,9 @@ def _panas_per_ronde(st, ambang: list[int]) -> list[int]:
 
 
 def sempurnakan(st, courts_r: list[int], *, anggaran: float,
-                workers: int = 8, nilai=None, progress=None) -> HasilSempurna:
+                workers: int = 8, nilai=None, progress=None,
+                deterministic: bool = False,
+                seed: int = 0) -> HasilSempurna:
     """Perbaiki jadwal yang SUDAH JADI, jendela demi jendela, secara eksak.
 
     Berbeda dari optimize(): yang ini tidak pernah menyerahkan seluruh jadwal ke
@@ -935,6 +1077,14 @@ def sempurnakan(st, courts_r: list[int], *, anggaran: float,
     Penjaga "tidak pernah lebih buruk" milik optimize() dipakai apa adanya: tiap
     jendela hanya diterima kalau `nilai` membaik. Pada 54 percobaan di tiga
     varian penyetelan, tidak ada satu pun jadwal yang memburuk.
+
+    `deterministic=True` mengubah arti `anggaran`: dari "berapa detik host mau
+    menunggu" menjadi "berapa jendela yang dicoba". Itu bukan pilihan gaya -
+    lingkaran di bawah ini memutuskan kapan berhenti dengan MELIHAT JAM, jadi
+    membuat tiap jendela deterministik saja tidak cukup: mesin yang sedang sibuk
+    akan mencoba lebih sedikit jendela dan mendarat di jadwal lain. Anggarannya
+    dibagi DETIK_PER_JENDELA, dan jumlah jendela tetap terbatas oleh
+    MAKS_SAPUAN x JENDELA_PER_SAPUAN seperti biasa.
     """
     hasil = HasilSempurna()
     if not tersedia():
@@ -971,9 +1121,18 @@ def sempurnakan(st, courts_r: list[int], *, anggaran: float,
     # dirawat.
     biaya_jendela = DETIK_PER_JENDELA
 
+    # Mode deterministik menghitung jendela, bukan detik - lihat docstring.
+    det = bool(deterministic)
+    maks_jendela = max(1, int(anggaran / DETIK_PER_JENDELA)) if det else 0
+    hasil.deterministik = det
+
+    def kehabisan() -> bool:
+        if det:
+            return hasil.jendela_dicoba >= maks_jendela
+        return (anggaran - (time.perf_counter() - mulai)) < biaya_jendela
+
     for sapuan in range(MAKS_SAPUAN):
-        sisa = anggaran - (time.perf_counter() - mulai)
-        if sisa < biaya_jendela:
+        if kehabisan():
             hasil.anggaran_habis = True
             break
         panas = _panas_per_ronde(st, wait_thresholds(st))
@@ -989,22 +1148,35 @@ def sempurnakan(st, courts_r: list[int], *, anggaran: float,
         kandidat = [a for skor, a in urut if skor > 0][:JENDELA_PER_SAPUAN]
         ada = False
         for ke, a in enumerate(kandidat):
-            sisa = anggaran - (time.perf_counter() - mulai)
-            if sisa < biaya_jendela:
+            if kehabisan():
                 hasil.anggaran_habis = True
                 break
             if progress is not None:
-                progress(min(1.0, (time.perf_counter() - mulai) / max(anggaran, 1e-9)),
+                # Kemajuan diukur dengan jendela di mode deterministik: memakai
+                # jam di situ akan melaporkan angka yang tidak sejalan dengan apa
+                # yang benar-benar menghentikan lingkaran ini.
+                frac = (hasil.jendela_dicoba / maks_jendela if det
+                        else (time.perf_counter() - mulai) / max(anggaran, 1e-9))
+                progress(min(1.0, frac),
                          f"Menyempurnakan ronde {a + 1}-{a + JENDELA}")
             hasil.jendela_dicoba += 1
             t_jendela = time.perf_counter()
+            batas = DETIK_PER_JENDELA if det else min(
+                DETIK_PER_JENDELA, anggaran - (time.perf_counter() - mulai))
             lapor = optimize(
                 st, courts_r,
-                time_limit=min(DETIK_PER_JENDELA, sisa),
+                time_limit=batas,
                 workers=workers, nilai=nilai,
                 beku=set(range(R)) - set(range(a, a + JENDELA)),
+                deterministic=det, seed=seed,
             )
             biaya_jendela = max(biaya_jendela, time.perf_counter() - t_jendela)
+            # Satu jendela yang jatuh ke penjaga waktu membatalkan janji untuk
+            # SELURUH rangkaian: jendela berikutnya bekerja di atas jadwal yang
+            # sudah berbeda.
+            if det and not lapor.deterministik:
+                hasil.deterministik = False
+                hasil.catatan.extend(lapor.catatan)
             if lapor.membaik:
                 hasil.jendela_membaik += 1
                 ada = True
@@ -1016,7 +1188,13 @@ def sempurnakan(st, courts_r: list[int], *, anggaran: float,
 
 
 def catatan_sempurna(h: HasilSempurna) -> str:
-    """Satu kalimat untuk host, menyebut angkanya - bukan cuma "selesai"."""
+    """Satu kalimat untuk host, menyebut angkanya - bukan cuma "selesai".
+
+    Kata "anggaran" berganti bunyi di mode deterministik, dan itu bukan
+    kosmetik: di sana yang membatasi memang jumlah jendela, bukan detik, jadi
+    "tambah waktunya" adalah saran yang salah - yang menolong adalah menaikkan
+    angka batasnya.
+    """
     if not h.dijalankan:
         return h.catatan[0] if h.catatan else "Penyempurnaan tidak dijalankan."
     if h.gerbang_tutup:
@@ -1028,12 +1206,13 @@ def catatan_sempurna(h: HasilSempurna) -> str:
         pokok = (f"Penyempurnaan memeriksa {h.jendela_dicoba} kelompok ronde "
                  f"dalam {h.detik:.1f} detik dan tidak menemukan susunan yang "
                  f"lebih baik. Jadwalnya tidak diubah.")
-        return pokok + (" Anggaran waktunya habis lebih dulu, jadi menambahnya "
-                        "masih mungkin menolong." if h.anggaran_habis else "")
+        return pokok + ((f" {_ANGGARAN[h.deterministik]} habis lebih dulu, jadi "
+                         f"menambahnya masih mungkin menolong.")
+                        if h.anggaran_habis else "")
     pokok = (f"Penyempurnaan memperbaiki {h.jendela_membaik} dari "
              f"{h.jendela_dicoba} kelompok ronde yang diperiksa, dalam "
              f"{h.detik:.1f} detik.")
     if h.anggaran_habis:
-        pokok += (" Anggaran waktunya habis sebelum pemeriksaan selesai, jadi "
-                  "menambahnya masih mungkin menolong.")
+        pokok += (f" {_ANGGARAN[h.deterministik]} habis sebelum pemeriksaan "
+                  f"selesai, jadi menambahnya masih mungkin menolong.")
     return pokok

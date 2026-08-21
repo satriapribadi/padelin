@@ -98,6 +98,9 @@ untuk +0,4 poin — sementara setup yang sudah di batasnya berongkos nol.
 - Americano, pool berdasarkan rating, Mexicano (tim diseimbangkan), pasangan tetap
 - **Americano + solver eksak (CP-SAT)** — aturan yang sama persis dengan
   Americano, mesin pencarian yang berbeda. Lihat di bawah
+- **Solver eksak sebagai mesin dasar (CP-SAT)** — jadwalnya disusun solver dari
+  nol, tanpa annealing sama sekali. Lebih lemah di setup besar, dan itu memang
+  sifatnya. Lihat di bawah
 - Babak bersegmen, mis. `Putra 3 – Putri 3 – Mixed 6`. Preset bisa ditambahkan
   ke susunan yang ada atau menggantinya - memilihnya saja tidak mengubah apa pun.
   Tiap babak bisa digandakan dan diurutkan dengan diseret (atau panah atas/bawah
@@ -133,6 +136,10 @@ menggantikan annealing dan mulai dari konstruksi greedy; hasilnya kalah telak
 (26 orang / 4 court: annealing nol lawan berulang dalam 7 detik, CP-SAT masih
 13 pasang setelah 20 detik). Penjadwalan ini sangat simetris dan ruang solusinya
 raksasa — medan yang memang menguntungkan pencarian lokal.
+
+Versi itu tidak dibuang: ia sekarang mode tersendiri — *Solver eksak sebagai
+mesin dasar*, di bawah — supaya perbandingannya bisa dijalankan sendiri, bukan
+cuma dibaca di sini.
 
 **Kapan menyalakannya: 11 ronde ke bawah.** Ini aturan operasi yang paling
 penting soal mode ini, dan tidak bisa ditebak dari mana pun — ia harus diukur.
@@ -183,6 +190,65 @@ Ongkosnya dua: Anda menunggu selama batas waktu yang dipilih, dan installer
 membengkak sekitar 200 MB karena OR-Tools membawa numpy, pandas, dan protobuf.
 Kalau OR-Tools tidak terpasang, modenya otomatis disembunyikan dari UI dan sisa
 aplikasi berjalan seperti biasa.
+
+**Solver eksak sebagai mesin dasar (CP-SAT)**
+Kebalikan dari mode di atas. Di sana annealing yang menyusun jadwal dan solver
+memungut sisanya; di sini **solver yang menyusun**, dan annealing tidak
+dijalankan sama sekali — hint pun tidak dipasang, jadi pencariannya benar-benar
+mulai dari nol.
+
+Yang tersisa dari rangkaian lama tiga hal:
+
+1. **konstruksi awal** — tetap jalan, tapi cuma untuk dua hal: menentukan berapa
+   court yang realistis terisi tiap ronde, dan menjadi jaring kalau solver
+   gagal. Sebagai titik awal pencarian ia sengaja tidak dipakai;
+2. **perapian sesudahnya** (pemerataan main, giliran) — tetap jalan, karena
+   giliran main tidak ada di dalam model solver sama sekali. Hasilnya dibandingkan
+   ulang dengan ukuran yang sama yang dipakai memilih jadwal di tempat lain, dan
+   kalau perapian ternyata merugikan, jadwal solver yang dikembalikan;
+3. **jaring "tidak pernah lebih buruk"** — kalau jadwal solver kalah dari
+   konstruksi awal, konstruksi awal yang dipertahankan, dan catatan jadwalnya
+   berkata begitu apa adanya.
+
+**Mode ini lebih lemah, dan itu bukan bug.** Angka yang sama seperti di atas: 26
+orang / 4 court, annealing sampai di nol lawan berulang dalam 7 detik sementara
+solver dari nol masih di 13 pasang setelah 20 detik. Kalau yang Anda cari jadwal
+terbaik, pakai *Americano* atau *Americano + solver eksak*.
+
+Yang dibeli mode ini bukan mutu melainkan **asal-usul**: jadwal yang keluar
+benar-benar hasil pencarian solver, tidak tercampur pertanyaan "seberapa banyak
+sebenarnya sumbangan annealing". Itu berguna untuk dua hal:
+
+- **setup kecil** (sekitar 12 peserta / 9 ronde ke bawah), di mana solver bisa
+  membuktikan optimum tanpa dibantu titik awal siapa pun;
+- **mengukur**, kalau Anda ingin tahu berapa sebenarnya jarak antara "solver
+  murni" dan "annealing + solver" di setup Anda sendiri.
+
+Bedanya dengan mode di atas juga ada di tuas yang dipakai:
+
+| | Americano + solver eksak | Solver sebagai mesin dasar |
+|---|---|---|
+| annealing | jalan penuh | tidak jalan |
+| hint ke solver | ya | tidak |
+| `effort` | berpengaruh | diabaikan |
+| `attempts` (percobaan) | berpengaruh | **diabaikan**, selalu 1 |
+| `cpsat_seconds` | berpengaruh | berpengaruh, dan satu-satunya tuas mutu |
+| *Hasil bisa diulang* | berlaku | berlaku, dan paling terasa di sini |
+
+`attempts` diabaikan dengan sengaja: multi-start ada untuk annealing, yang
+berhenti di optimum lokal berbeda-beda tergantung lintasan acaknya. CP-SAT tidak
+punya lintasan acak yang bisa diadu — dengan model dan batas waktu yang sama ia
+menempuh pencarian yang sama. Tiga percobaan berarti membayar tiga kali batas
+waktu solver untuk jadwal yang sama, dan anggaran itu jauh lebih berguna
+diberikan seluruhnya ke satu pencarian.
+
+Catatan jadwalnya selalu menyebut mana dari empat keadaan yang terjadi: solver
+membuktikan optimum, solver menemukan sesuatu tapi belum membuktikannya, solver
+kalah dari konstruksi awal karena kehabisan waktu, atau solver membuktikan
+optimum modelnya sendiri tapi jadwalnya tetap kalah menurut ukuran aplikasi
+(yang menaruh partner berulang di atas lawan berulang, sementara model solver
+menimbang keduanya sebagai satu jumlah). Keempatnya menuntut tindakan yang
+berbeda, jadi tidak ada yang disamarkan jadi "selesai".
 
 **Sempurnakan jadwal ini**
 Tombol yang muncul di panel Hasil, dan hanya kalau salah satu dari dua hal ini
@@ -389,7 +455,8 @@ padel_scheduler/
   capacity.py               analisa kelayakan + batas matematis
   factorization.py          1-factorization & Latin square
   optimizer.py              simulated annealing + batas keras
-  cpsat.py                  solver eksak OR-Tools (mode americano_cpsat)
+  cpsat.py                  solver eksak OR-Tools (mode americano_cpsat &
+                            americano_solver)
   scheduler.py              perakit jadwal
   roles.py                  pembagian wasit & ballboy
   economics.py              biaya, margin, trade-off court
@@ -541,7 +608,7 @@ Data acara ada di `%APPDATA%\Padelin` saat dipasang lewat installer, dan
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 224 tes unit
+python -m unittest discover -s tests    # 250 tes unit
 python tools/uitest.py                  # 30 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 python tools/cetaktest.py               # 15 uji jalur cetak & pratinjau (Electron)
@@ -607,10 +674,13 @@ babak, daftar peserta beserta rating/gender/pasangan terkunci, dan jadwal yang
 dihasilkan. Nama peserta diganti jadi P1..Pn - yang dibutuhkan untuk
 mereproduksi masalah penjadwalan hanyalah strukturnya, bukan nama anggota klub.
 
-Satu batasnya: kalau jadwalnya dibuat dengan mode CP-SAT atau lewat tombol
-*Sempurnakan jadwal ini*, menjalankan ulang setup yang sama belum tentu
-menghasilkan jadwal yang sama - lihat catatan soal determinisme di bawah.
-Matikan dulu keduanya saat melacak masalah penjadwalan.
+Satu batasnya: kalau jadwalnya dibuat dengan mode yang memakai solver eksak
+atau lewat tombol *Sempurnakan jadwal ini*, menjalankan ulang setup yang sama
+belum tentu menghasilkan jadwal yang sama. Info debug mencatat keadaan itu apa
+adanya lewat `bisa_diulang=false`, jadi pembaca laporan bug tahu lebih dulu
+apakah jadwalnya bisa dipanggil kembali. Nyalakan sakelar *Hasil bisa diulang* -
+atau matikan solvernya - saat melacak masalah penjadwalan; lihat catatan soal
+determinisme di bawah.
 
 ## Catatan
 
@@ -637,13 +707,30 @@ Matikan dulu keduanya saat melacak masalah penjadwalan.
   masalah, jalankan ulang dengan modenya dimatikan lebih dulu - bagian yang
   deterministik itulah yang bisa dibandingkan.
 
-  Determinisme di sini bukan hal yang tinggal dinyalakan. Diukur pada setup yang
-  sama: memaksanya dengan `interleave_search` plus batas waktu deterministik
-  memang berhasil - empat kali jalan, satu jadwal - tapi berongkos 4,4× lebih
-  lambat (22 → 98 detik) dan terkunci di 92,1 tanpa bukti, jadi yang hilang
-  justru kemungkinan mendarat di 94,7. Menurunkannya ke satu worker
-  menghilangkan pencarian portofolio yang membuat mode ini berguna. Jadi yang
-  dipilih adalah solver yang kuat dengan hasil yang berayun, dan ayunannya
-  disebut di sini apa adanya alih-alih dijanjikan tidak ada.
+  **Sakelar "hasil bisa diulang"** ada di panel solver, dan mati secara bawaan.
+  Menyalakannya membuat jalan yang sama memberi jadwal yang sama - diperiksa 6
+  kali jalan berturut-turut pada 12 orang / 2 court: satu jadwal, lawan 5 jadwal
+  berbeda dari 6 jalan tanpa sakelar. Ia berlaku untuk ketiganya: mode CP-SAT,
+  mode solver-sebagai-dasar, dan tombol *Sempurnakan jadwal ini*.
+
+  Yang dibayar: mutu terkunci di ujung bawah ayunannya (98,5 sementara tanpa
+  sakelar berayun 98,5-99,0 di setup yang sama), karena solver dijalankan di
+  **satu thread** - perlombaan antar thread itulah yang membuat hasilnya tidak
+  bisa diulang. Batas waktu juga berhenti berarti detik: ia diterjemahkan jadi
+  satuan kerja solver, dan berapa detik satuan itu memakan waktu berbeda antar
+  mesin (~1,1 satuan/detik di mesin pengembangan).
+
+  Satu worker dipilih setelah cara yang dianjurkan dokumentasi OR-Tools gagal
+  dipegang. Delapan worker dengan `interleave_search` plus batas deterministik
+  jauh lebih cepat dan **hampir** selalu memberi jadwal yang sama - tapi pada
+  empat jalan dengan input identik, satu jalan menyimpang, dan sapuan berikutnya
+  di mesin yang lebih senggang memberi empat dari empat sama. Penyimpangannya
+  bergantung beban mesin, dan sakelar yang kadang-kadang berhasil lebih buruk
+  daripada tidak ada sakelar: host memakai seed dari laporan, mendapat jadwal
+  lain, lalu menyimpulkan seed-nya salah dicatat.
+
+  Yang lebih kuat daripada sakelar ini: **simpan acaranya**. Jadwal yang
+  tersimpan dipulihkan apa adanya, jadi ia tidak bergantung mesin, jumlah
+  thread, maupun versi OR-Tools.
 - App ini sengaja dibuat tanpa dependency agar jalan offline dan tidak rusak
   saat Python naik versi.

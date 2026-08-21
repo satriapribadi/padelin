@@ -162,6 +162,10 @@ def _config_from(payload: dict) -> Config:
         # host sudah menunggu terlalu lama untuk sesuatu yang bisa saja tidak
         # membeli apa pun. Mode lain mengabaikan angka ini.
         cpsat_seconds=max(5, min(300, int(payload.get("cpsat_seconds", 30)))),
+        # Sakelar "hasil bisa diulang". Payload lama tidak punya field ini, dan
+        # tidak adanya HARUS berarti mati - jadwal yang sudah pernah dibuat host
+        # tetap keluar persis sama seperti sebelumnya.
+        cpsat_deterministic=bool(payload.get("cpsat_deterministic", False)),
         # Nama court pilihan host. Dipotong panjangnya dan dibersihkan oleh
         # Config sendiri, jadi di sini cukup dipastikan bentuknya daftar teks -
         # payload lama tidak punya field ini sama sekali, dan itu berarti

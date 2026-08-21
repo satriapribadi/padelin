@@ -517,6 +517,7 @@ function _buildPayload() {
     effort: opt.effort,
     attempts: opt.attempts,
     cpsat_seconds: +$('cpsat_seconds').value,
+    cpsat_deterministic: $('cpsat_deterministic').checked,
     segments: getSegments(),
     // Nama court ikut dikirim supaya ia bertahan melewati Generate berikutnya
     // dan ikut tersimpan di riwayat. Ia tidak mengubah susunan apa pun - itu
@@ -690,9 +691,56 @@ async function runAnalyze() {
 ['duration', 'round_min', 'warmup']
   .forEach((id) => $(id).addEventListener('input', renderCpsatRonde));
 
+/**
+ * Mode yang memakai solver eksak, dalam peran apa pun.
+ *
+ *   americano_cpsat   solver sebagai PENYEMPURNA - annealing menyusun jadwal,
+ *                     solver memungut sisa perbaikan di ujungnya.
+ *   americano_solver  solver sebagai MESIN DASAR - annealing tidak dijalankan,
+ *                     jadwalnya disusun solver dari nol.
+ *
+ * Dikumpulkan di satu tempat karena keduanya memakai kotak "batas waktu solver"
+ * yang sama dan sama-sama bergantung pada OR-Tools di server. Dulu setiap
+ * pemeriksaan menulis nama modenya sendiri, dan itu berarti setiap mode baru
+ * harus ditemukan di lima tempat berbeda.
+ */
+const MODE_SOLVER = ['americano_cpsat', 'americano_solver'];
+const pakaiSolver = (mode) => MODE_SOLVER.includes(mode);
+
+/**
+ * Jelaskan PERAN solver di mode yang sedang dipilih.
+ *
+ * Dua mode memakai blok pengaturan yang sama, tapi solvernya mengerjakan hal
+ * yang berlawanan - yang satu memungut sisa perbaikan annealing, yang lain
+ * menggantikan annealing sepenuhnya. Satu teks untuk keduanya berarti host
+ * membaca janji yang cuma benar di salah satunya, dan itu lebih buruk daripada
+ * tidak ada teks: ia mengambil keputusan berdasarkan mutu yang tidak akan ia
+ * dapat.
+ */
+function renderSolverPeran() {
+  const box = $('cpsat-peran');
+  if (!box) return;
+  const mode = $('mode').value;
+  if (mode === 'americano_cpsat') {
+    box.textContent = 'Aturannya sama persis dengan Americano; yang berbeda '
+      + 'cuma mesin pencariannya. Setelah optimasi biasa selesai, solver eksak '
+      + 'mencari sisa perbaikan - dan kalau sempat, membuktikan tidak ada lagi '
+      + 'yang tersisa. Jadwalnya tidak pernah lebih buruk daripada Americano, '
+      + 'tapi Anda menunggu selama batas waktu ini.';
+  } else if (mode === 'americano_solver') {
+    box.textContent = 'Solver menyusun jadwalnya sendiri dari nol; optimasi '
+      + 'biasa tidak dijalankan sama sekali, jadi effort dan jumlah percobaan '
+      + 'diabaikan. Di setup kecil ia bisa membuktikan jadwalnya tidak bisa '
+      + 'diperbaiki lagi. Di setup besar ia KALAH dari Americano biasa - diukur '
+      + 'pada 26 orang / 4 court: Americano nol lawan berulang dalam 7 detik, '
+      + 'solver dari nol masih 13 pasang setelah 20 detik.';
+  }
+}
+
 $('mode').addEventListener('change', () => {
   $('tier-row').style.display = $('mode').value === 'tiered' ? '' : 'none';
-  $('cpsat-block').style.display = $('mode').value === 'americano_cpsat' ? '' : 'none';
+  $('cpsat-block').style.display = pakaiSolver($('mode').value) ? '' : 'none';
+  renderSolverPeran();
   renderCpsatRonde();
 });
 
@@ -715,7 +763,7 @@ const CPSAT_RONDE_MAX = 11;
 function renderCpsatRonde() {
   const box = $('cpsat-ronde-hint');
   if (!box) return;
-  if ($('mode').value !== 'americano_cpsat') { box.textContent = ''; return; }
+  if (!pakaiSolver($('mode').value)) { box.textContent = ''; return; }
   const ronde = rondeMuat();
   if (!ronde) { box.textContent = ''; return; }
   box.textContent = ronde > CPSAT_RONDE_MAX
@@ -740,10 +788,11 @@ let cpsatAda = false;
  */
 function applyCpsatAvailability(ada) {
   cpsatAda = !!ada;
-  const opt = $('mode').querySelector('option[value="americano_cpsat"]');
-  if (!opt) return;
-  opt.hidden = !ada;
-  if (!ada && $('mode').value === 'americano_cpsat') {
+  MODE_SOLVER.forEach((mode) => {
+    const opt = $('mode').querySelector(`option[value="${mode}"]`);
+    if (opt) opt.hidden = !ada;
+  });
+  if (!ada && pakaiSolver($('mode').value)) {
     $('mode').value = 'americano';
     $('cpsat-block').style.display = 'none';
   }
@@ -1534,8 +1583,13 @@ function debugSnapshot() {
     // angka ini tidak bisa direproduksi.
     `seed=${payload.seed} effort=${payload.effort} `
       + `percobaan=${payload.attempts ?? 3} `
-      + (payload.mode === 'americano_cpsat'
-        ? `batas_solver=${payload.cpsat_seconds}s ` : '')
+      + (pakaiSolver(payload.mode)
+        ? `batas_solver=${payload.cpsat_seconds}s `
+          // Tanpa baris ini, dua laporan bug dari setup yang IDENTIK bisa
+          // memuat jadwal yang berbeda dan tidak ada yang bisa menjelaskan
+          // kenapa - solver menjalankan beberapa worker yang berlomba, jadi
+          // yang menang berbeda tiap kali kecuali sakelar ini menyala.
+          + `bisa_diulang=${payload.cpsat_deterministic} ` : '')
       + `selang_seling=${payload.interleave_segments}`,
     // Format yang diizinkan WAJIB ikut. Batasan ini menentukan siapa yang bisa
     // turun bareng, jadi ia mengubah kerataan main dan keunikan lawan sekaligus
@@ -1727,7 +1781,8 @@ function schedulingStamp() {
     // Batas waktu solver ikut, dan hanya berarti di mode CP-SAT. Di mode lain
     // ia diabaikan penjadwal, jadi memasukkannya tanpa syarat akan membuat
     // jadwal Americano dianggap basi cuma karena angka yang tidak dipakainya.
-    p.mode === 'americano_cpsat' ? p.cpsat_seconds : null,
+    pakaiSolver(p.mode) ? p.cpsat_seconds : null,
+    pakaiSolver(p.mode) ? p.cpsat_deterministic : null,
     p.segments, p.interleave_segments, p.players, p.allowed_matchups,
   ]);
 }
@@ -1899,11 +1954,13 @@ function applyRequest(req) {
     if (pas) $('effort').value = pas.value;
   }
   $('tier-row').style.display = req.mode === 'tiered' ? '' : 'none';
-  $('cpsat-block').style.display = req.mode === 'americano_cpsat' ? '' : 'none';
+  $('cpsat-block').style.display = pakaiSolver(req.mode) ? '' : 'none';
+  renderSolverPeran();
   renderCpsatRonde();
   // Acara lama tidak punya field ini; dipulihkan ke bawaan, bukan dibiarkan
   // mewarisi angka dari acara yang dibuka sebelumnya.
   $('cpsat_seconds').value = req.cpsat_seconds || 30;
+  $('cpsat_deterministic').checked = !!req.cpsat_deterministic;
   // Court berkurang. Acara lama tidak punya field ini, dan itu harus dipulihkan
   // sebagai "tidak dipakai" - bukan dibiarkan mewarisi centang dari acara yang
   // dibuka sebelumnya.

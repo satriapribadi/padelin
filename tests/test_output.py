@@ -9,6 +9,7 @@ import sys
 import tempfile
 import time
 import unittest
+from dataclasses import replace
 from pathlib import Path
 
 from padel_scheduler import (
@@ -1368,6 +1369,64 @@ class TestStorage(unittest.TestCase):
                 "SELECT COUNT(*) c FROM event_participants WHERE event_id=?",
                 (eid,)).fetchone()["c"]
             self.assertEqual(n, 8, "peserta terduplikasi saat update")
+
+
+class TestFooterReproduksi(unittest.TestCase):
+    """Cetakan kecil paling bawah laporan: apa yang dibutuhkan untuk merakit
+    ulang jadwal ini.
+
+    Footer ini ditambahkan setelah satu laporan yang sudah tersebar tidak bisa
+    dipulihkan dari mana pun. Yang diuji di sini adalah kegagalan versi
+    berikutnya: footer yang MENJANJIKAN reproduksi padahal modenya memakai
+    solver yang tidak deterministik. Janji yang salah lebih buruk daripada
+    tidak ada janji - host akan menyalin seed dari PDF, mendapat jadwal lain,
+    lalu mencari sebabnya di tempat yang keliru.
+
+    Jadwalnya dibuat sekali dengan mode Americano lalu config-nya ditukar:
+    yang diuji logika footer, bukan solvernya, jadi tidak ada gunanya menunggu
+    solver benar-benar jalan.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.sch = make_schedule(n=8, courts=2, refs=0, balls=0)
+
+    def _footer(self, **kw):
+        sch = replace(self.sch, config=replace(self.sch.config, **kw))
+        h = build_html(sch, title="Uji")
+        m = re.search(r"<span class='repro'>(.*?)</span>", h)
+        self.assertIsNotNone(m, "baris reproduksi hilang dari footer")
+        return m.group(1)
+
+    def test_mode_tanpa_solver_tidak_menyebut_solver(self):
+        teks = self._footer(mode="americano")
+        self.assertIn("effort", teks)
+        self.assertNotIn("batas solver", teks)
+        self.assertNotIn("deterministik", teks)
+
+    def test_mode_solver_memperingatkan_ulangan_bisa_beda(self):
+        for mode in ("americano_cpsat", "americano_solver"):
+            with self.subTest(mode=mode):
+                teks = self._footer(mode=mode, cpsat_deterministic=False)
+                self.assertIn("batas solver", teks)
+                self.assertIn("TIDAK deterministik", teks)
+
+    def test_sakelar_menyala_berjanji_bisa_diulang(self):
+        teks = self._footer(mode="americano_solver", cpsat_deterministic=True)
+        self.assertIn("hasil bisa diulang", teks)
+        self.assertNotIn("TIDAK deterministik", teks)
+
+    def test_mesin_dasar_tidak_mencatat_effort_dan_percobaan(self):
+        """Mode ini mengabaikan keduanya, jadi mencatatnya menyesatkan.
+
+        Pembaca yang mengulang akan menyalin dua angka yang tidak berpengaruh,
+        lalu menyimpulkan bahwa yang dicatat masih kurang saat hasilnya beda.
+        """
+        teks = self._footer(mode="americano_solver")
+        self.assertNotIn("effort", teks)
+        self.assertNotIn("percobaan", teks)
+        # Seed tetap ada: ia berpengaruh di mode ini, sebagai benih solver.
+        self.assertIn("seed", teks)
 
 
 if __name__ == "__main__":

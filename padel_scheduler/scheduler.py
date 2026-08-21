@@ -28,6 +28,7 @@ from .capacity import (
 )
 from .factorization import mixed_pair_rounds, subset_pair_rounds
 from .models import (
+    CPSAT_BASE_MODES,
     CPSAT_MODES,
     MATCHUP_LABELS,
     MATCHUPS,
@@ -1776,6 +1777,89 @@ def _catatan_cpsat(lapor, rep_pc: int, rep_oc: int) -> str:
     )
 
 
+def _catatan_dasar(lapor, capaian_solver: tuple[int, int],
+                   capaian_akhir: tuple[int, int]) -> str:
+    """Satu kalimat tentang jadwal yang disusun solver sebagai mesin dasar.
+
+    Bedanya dengan _catatan_cpsat bukan gaya bahasa. Di mode penyempurna,
+    pembanding solver adalah jadwal mesin biasa yang sudah matang, jadi "solver
+    tidak menemukan yang lebih baik" berarti kabar baik - jadwalnya sudah bagus.
+    Di sini pembandingnya cuma konstruksi awal, jadi kalimat yang sama berarti
+    kabar buruk: solver kehabisan waktu sebelum sampai ke mana-mana, dan yang
+    dipegang host adalah jadwal yang belum dioptimasi siapa pun. Menyamakan
+    keduanya berarti menyembunyikan satu-satunya keadaan yang benar-benar perlu
+    ditindak host.
+
+    Dua pasang angka, dan keduanya disebut kalau berbeda: apa yang dicapai
+    solver sendiri, dan apa yang akhirnya dipegang host setelah perapian.
+    Menyebut cuma yang pertama berarti angka di catatan tidak cocok dengan
+    angka di statistik; menyebut cuma yang kedua berarti sumbangan solver
+    dilaporkan lebih besar daripada yang sebenarnya.
+    """
+    if lapor.status in ("tidak jalan", "OR-Tools tidak terpasang"):
+        return ("Solver eksak tidak bisa dijalankan, jadi jadwal ini disusun "
+                "mesin biasa - sama persis dengan mode Americano.")
+
+    def sebut(capaian: tuple[int, int]) -> str:
+        return (f"{capaian[0]} pasang partner berulang dan {capaian[1]} pasang "
+                f"lawan berulang")
+
+    akhir = sebut(capaian_akhir)
+    # Perapian setelah solver memang bisa menolong, dan di setup besar ia
+    # menolong banyak - itu justru bukti bahwa solver dari nol belum sampai ke
+    # dasar ruang pencarian. Disebut apa adanya.
+    rapi = ""
+    if capaian_akhir != capaian_solver:
+        rapi = (f" Solver sendiri berhenti di {sebut(capaian_solver)}; sisanya "
+                f"hasil perapian (pemerataan main & giliran) sesudahnya.")
+
+    if not lapor.dipakai:
+        # Dua sebab yang sangat berbeda, dan menyatukannya membuat host menaikkan
+        # batas waktu untuk sesuatu yang tidak akan pernah tertolong waktu.
+        if lapor.terbukti_optimal:
+            return (
+                f"Solver sebagai mesin dasar: jadwalnya TIDAK dipakai. Solver "
+                f"membuktikan biaya modelnya optimal dalam {lapor.detik:.1f} "
+                f"detik, tapi jadwal itu kalah menurut ukuran yang dipakai "
+                f"aplikasi ini - yang menaruh partner berulang di atas lawan "
+                f"berulang, sementara model solver menimbang keduanya sebagai "
+                f"satu jumlah. Jadi yang dipertahankan jadwal konstruksi awal "
+                f"({akhir}). Menambah waktu tidak akan mengubahnya; mode "
+                f"'Americano' biasa yang paling menolong di setup ini."
+            )
+        return (
+            f"Solver sebagai mesin dasar: dalam {lapor.detik:.1f} detik solver "
+            f"TIDAK sampai melampaui konstruksi awal, jadi jadwal ini pada "
+            f"dasarnya belum dioptimasi solver ({akhir}). Setup sebesar ini di "
+            f"luar jangkauan solver tanpa titik awal - naikkan batas waktunya, "
+            f"atau pakai mode 'Americano + solver eksak' yang memakai annealing "
+            f"dulu lalu solver di ujungnya."
+        )
+
+    if lapor.terbukti_optimal:
+        return (
+            f"Solver sebagai mesin dasar: {akhir} - dan biaya modelnya TERBUKTI "
+            f"tidak bisa lebih kecil lagi, dibuktikan dalam {lapor.detik:.1f} "
+            f"detik dari nol, tanpa dibantu annealing sama sekali. Mengulang "
+            f"dengan seed lain atau menambah waktu tidak akan menurunkannya; "
+            f"yang tersisa cuma mengubah setupnya sendiri (jumlah court, ronde, "
+            f"atau peserta).{rapi}"
+        )
+
+    celah = ""
+    if lapor.objective and lapor.batas_bawah is not None and lapor.objective > 0:
+        sisa = 100.0 * (lapor.objective - lapor.batas_bawah) / lapor.objective
+        celah = (f" Jarak ke batas bawah yang sudah terbukti masih "
+                 f"{max(0.0, sisa):.0f}%.")
+    return (
+        f"Solver sebagai mesin dasar: {akhir}, disusun dari nol oleh solver "
+        f"dalam {lapor.detik:.1f} detik - tapi belum sempat MEMBUKTIKAN tidak "
+        f"ada yang lebih baik.{celah}{rapi} Naikkan batas waktunya kalau mau "
+        f"kepastiannya, dan bandingkan dengan mode Americano biasa: di setup "
+        f"besar annealing masih sering lebih rapi daripada solver dari nol."
+    )
+
+
 def _lebih_baik(a: Schedule, b: Schedule) -> bool:
     """Apakah jadwal a lebih layak dipakai daripada b?
 
@@ -1838,7 +1922,17 @@ def build_schedule(players: list[Player], config: Config,
     (mis. court kedua dilepas setelah dua jam). Kosong = config.courts untuk
     semua ronde, dan hasilnya identik dengan sebelum parameter ini ada.
     """
-    percobaan = max(1, config.attempts)
+    # Solver eksak sebagai mesin dasar tidak ikut multi-start, dan itu bukan
+    # penghematan malas. Multi-start ada untuk annealing, yang berhenti di
+    # optimum lokal berbeda-beda tergantung lintasan acaknya; CP-SAT tidak punya
+    # lintasan acak yang bisa diadu - dengan model dan batas waktu yang sama ia
+    # menempuh pencarian yang sama. Yang berbeda antar percobaan cuma konstruksi
+    # awalnya, dan di mode ini konstruksi awal bahkan tidak dipakai sebagai hint.
+    # Jadi tiga percobaan berarti membayar tiga kali batas waktu solver untuk
+    # jadwal yang sama, dan anggaran yang sama jauh lebih berguna diberikan
+    # SELURUHNYA ke satu pencarian - lihat cpsat_seconds.
+    dasar = config.mode in CPSAT_BASE_MODES
+    percobaan = 1 if dasar else max(1, config.attempts)
     # Dulu percobaan dipangkas jadi satu begitu pengulangan lawan wajib
     # terjadi, karena tiap percobaan berhenti di sekitar batas bawah yang sama
     # dan bedanya tinggal derau - diukur: 60 orang / 15 court / 20 ronde tetap
@@ -1883,8 +1977,13 @@ def build_schedule(players: list[Player], config: Config,
     # Mode CP-SAT menambahkan satu putaran lagi setelah semuanya selesai, jadi
     # kalau percobaan tetap memakai seluruh batang, batangnya penuh lalu mundur
     # ke nol - dan host membaca itu sebagai jadwalnya diulang dari awal.
-    perlu_putaran_akhir = (config.mode in CPSAT_MODES
-                           or config.lns_seconds > 0)
+    #
+    # Mode solver-sebagai-dasar tidak butuh putaran itu: percobaannya cuma satu,
+    # jadi pemenangnya sudah pasti sejak awal dan solver bisa langsung jalan di
+    # dalamnya. Mengulang di sini berarti menjalankan solver dua kali.
+    perlu_putaran_akhir = (not dasar
+                           and (config.mode in CPSAT_MODES
+                                or config.lns_seconds > 0))
     bagian = 0.5 if perlu_putaran_akhir else 1.0
     # Berapa ronde yang dibutuhkan supaya semua peserta kebagian match pertama,
     # kalau tiap slot dipakai untuk orang yang berbeda. Dipakai sebagai syarat
@@ -1927,7 +2026,9 @@ def build_schedule(players: list[Player], config: Config,
         # daripada salah satu strategi sendirian.
         kuota_mustahil = k % 2 == 1
         sch = _build_once(players, cfg, teruskan if progress else None,
-                          courts_per_round, kuota_mustahil=kuota_mustahil)
+                          courts_per_round, kuota_mustahil=kuota_mustahil,
+                          cpsat_dasar=dasar,
+                          pakai_lns=dasar and config.lns_seconds > 0)
         if terbaik is None or _lebih_baik(sch, terbaik):
             terbaik, cfg_terbaik = sch, cfg
             kuota_terbaik = kuota_mustahil
@@ -1986,13 +2087,19 @@ def _build_once(players: list[Player], config: Config,
                 courts_per_round: list[int] | None = None,
                 pakai_cpsat: bool = False,
                 kuota_mustahil: bool = False,
-                pakai_lns: bool = False) -> Schedule:
+                pakai_lns: bool = False,
+                cpsat_dasar: bool = False) -> Schedule:
     """Satu kali penjadwalan utuh, dari validasi sampai jadwal jadi.
 
     `pakai_cpsat` memasang solver eksak di ujung rangkaian. Dipisah dari
     config.mode karena build_schedule menjalankan beberapa percobaan lalu
     menyalakan solver hanya untuk yang menang - jadi mode-nya sama sepanjang
     percobaan, sakelarnya yang berbeda.
+
+    `cpsat_dasar` menukar MESINNYA: annealing tidak dijalankan sama sekali dan
+    jadwalnya disusun solver eksak dari konstruksi awal, tanpa hint. Keduanya
+    tidak pernah menyala bersama - yang satu memakai solver untuk memungut sisa
+    perbaikan annealing, yang lain memakai solver sebagai gantinya.
     """
     def say(frac, msg):
         if progress is not None:
@@ -2325,12 +2432,98 @@ def _build_once(players: list[Player], config: Config,
                 f"ronde tiap babak tersebar sepanjang acara."
             )
 
+    # Penilai yang dipakai solver untuk memutuskan apakah hasilnya layak dipakai.
+    # Sengaja kunci yang sama persis dengan _lebih_baik(), yang memilih di antara
+    # percobaan: kalau dua tempat itu memakai ukuran yang berbeda, solver bisa
+    # menyerahkan jadwal yang menurut ukurannya sendiri menang tapi menurut host
+    # kalah. Dipakai bersama oleh penyempurnaan jendela, solver seutuh-jadwal,
+    # dan penjaga perapian di mode solver-sebagai-dasar.
+    def nilai(state):
+        s = _build_stats(state, local_players, total_rounds)
+        return (s.partner_repeat_pairs, s.opponent_repeat_pairs,
+                -s.quality_score)
+
     # --- Optimasi --------------------------------------------------------
-    say(0.10, f"Mengoptimasi {total_rounds} ronde")
-    anneal(
-        st, max(1000, config.effort), rng,
-        progress=(lambda f, m: say(0.10 + f * 0.72, m)) if progress else None,
-    )
+    # Dua mesin, dan hanya satu yang jalan.
+    #
+    # Solver eksak sebagai mesin dasar hanya bisa dipakai kalau OR-Tools memang
+    # terpasang. Kalau tidak, yang tersisa dari jalur ini cuma konstruksi awal -
+    # jadwal yang belum dioptimasi siapa pun - dan menyerahkan itu ke host jauh
+    # lebih buruk daripada diam-diam memakai annealing. Jadi mundurnya ke
+    # annealing, dan alasannya dicatat.
+    solver_dasar = cpsat_dasar and cpsat.tersedia()
+    if cpsat_dasar and not solver_dasar:
+        notes.append(
+            "Mode solver eksak sebagai mesin dasar butuh OR-Tools, dan paket itu "
+            "tidak ada di Python yang menjalankan aplikasi ini. Jadwal ini "
+            "disusun dengan mesin biasa (annealing) - sama seperti mode "
+            "Americano."
+        )
+
+    if solver_dasar:
+        # --- Solver eksak sebagai mesin dasar ----------------------------
+        # Ini kebalikan dari mode "americano_cpsat": di sana annealing yang
+        # menyusun jadwal dan solver memungut sisanya; di sini solver yang
+        # menyusun, dan annealing tidak dijalankan sama sekali.
+        #
+        # PERINGATAN YANG SUDAH DIUKUR, supaya tidak salah diharapkan. Pada 26
+        # orang / 4 court, annealing sampai di NOL lawan berulang dalam 7 detik
+        # sementara solver dari nol masih di 13 pasang setelah 20 detik.
+        # Sebabnya bukan modelnya salah, melainkan bentuk masalahnya:
+        # penjadwalan ini sangat simetris dan ruang solusinya raksasa, dan di
+        # medan seperti itu pencarian lokal mengungguli cabang-dan-batas dengan
+        # selisih yang jauh. Model utuh juga mulai kehabisan tenaga di 12 ronde
+        # ke atas.
+        #
+        # Yang dibeli mode ini bukan mutu, melainkan ASAL-USUL jadwalnya: yang
+        # dipegang host benar-benar keluar dari solver, dan di setup kecil
+        # (sampai sekitar 12-16 peserta / 8-10 ronde) solver bisa MEMBUKTIKAN
+        # jadwalnya optimal tanpa dibantu titik awal siapa pun - klaim yang tidak
+        # bisa diberikan mesin lain, dan tidak tercampur pertanyaan "seberapa
+        # banyak sebenarnya sumbangan annealing".
+        #
+        # Konstruksi awal tetap dipakai untuk dua hal, dan cuma dua: menentukan
+        # berapa court yang realistis terisi tiap ronde (model membacanya dari
+        # st.matches), dan menjadi jaring kalau solver gagal. Sebagai titik awal
+        # pencarian ia sengaja TIDAK dipakai - itulah arti dasar=True.
+        say(0.10, f"Menyusun {total_rounds} ronde dengan solver eksak (CP-SAT)")
+        lapor_dasar = cpsat.optimize(
+            st, courts_r,
+            time_limit=config.cpsat_seconds,
+            workers=config.cpsat_workers,
+            nilai=nilai,
+            progress=(lambda f, m: say(0.10 + f * 0.72, m)) if progress else None,
+            dasar=True,
+            deterministic=config.cpsat_deterministic,
+            seed=config.seed,
+        )
+        notes.extend(lapor_dasar.catatan)
+        # Angka capaian solver dicatat DI SINI, sebelum perapian menyentuhnya.
+        # Catatannya sendiri ditulis setelah perapian selesai, supaya angka yang
+        # dibaca host adalah angka jadwal yang benar-benar ia pegang - lihat
+        # _catatan_dasar, yang menyebut keduanya kalau berbeda.
+        capaian_solver = (st.rep_pc, st.rep_oc)
+    else:
+        lapor_dasar = None
+        capaian_solver = (0, 0)
+        say(0.10, f"Mengoptimasi {total_rounds} ronde")
+        anneal(
+            st, max(1000, config.effort), rng,
+            progress=(lambda f, m: say(0.10 + f * 0.72, m)) if progress else None,
+        )
+
+    # Perapian di bawah ini dirancang untuk membereskan sisa-sisa annealing, dan
+    # jadwal solver bukan itu: pemerataan main dan penyapu pertemuan berulang
+    # bisa MENGURAI jadwal yang sudah optimal menurut modelnya sendiri. Karena
+    # itu di jalur solver seluruh rangkaian perapian diberi jaring - dijalankan
+    # apa adanya, lalu hasilnya dibandingkan dengan ukuran yang sama yang dipakai
+    # memilih jadwal di tempat lain, dan kalau ternyata lebih buruk jadwal solver
+    # yang dikembalikan.
+    #
+    # Dijalankan, bukan dilewati, karena yang dibereskannya nyata: giliran main
+    # (siapa menunggu berapa lama) tidak ada di dalam model solver sama sekali.
+    titik_solver = st.snapshot() if solver_dasar else None
+    nilai_solver = nilai(st) if solver_dasar else None
     # Kerataan jumlah main tidak boleh bergantung pada keberuntungan annealing:
     # ini menegakkannya secara deterministik setelahnya.
     say(0.84, "Meratakan jumlah main")
@@ -2425,6 +2618,20 @@ def _build_once(players: list[Player], config: Config,
         anneal_giliran(st, anggaran_giliran, rng)
         ratakan_giliran(st)
 
+    # Jaring untuk jalur solver-sebagai-dasar: kalau perapian di atas ternyata
+    # merugikan, jadwal solver yang dikembalikan. Tanpa ini janji "yang Anda
+    # pegang adalah jadwal solver" bisa dilanggar oleh tahap yang justru
+    # dimaksudkan menolong.
+    if titik_solver is not None and nilai(st) > nilai_solver:
+        st.restore(titik_solver)
+        notes.append(
+            "Perapian setelah solver (pemerataan main & giliran) ternyata "
+            "menurunkan mutu jadwal, jadi hasil solver yang dipakai apa adanya."
+        )
+    if lapor_dasar is not None:
+        notes.append(_catatan_dasar(lapor_dasar, capaian_solver,
+                                    (st.rep_pc, st.rep_oc)))
+
     # --- Solver eksak (mode CP-SAT saja) ---------------------------------
     # Dijalankan PALING AKHIR, dengan jadwal hasil seluruh tahap di atas sebagai
     # titik awal. Urutan ini bukan selera - ia diukur.
@@ -2441,16 +2648,6 @@ def _build_once(players: list[Player], config: Config,
     # butuh titik awal yang sudah bagus: memungut perbaikan terakhir yang tidak
     # terjangkau gerakan acak, dan - ini yang tidak bisa dilakukan mesin mana
     # pun selain dia - MEMBUKTIKAN bahwa tidak ada lagi yang tersisa.
-    # Penilai yang dipakai solver untuk memutuskan apakah hasilnya layak dipakai.
-    # Sengaja kunci yang sama persis dengan _lebih_baik(), yang memilih di antara
-    # percobaan: kalau dua tempat itu memakai ukuran yang berbeda, solver bisa
-    # menyerahkan jadwal yang menurut ukurannya sendiri menang tapi menurut host
-    # kalah. Dipakai bersama oleh penyempurnaan jendela dan solver seutuh-jadwal.
-    def nilai(state):
-        s = _build_stats(state, local_players, total_rounds)
-        return (s.partner_repeat_pairs, s.opponent_repeat_pairs,
-                -s.quality_score)
-
     # --- Penyempurnaan jendela (tombol "Sempurnakan jadwal ini") ----------
     # Dijalankan SEBELUM solver seutuh-jadwal, kalau dua-duanya diminta: yang
     # ini bekerja cepat di submasalah kecil, dan hasilnya jadi titik awal yang
@@ -2462,6 +2659,8 @@ def _build_once(players: list[Player], config: Config,
             anggaran=config.lns_seconds,
             workers=config.cpsat_workers,
             nilai=nilai,
+            deterministic=config.cpsat_deterministic,
+            seed=config.seed,
             progress=(lambda f, m: say(0.95 + f * 0.03, m)) if progress else None,
         )
         notes.extend(hasil_lns.catatan)
@@ -2475,6 +2674,8 @@ def _build_once(players: list[Player], config: Config,
             workers=config.cpsat_workers,
             nilai=nilai,
             progress=(lambda f, m: say(0.95 + f * 0.03, m)) if progress else None,
+            deterministic=config.cpsat_deterministic,
+            seed=config.seed,
         )
         notes.extend(lapor.catatan)
         notes.append(_catatan_cpsat(lapor, st.rep_pc, st.rep_oc))
@@ -2688,6 +2889,10 @@ def _build_once(players: list[Player], config: Config,
         courts_from_round=aturan_court[1],
         cpsat_seconds=config.cpsat_seconds,
         cpsat_workers=config.cpsat_workers,
+        # Ikut dibawa karena footer laporan cetak memakainya untuk memutuskan
+        # apakah jadwal ini bisa dibuat ulang dari seed - dan itu satu-satunya
+        # petunjuk yang dipegang pembaca laporan berbulan-bulan kemudian.
+        cpsat_deterministic=config.cpsat_deterministic,
         # Ikut dibawa supaya jadwal ini tahu ia sudah lewat penyempurnaan.
         # Laporan cetak mencantumkannya di cetakan kecil - penyempurnaan
         # dibatasi WAKTU, jadi ia satu-satunya bagian yang bisa berhenti di

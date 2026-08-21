@@ -1016,6 +1016,28 @@ def main() -> int:
             assert "batas_solver=45s" in eksak["teks"], \
                 "batas waktu solver tidak ikut terkirim ke server"
 
+            # Mode kedua yang memakai solver: mesin dasar. Kotak batas waktu
+            # yang dipakainya SAMA, jadi kalau pemeriksaan mode di app.js
+            # ditulis per-nama alih-alih lewat daftar, mode inilah yang lupa -
+            # dan gejalanya cuma "kotaknya tidak muncul", tanpa error apa pun.
+            dasar = json.loads(debug_untuk("americano_solver", 20))
+            assert dasar["blok"] == "", (
+                "kolom batas waktu tidak muncul di mode solver-sebagai-dasar")
+            assert "batas_solver=20s" in dasar["teks"], (
+                "batas waktu solver tidak terkirim di mode solver-sebagai-dasar")
+
+            # Sakelar "hasil bisa diulang". Yang diuji bukan determinismenya
+            # (itu milik tes unit) melainkan bahwa centangnya benar-benar sampai
+            # ke server: kalau ia berhenti di browser, host mengira jadwalnya
+            # bisa dipanggil ulang padahal tidak, dan tidak ada yang gagal.
+            b.js("""document.getElementById('cpsat_deterministic')
+                    .checked = true; true""")
+            ulang = json.loads(debug_untuk("americano_solver", 20))
+            assert "bisa_diulang=true" in ulang["teks"], (
+                "sakelar 'hasil bisa diulang' tidak terkirim ke server")
+            b.js("""document.getElementById('cpsat_deterministic')
+                    .checked = false; true""")
+
             biasa = json.loads(debug_untuk("americano"))
             assert biasa["blok"] == "none", "kolom batas waktu tidak ikut sembunyi"
             # Batas waktu solver tidak berarti apa-apa di mode lain, jadi ia juga
@@ -1023,7 +1045,8 @@ def main() -> int:
             # tidak dipakai membuat orang mengejar sebab yang salah.
             assert "batas_solver" not in biasa["teks"], \
                 "batas solver ikut dilaporkan padahal modenya tidak memakainya"
-            return "blok muncul/hilang, batas 45s terkirim, Americano bersih"
+            return ("blok muncul/hilang, batas 45s & 20s terkirim di dua mode "
+                    "solver, sakelar bisa-diulang terkirim, Americano bersih")
         check("Mode CP-SAT: sakelar & batas waktu", cpsat_toggle)
 
         # --- 12d. tombol Buka laporan membawa jadwal yang tampil ----------

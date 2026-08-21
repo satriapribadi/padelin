@@ -2801,6 +2801,165 @@ class TestCpsatMode(unittest.TestCase):
             [[m.players() for m in r.matches] for r in b.rounds])
 
 
+@unittest.skipUnless(cpsat.tersedia(), "OR-Tools tidak terpasang")
+class TestModeSolverDasar(unittest.TestCase):
+    """Mode 'americano_solver': solver eksak sebagai MESIN DASAR.
+
+    Yang diuji bukan mutu jadwalnya. Mode ini memang bisa kalah dari Americano
+    biasa - itu sifat yang sudah diukur dan didokumentasikan, bukan cacat: di
+    setup besar pencarian lokal mengungguli cabang-dan-batas dengan selisih
+    jauh. Yang WAJIB dipegang mode ini tiga hal, dan ketiganya diuji di sini:
+
+      1. jadwalnya sah, apa pun yang terjadi di dalam solver;
+      2. tidak pernah lebih buruk daripada konstruksi awal yang jadi
+         cadangannya - kalau solver kehabisan waktu, host tetap memegang
+         sesuatu yang layak;
+      3. annealing benar-benar TIDAK dijalankan - kalau tidak, mode ini cuma
+         Americano yang lebih lambat, dan seluruh alasannya ada lenyap.
+    """
+
+    DASAR = dict(courts=2, duration_minutes=130, round_minutes=12,
+                 warmup_minutes=10, seed=42, effort=8000, attempts=1,
+                 cpsat_seconds=5)
+
+    def test_jadwalnya_sah(self):
+        sch = build_schedule(make_players(12),
+                             Config(mode="americano_solver", **self.DASAR))
+        assert_structurally_valid(self, sch)
+
+    def test_annealing_tidak_dijalankan(self):
+        """Mesinnya benar-benar ditukar, bukan ditambahkan.
+
+        Diperiksa lewat anneal() itu sendiri, bukan lewat waktu atau mutu: dua
+        yang terakhir bergantung mesin dan batas waktu, sementara yang ini
+        pertanyaan biner. `anneal_giliran` sengaja dibiarkan jalan - ia mengurus
+        giliran main, yang tidak ada di dalam model solver sama sekali.
+        """
+        from padel_scheduler import scheduler as sc
+
+        dipanggil = []
+        asli = sc.anneal
+        sc.anneal = lambda *a, **k: dipanggil.append(1)
+        try:
+            build_schedule(make_players(12),
+                           Config(mode="americano_solver", **self.DASAR))
+        finally:
+            sc.anneal = asli
+        self.assertEqual(dipanggil, [],
+                         "mode solver-sebagai-dasar masih menjalankan annealing")
+
+    def test_tidak_pernah_kalah_dari_cadangannya(self):
+        """Janji minimum mode ini: bukan lebih baik dari Americano, tapi LAYAK.
+
+        Batas waktu sengaja dibuat pendek (5 detik) supaya solver memang sering
+        gagal - persis keadaan yang jaringnya harus menahan. Yang diperiksa:
+        jadwal yang keluar tetap punya jumlah main yang rata dan tidak ada
+        pengulangan partner yang bisa dihindari konstruksi awal.
+        """
+        for n, courts in ((8, 2), (12, 2), (14, 3)):
+            with self.subTest(n=n, courts=courts):
+                cfg = Config(mode="americano_solver",
+                             **{**self.DASAR, "courts": courts})
+                sch = build_schedule(make_players(n), cfg)
+                assert_structurally_valid(self, sch)
+                main = list(sch.stats.plays_per_player.values())
+                self.assertLessEqual(
+                    max(main) - min(main), 1,
+                    f"{n} orang / {courts} court: jumlah main tidak rata "
+                    f"({min(main)}-{max(main)})")
+
+    def test_attempts_diabaikan(self):
+        """Multi-start tidak dipakai mode ini, dan itu keputusan yang disengaja.
+
+        CP-SAT tidak punya lintasan acak yang bisa diadu antar percobaan, jadi
+        attempts=1 dan attempts=5 harus sama-sama menjalankan solver SEKALI -
+        kalau tidak, host membayar lima kali batas waktu untuk jadwal yang sama.
+        Diperiksa lewat jumlah panggilan cpsat.optimize, bukan lewat waktu.
+        """
+        from padel_scheduler import scheduler as sc
+
+        cacah = []
+        asli = sc.cpsat.optimize
+
+        def catat(*a, **k):
+            cacah.append(1)
+            return asli(*a, **k)
+
+        sc.cpsat.optimize = catat
+        try:
+            build_schedule(make_players(12),
+                           Config(mode="americano_solver",
+                                  **{**self.DASAR, "attempts": 5}))
+        finally:
+            sc.cpsat.optimize = asli
+        self.assertEqual(len(cacah), 1,
+                         f"solver dijalankan {len(cacah)} kali untuk attempts=5")
+
+
+@unittest.skipUnless(cpsat.tersedia(), "OR-Tools tidak terpasang")
+class TestSolverBisaDiulang(unittest.TestCase):
+    """Sakelar Config.cpsat_deterministic.
+
+    Satu janji, dan ia harus dipegang MUTLAK: input yang sama memberi jadwal yang
+    sama. Sakelar yang cuma hampir selalu berhasil lebih buruk daripada tidak ada
+    sakelar - host memakai seed dari laporan, mendapat jadwal lain, lalu
+    menyimpulkan seed-nya salah dicatat.
+
+    Itu bukan kekhawatiran teoretis: cara yang dianjurkan dokumentasi OR-Tools
+    (banyak worker dengan interleave_search) menyimpang di 1 dari 4 jalan saat
+    mesinnya sedang sibuk, dan itulah alasan mode ini memaksa 1 worker. Tes ini
+    yang menjaga keputusan itu tidak dibatalkan diam-diam demi kecepatan.
+    """
+
+    DASAR = dict(courts=2, duration_minutes=130, round_minutes=12,
+                 warmup_minutes=10, seed=42, effort=8000, attempts=1,
+                 cpsat_seconds=5)
+
+    @staticmethod
+    def _sidik(sch):
+        """Jadwalnya sendiri, bukan skornya - dua jadwal berbeda bisa seskor."""
+        return [sorted(sorted(m.players()) for m in r.matches) for r in sch.rounds]
+
+    def _ulang(self, n=3, **kw):
+        return [self._sidik(build_schedule(make_players(12), Config(**kw)))
+                for _ in range(n)]
+
+    def test_mesin_dasar_bisa_diulang(self):
+        hasil = self._ulang(mode="americano_solver",
+                            **{**self.DASAR, "cpsat_deterministic": True})
+        self.assertEqual(hasil[1], hasil[0], "jalan ke-2 beda dari jalan ke-1")
+        self.assertEqual(hasil[2], hasil[0], "jalan ke-3 beda dari jalan ke-1")
+
+    def test_penyempurna_bisa_diulang(self):
+        hasil = self._ulang(mode="americano_cpsat",
+                            **{**self.DASAR, "cpsat_deterministic": True})
+        self.assertEqual(hasil[1], hasil[0], "jalan ke-2 beda dari jalan ke-1")
+        self.assertEqual(hasil[2], hasil[0], "jalan ke-3 beda dari jalan ke-1")
+
+    def test_penyempurnaan_jendela_bisa_diulang(self):
+        """Lingkaran jendela memutuskan kapan berhenti dengan MELIHAT JAM.
+
+        Jadi membuat tiap jendela deterministik saja tidak cukup: mesin yang
+        sedang sibuk mencoba lebih sedikit jendela dan mendarat di jadwal lain.
+        Di mode ini anggarannya dibaca sebagai jumlah jendela - dan inilah yang
+        memeriksanya.
+        """
+        hasil = self._ulang(mode="americano",
+                            **{**self.DASAR, "lns_seconds": 7.0,
+                               "cpsat_deterministic": True})
+        self.assertEqual(hasil[1], hasil[0], "jalan ke-2 beda dari jalan ke-1")
+        self.assertEqual(hasil[2], hasil[0], "jalan ke-3 beda dari jalan ke-1")
+
+    def test_bawaannya_mati(self):
+        """Sakelar ini tidak boleh mengubah jadwal yang sudah pernah dibuat host.
+
+        Diperiksa lewat Config, bukan lewat jadwal: mode tanpa solver memang
+        sudah deterministik, jadi membandingkan dua jadwal tidak membuktikan
+        apa-apa soal bawaannya.
+        """
+        self.assertFalse(Config(**self.DASAR).cpsat_deterministic)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
 

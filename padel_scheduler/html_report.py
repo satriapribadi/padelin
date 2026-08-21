@@ -15,7 +15,7 @@ from __future__ import annotations
 import html
 import math
 
-from .models import Schedule
+from .models import CPSAT_BASE_MODES, CPSAT_MODES, Schedule
 from .report import batas_keunikan, format_date_id
 
 PREF_LABELS = {
@@ -34,6 +34,11 @@ MODE_LABELS = {
     "tiered": "Pool berdasarkan rating",
     "mexicano": "Mexicano (seimbang rating)",
     "team": "Pasangan tetap",
+    # Dua mode yang memakai solver eksak. Namanya menyebut PERAN solver, bukan
+    # cuma "CP-SAT": itu yang membedakan jadwal yang keluar, dan laporan cetak
+    # adalah satu-satunya tempat host melihatnya lagi berbulan-bulan kemudian.
+    "americano_cpsat": "Americano + solver eksak (CP-SAT)",
+    "americano_solver": "Solver eksak sebagai mesin dasar (CP-SAT)",
 }
 
 CSS = """
@@ -906,16 +911,48 @@ def build_html(
     repro = [
         MODE_LABELS.get(cfg.mode, cfg.mode),
         f"variasi (seed) {cfg.seed}",
-        f"effort {_ribu(cfg.effort)}",
-        f"{cfg.attempts} percobaan",
     ]
+    # effort dan percobaan hanya dicantumkan kalau mode ini benar-benar
+    # memakainya. Mode "solver sebagai mesin dasar" mengabaikan keduanya -
+    # annealing tidak dijalankan, dan percobaannya selalu satu - jadi
+    # mencantumkannya di sini bukan cuma sia-sia melainkan MENYESATKAN: pembaca
+    # yang mengulang akan menyalin dua angka yang tidak berpengaruh, lalu
+    # menyimpulkan bahwa yang dicatat masih kurang.
+    if cfg.mode not in CPSAT_BASE_MODES:
+        repro.append(f"effort {_ribu(cfg.effort)}")
+        repro.append(f"{cfg.attempts} percobaan")
+
+    # Batas waktu solver ikut kalau modenya memakai solver, dengan alasan yang
+    # sama: tanpa angka ini, dua laporan dari setup yang identik bisa berbeda
+    # dan tidak ada yang menjelaskan kenapa.
+    pakai_solver = cfg.mode in CPSAT_MODES or cfg.mode in CPSAT_BASE_MODES
+    if pakai_solver:
+        repro.append(f"batas solver {_angka(cfg.cpsat_seconds)}s")
+
+    # Bagian yang menentukan apakah laporan ini bisa dirakit ulang sama sekali,
+    # dan sebelumnya tidak pernah disebut.
+    #
+    # Solver eksak normalnya menjalankan beberapa worker yang BERLOMBA dengan
+    # batas waktu jam-dinding: yang menang berbeda-beda, jadi seed saja tidak
+    # cukup untuk memulihkan jadwal ini. Diamnya soal itu adalah janji yang
+    # diam-diam batal - persis kegagalan yang membuat catatan reproduksi ini
+    # ditambahkan: satu laporan sudah tersebar dan tidak bisa dipulihkan dari
+    # mana pun. Sakelar "hasil bisa diulang" menutupnya, dan kalau host
+    # menyalakannya itu juga harus tercatat, karena mengulang tanpa sakelar itu
+    # akan memberi jadwal lain.
+    if pakai_solver:
+        repro.append("hasil bisa diulang" if cfg.cpsat_deterministic
+                     else "solver TIDAK deterministik - ulangan bisa beda jadwal")
+
     # Penyempurnaan dibatasi WAKTU, bukan iterasi, jadi ia satu-satunya bagian
-    # yang bisa berhenti di titik berbeda pada komputer yang berbeda. Disebut
-    # apa adanya supaya host tahu kenapa hasil ulangannya kadang tidak persis
-    # sama walau seed-nya benar.
+    # yang bisa berhenti di titik berbeda pada komputer yang berbeda - kecuali
+    # kalau sakelar "hasil bisa diulang" menyala, yang menggantikan batas waktu
+    # itu dengan jumlah jendela yang tetap.
     if cfg.lns_seconds:
-        repro.append(f"penyempurnaan {_angka(cfg.lns_seconds)}s "
-                     f"(hasil ulangan bisa sedikit beda)")
+        repro.append(
+            f"penyempurnaan {_angka(cfg.lns_seconds)}s"
+            + ("" if cfg.cpsat_deterministic else " (hasil ulangan bisa sedikit beda)")
+        )
 
     parts.append(
         f"<div class='foot'><span>{_e(title)}</span>"
