@@ -16,6 +16,7 @@
 const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
 const { spawn } = require('child_process');
 const { periksaPembaruan, laporkanPemasanganTertunda } = require('./updater');
+const konten = require('./konten');
 // Di-require di baris atas dengan sengaja: cetak.js mendaftarkan skema
 // pratinjaunya saat dimuat, dan itu harus terjadi sebelum app siap.
 const cetak = require('./cetak');
@@ -117,6 +118,19 @@ function pythonAppRoot() {
   return kandidat.find((p) => fs.existsSync(path.join(p, 'run.py'))) || kandidat[0];
 }
 
+/** Akar yang BENAR-BENAR dipakai: paket konten hasil unduhan kalau ada, kalau
+ *  tidak ya bawaan paket.
+ *
+ * Satu-satunya titik yang perlu diubah supaya pembaruan bisa lewat tanpa
+ * installer - run.py menghitung web/ dari letak berkasnya sendiri dan
+ * padel_scheduler diimpor dari folder yang sama, jadi menggeser akar ini
+ * sekaligus menggeser antarmuka, mesin jadwal, dan server. Lihat
+ * electron/konten.js untuk alasan lengkapnya.
+ */
+function akarAplikasi() {
+  return konten.akarKonten() || pythonAppRoot();
+}
+
 /** Python mana yang dipakai, berurutan dari yang paling pasti.
  *
  * Padelin tidak memakai satu pun paket pihak ketiga - seluruhnya pustaka
@@ -191,12 +205,17 @@ function waitForServer(port, timeoutMs = 25000) {
   });
 }
 
+// Diisi hanya selama server sedang dinyalakan. Selama itu, matinya proses
+// Python adalah kegagalan menyalakan yang bisa dicoba lagi - bukan alasan
+// menutup aplikasi.
+let tolakMulai = null;
+
 async function startServer() {
   serverPort = await freePort();
   const { cmd, args } = pythonCommand();
   // -u: keluaran tidak di-buffer, jadi log server terbaca saat kejadian, bukan
   // menumpuk lalu muncul sekaligus ketika prosesnya mati.
-  const appRoot = pythonAppRoot();
+  const appRoot = akarAplikasi();
   const argv = [...args, '-u', path.join(appRoot, 'run.py'),
     '--port', String(serverPort), '--host', '127.0.0.1', '--no-browser'];
 
@@ -216,11 +235,28 @@ async function startServer() {
   serverProc.on('exit', (code, signal) => {
     // Keluar wajar saat aplikasi ditutup tidak perlu dilaporkan.
     if (app.isQuitting || signal === 'SIGTERM') return;
-    fatal('Server berhenti mendadak',
-      `Kode keluar: ${code}\n\n${serverLog.slice(-12).join('\n')}`);
+    const pesan = `Kode keluar: ${code}\n\n${serverLog.slice(-12).join('\n')}`;
+    // Mati SEBELUM sempat menjawab sekali pun bukan "berhenti mendadak" - itu
+    // gagal menyala, dan yang berhak memutuskan apa artinya adalah pemanggil:
+    // ia mungkin mau mencoba lagi tanpa paket konten unduhan. Dulu baris ini
+    // langsung menutup aplikasi, sehingga satu paket konten yang servernya mati
+    // membuat Padelin gagal dibuka selamanya - jalur mundurnya tidak pernah
+    // kebagian giliran.
+    if (tolakMulai) {
+      tolakMulai(new Error(`Server berhenti saat dinyalakan.\n\n${pesan}`));
+      return;
+    }
+    fatal('Server berhenti mendadak', pesan);
   });
 
-  await waitForServer(serverPort);
+  try {
+    await new Promise((resolve, reject) => {
+      tolakMulai = reject;
+      waitForServer(serverPort).then(resolve, reject);
+    });
+  } finally {
+    tolakMulai = null;
+  }
 }
 
 function stopServer() {
@@ -373,7 +409,10 @@ function buatMenu() {
       submenu: [
         {
           label: 'Periksa pembaruan',
-          click: () => periksaPembaruan({ diam: false }),
+          click: () => {
+            periksaPembaruan({ diam: false });
+            konten.periksaKonten({ diam: false });
+          },
         },
         {
           label: 'Buka folder data',
@@ -381,7 +420,12 @@ function buatMenu() {
         },
         { type: 'separator' },
         {
-          label: `Versi ${app.getVersion()}`,
+          // Dua angka kalau isinya lebih baru dari kerangkanya. Tanpa itu host
+          // yang sudah menerima pembaruan konten tetap melihat versi lama di
+          // menu, dan menyimpulkan pembaruannya tidak masuk.
+          label: konten.versiKonten()
+            ? `Versi ${konten.versiKonten()} (kerangka ${app.getVersion()})`
+            : `Versi ${app.getVersion()}`,
           enabled: false,
         },
       ],
@@ -408,8 +452,30 @@ if (!app.requestSingleInstanceLock()) {
     try {
       await startServer();
     } catch (err) {
-      fatal('Padelin gagal dijalankan', err.message);
-      return;
+      // Paket konten yang rusak tidak boleh membuat aplikasi gagal dibuka
+      // SELAMANYA. Bedanya dengan kerusakan biasa tidak terlihat oleh siapa
+      // pun - berkas bawaan di dalam paket baik-baik saja - jadi satu-satunya
+      // yang bisa mengenalinya adalah percobaan kedua tanpa konten itu.
+      const dibatalkan = konten.akarKonten() ? konten.tandaiRusak(err.message) : null;
+      if (!dibatalkan) {
+        fatal('Padelin gagal dijalankan', err.message);
+        return;
+      }
+      stopServer();
+      try {
+        await startServer();
+      } catch (err2) {
+        fatal('Padelin gagal dijalankan', err2.message);
+        return;
+      }
+      dialog.showMessageBox({
+        type: 'warning',
+        title: 'Pembaruan dibatalkan',
+        message: `Pembaruan ${dibatalkan} tidak bisa dijalankan, jadi Padelin `
+          + 'kembali ke versi bawaannya.',
+        detail: 'Tidak ada data yang hilang - yang diganti hanya berkas program.'
+          + `\n\nRincian tercatat di:\n${konten.berkasLog()}`,
+      });
     }
     createWindow();
 
@@ -422,6 +488,10 @@ if (!app.requestSingleInstanceLock()) {
       // installer yang sama dan menawarkannya lagi seolah tidak ada apa-apa.
       laporkanPemasanganTertunda();
       periksaPembaruan({ diam: true });
+      // Jalur kedua, dan jalur yang benar-benar sampai di mesin yang
+      // installer-nya diblokir Smart App Control: isi aplikasi diperbarui
+      // tanpa menjalankan apa pun yang baru.
+      konten.periksaKonten({ diam: true });
     }, 4000);
 
     app.on('activate', () => {

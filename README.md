@@ -540,9 +540,50 @@ Satu jebakan yang sudah ditutup: `electron-builder` membuat rilis sebagai
 unggah sukses, tapi aplikasi tidak pernah menemukan pembaruannya — gagal tanpa
 satu pun pesan error. Karena itu `releaseType: release` dipasang eksplisit.
 
+**Pembaruan isi, tanpa installer sama sekali.** Di Windows 11 dengan Smart App
+Control aktif, installer yang belum bertandatangan ditolak di tingkat kernel dan
+tidak punya "Run anyway". Terukur pada 1.3.1 → 1.3.2: installer terunduh utuh,
+checksum benar, lalu `spawn UNKNOWN` — prosesnya tidak pernah lahir
+(CodeIntegrity 3077 + 3118 di Event Log). Mesin seperti itu tidak akan pernah
+bisa memperbarui lewat installer selama installer-nya tidak ditandatangani.
+
+Karena itu ada jalur kedua. Yang berubah di hampir setiap rilis bukan biner,
+melainkan kode terjemahan: `web/`, `padel_scheduler/`, dan `run.py`. Ketiganya
+diterbitkan sebagai `konten-X.Y.Z.zip` (~235 KB) di samping installer; aplikasi
+mengunduhnya ke `%APPDATA%\Padelin\konten\X.Y.Z\`, memverifikasi sha512
+terhadap `konten.json`, lalu memakainya saat dibuka berikutnya.
+
+Titik tukarnya cuma satu: `akarAplikasi()` di `electron/main.js`. `run.py`
+menghitung `WEB_DIR` dari letak berkasnya sendiri dan `padel_scheduler` diimpor
+dari folder yang sama, jadi menggeser satu akar itu sekaligus menggeser
+antarmuka, mesin jadwal, dan server. Tidak ada berkas yang bisa dieksekusi yang
+lahir baru — `python.exe` dan `Padelin.exe` tetap yang lama, yang sudah
+diizinkan — sehingga tidak ada yang bisa diblokir SAC, SmartScreen, maupun
+Defender.
+
+Tiga hal tetap butuh installer, dan `app_minimal` di `konten.json` yang
+menjaganya: runtime Electron, Python bundel beserta OR-Tools, dan `electron/*.js`
+(proses utama — dimuat Electron sebelum satu baris pun kode kita jalan, jadi
+mustahil ditukar dari dalam). Naikkan `kontenAppMinimal` di `package.json` tiap
+kali `electron/*.js` ikut berubah; isi baru di atas proses utama lama hanya sah
+selama kontraknya tidak berubah.
+
+Yang ditukar oleh jalur ini, dan sebaiknya disadari: hak veto Windows atas kode
+baru. Penggantinya HTTPS ke repo rilis yang sudah ditentukan (URL zip dirakit
+dari versi, tidak diambil dari manifes yang baru diunduh), sha512 yang harus
+cocok sebelum satu berkas pun dibongkar, nama berkas yang harus cocok pola, isi
+yang harus lengkap, tujuan `userData` dan bukan folder aplikasi, dan tanpa
+elevasi. Paket yang servernya gagal hidup ditandai rusak dan aplikasi mundur ke
+berkas bawaannya — sekali percobaan, bukan gagal selamanya.
+
 **Kode privat, installer publik.** Repo kode `satriapribadi/padelin` tetap
 privat; hasil build diunggah ke repo terpisah `satriapribadi/padelin-rilis`
-yang publik dan isinya **hanya installer, tanpa satu baris kode pun**.
+yang publik. Isinya installer, plus `konten-X.Y.Z.zip` yang memang berisi
+`web/`, `padel_scheduler/`, dan `run.py` apa adanya. Sumber terjemahan itu
+sebetulnya sudah ikut terdistribusi sejak dulu — installer NSIS bisa dibongkar
+siapa saja dan isinya `app.asar.unpacked` yang sama — tapi sekarang ia terbaca
+tanpa perlu dibongkar. Yang tetap tidak pernah keluar dari repo privat: riwayat
+git, tes, dan perkakas.
 
 Pemisahan ini bukan kerapian belaka. `electron-updater` membaca rilis lewat API
 GitHub, dan rilis di repo privat hanya bisa dibaca dengan token — token yang
@@ -555,7 +596,8 @@ Merilis:
 ```bash
 # sekali saja: buat repo publik satriapribadi/padelin-rilis di GitHub
 export GH_TOKEN=...        # butuh izin tulis ke repo rilis itu saja
-npm run release            # build + unggah installer, latest.yml, blockmap
+npm run release            # build + unggah installer, latest.yml, blockmap,
+                           # lalu konten-X.Y.Z.zip + konten.json
 ```
 
 `GH_TOKEN` hanya dipakai saat mengunggah di mesin Anda — ia tidak pernah masuk

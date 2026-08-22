@@ -69,6 +69,15 @@ jobs:
       - name: Uji pelaporan updater
         run: npm run test:updater
 
+      # Jalur pembaruan yang TIDAK lewat installer - satu-satunya yang sampai di
+      # mesin dengan Smart App Control aktif. Yang diuji terutama penolakannya:
+      # sha512 yang tidak cocok, manifes yang namanya aneh, isi yang tidak
+      # lengkap, konten yang lebih tua dari aplikasinya. Semua berakhir sama
+      # dari luar (aplikasi memakai bawaan paket), jadi tanpa tes tidak ada yang
+      # bisa membedakan "ditolak dengan benar" dari "tidak pernah dicoba".
+      - name: Uji pembaruan konten
+        run: npm run test:konten
+
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
@@ -177,6 +186,14 @@ jobs:
         if: ${{ !inputs.terbitkan }}
         run: npm run dist
 
+      # Paket konten ikut dirakit di uji-kering. Ia dibuat PowerShell
+      # (Compress-Archive) dan isinya ditentukan daftar di paket-konten.js, jadi
+      # kegagalannya - folder yang berpindah, __pycache__ yang ikut terbawa -
+      # tidak akan terlihat sampai ada yang benar-benar merakitnya.
+      - name: Rakit paket konten (uji-kering)
+        if: ${{ !inputs.terbitkan }}
+        run: npm run paket:konten
+
       - name: Sebutkan artefak hasil uji-kering
         if: ${{ !inputs.terbitkan }}
         shell: bash
@@ -218,11 +235,17 @@ jobs:
 
           ASET=$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets[].name')
           echo "aset terunggah:"; echo "$ASET" | sed 's/^/  /'
-          for wajib in "latest.yml" ".exe" ".exe.blockmap"; do
+          # konten.json dan zip-nya sama wajibnya dengan installer: tanpa
+          # keduanya, mesin yang installer-nya diblokir Smart App Control tidak
+          # punya jalur pembaruan sama sekali - dan diamnya tidak terlihat dari
+          # mana pun, karena rilisnya tetap "berhasil".
+          for wajib in "latest.yml" ".exe" ".exe.blockmap" "konten.json" "konten-$(node -p "require('./package.json').version").zip"; do
             echo "$ASET" | grep -q -- "$wajib" || {
               echo "Aset yang memuat '$wajib' tidak ada di rilis $TAG."
               echo "Tanpa latest.yml aplikasi terpasang tidak pernah melihat pembaruan;"
-              echo "tanpa blockmap pembaruannya mundur ke unduhan utuh ~200 MB."
+              echo "tanpa blockmap pembaruannya mundur ke unduhan utuh ~200 MB;"
+              echo "tanpa konten.json + zip-nya, mesin dengan Smart App Control aktif"
+              echo "tidak punya jalur pembaruan sama sekali."
               exit 1
             }
           done
@@ -278,3 +301,37 @@ jobs:
             console.log("\n  Auto-update tidak akan menolak unduhan ini.");
           '
           rm -f terbit-latest.yml terbit-installer.exe
+
+      # Alasan yang sama persis dengan pemeriksaan latest.yml di atas, untuk
+      # jalur yang satunya: manifes yang tidak cocok dengan zip-nya membuat
+      # SETIAP aplikasi menolak paket kontennya dengan galat checksum, serentak.
+      - name: Periksa konten.json cocok dengan zip yang terbit
+        if: inputs.terbitkan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v$(node -p "require('./package.json').version")"
+          REPO=$(node -p "require('./package.json').build.publish[0].owner + '/' + require('./package.json').build.publish[0].repo")
+          DASAR="https://github.com/$REPO/releases/download/$TAG"
+
+          curl -sfL -o terbit-konten.json "$DASAR/konten.json"
+          NAMA=$(node -p "require('./terbit-konten.json').berkas")
+          echo "manifes menunjuk: $NAMA"
+          curl -sfL -o terbit-konten.zip "$DASAR/$NAMA"
+
+          node -e '
+            const fs = require("fs"), crypto = require("crypto");
+            const m = JSON.parse(fs.readFileSync("terbit-konten.json", "utf8"));
+            const isi = fs.readFileSync("terbit-konten.zip");
+            const sha = crypto.createHash("sha512").update(isi).digest("base64");
+            console.log(`  ukuran  ${isi.length === m.ukuran ? "COCOK" : "TIDAK COCOK"}`);
+            console.log(`  sha512  ${sha === m.sha512 ? "COCOK" : "TIDAK COCOK"}`);
+            if (isi.length !== m.ukuran || sha !== m.sha512) {
+              console.error("\n  Paket konten akan ditolak SEMUA aplikasi terpasang.");
+              process.exit(1);
+            }
+            console.log(`\n  konten ${m.versi}, butuh aplikasi >= ${m.app_minimal}`);
+          '
+          rm -f terbit-konten.json terbit-konten.zip
