@@ -941,7 +941,7 @@ async function jalankanGenerate(opsi) {
         setProgress(data.pct, data.message);
         logLine(`${String(data.pct).padStart(5)}%  ${data.message}`);
       } else if (event === 'done') {
-        schedule = data;
+        pasangJadwal(data);
         scheduleStamp = schedulingStamp();
         // currentEventId TIDAK direset di sini. Dulu direset, jadi "buka dari
         // riwayat -> ubah sedikit -> Buat jadwal -> Simpan" diam-diam membuat
@@ -1107,6 +1107,7 @@ function renderSchedule() {
   $('sched-stats').appendChild(grid);
   renderPenyempurnaan(st);
 
+  renderKalibrasi();
   renderCourtNames();
   renderRounds();
 
@@ -1119,25 +1120,44 @@ function renderSchedule() {
   // Kolom L/P ikut ditampilkan supaya warna nama di susunan pertandingan punya
   // padanan berupa HURUF di halaman yang sama - warna saja tidak cukup, dan
   // mengirim orang ke tab Peserta hanya untuk memastikan itu memutus alurnya.
-  let html = '<table class="data"><thead><tr><th>Nama</th>'
+  let html = '<div class="rk-hint">Nama'
+    + (showGender ? ', L/P,' : '') + ' dan rating bisa diklik untuk diubah - '
+    + 'dipakai kalau seseorang batal datang dan digantikan orang lain. '
+    + 'Perubahannya ikut ke susunan, matriks, teks WhatsApp, CSV, dan laporan '
+    + 'cetak; tekan Simpan lagi supaya tersimpan. Master pemain tidak berubah.'
+    + '</div>'
+    // Tabelnya menggulir di dalam wadahnya sendiri. Kartu rekap duduk di kolom
+    // kiri yang lebarnya dibatasi 420px, dan dengan kolom wasit + ballboy
+    // menyala isinya tidak muat - tanpa wadah ini tabelnya meluber keluar
+    // kartu dan menindih kolom di sebelahnya.
+    + '<div class="rk-wrap"><table class="data"><thead><tr><th>Nama</th>'
     + (showGender ? '<th class="num">L/P</th>' : '')
+    + '<th class="num">Rating</th>'
     + '<th class="num">Main</th>'
-    + (showRoles ? '<th class="num">Wasit</th><th class="num">Ballboy</th>' : '')
+    // W dan B, bukan "Wasit" dan "Ballboy": kartu rekap duduk di kolom selebar
+    // 420px, dan dua kata itu sendiri memakan 118px - cukup untuk memaksa
+    // kolom nama menyusut sampai tinggal tiga huruf. Singkatannya bukan
+    // tebakan: kartu ronde memakai W/B untuk hal yang sama, dan garis waktu
+    // tepat di bawah tabel ini mengejanya lengkap di legendanya.
+    + (showRoles ? '<th class="num" title="Wasit">W</th>'
+                   + '<th class="num" title="Ballboy">B</th>' : '')
     + '<th class="num">Istirahat</th></tr></thead><tbody>';
   schedule.players.slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((p) => {
     const roles = st.roles_per_player[p.id] || {};
     const idle = (st.byes_per_player[p.id] || 0) - (roles.total || 0);
-    const gp = p.gender === 'M' ? '<span class="gp m">L</span>'
-      : p.gender === 'F' ? '<span class="gp f">P</span>' : '-';
-    html += `<tr><td>${gname(p.id)}</td>`
-      + (showGender ? `<td class="num">${gp}</td>` : '')
+    html += `<tr><td>${namaEditor(p)}</td>`
+      + (showGender ? `<td class="num">${genderEditor(p)}</td>` : '')
+      + `<td class="num">${ratingEditor(p)}</td>`
       + `<td class="num">${st.plays_per_player[p.id] || 0}</td>`
       + (showRoles ? `<td class="num">${roles.wasit || 0}</td>`
                      + `<td class="num">${roles.ballboy || 0}</td>` : '')
       + `<td class="num">${Math.max(0, idle)}</td></tr>`;
   });
-  $('recap').innerHTML = html + '</tbody></table>'
+  $('recap').innerHTML = html + '</tbody></table></div>'
     + roleTimeline(schedule, showRoles);
+  pasangEditorNama();
+  pasangEditorGender();
+  pasangEditorRating();
 
   // Grafik komposisi ronde: mencari ketimpangan di antara 26 orang jauh
   // lebih cepat lewat batang daripada lewat tabel 26 baris.
@@ -1199,7 +1219,7 @@ function renderRounds() {
   box.style.setProperty('--courtw', `${courtColWidth()}px`);
 
   let seg = null;
-  schedule.rounds.forEach((r) => {
+  schedule.rounds.forEach((r, ri) => {
     if (pakaiSegbar && r.segment && r.segment !== seg) {
       seg = r.segment;
       box.appendChild(el('div', 'segbar', esc(seg)));
@@ -1219,10 +1239,11 @@ function renderRounds() {
       const duty = [];
       (r.roles || []).forEach((x) => {
         if (x.court !== m.court) return;
-        duty.push(`${x.role === 'wasit' ? 'W' : 'B'} ${gname(x.player_id)}`);
+        duty.push(`${x.role === 'wasit' ? 'W' : 'B'} `
+          + namaTukar(x.player_id, ri));
       });
       const pool = m.pool ? `<span class="pool">${esc(m.pool)}</span>` : '';
-      const team = (t) => t.map((x) => gname(x.id)).join(' &amp; ');
+      const team = (t) => t.map((x) => namaTukar(x.id, ri)).join(' &amp; ');
       card.appendChild(el('div', 'match',
         `<span class="c">${esc(courtLabel(m.court))}</span>` +
         `<span class="tm">${team(m.team_a)}${pool}</span>` +
@@ -1235,7 +1256,7 @@ function renderRounds() {
     const idle = r.byes.filter((b) => !busy.has(b.id));
     if (idle.length) {
       card.appendChild(el('div', 'resting',
-        'Istirahat: ' + idle.map((b) => gname(b.id)).join(', ')));
+        'Istirahat: ' + idle.map((b) => namaTukar(b.id, ri)).join(', ')));
     }
     box.appendChild(card);
   });
@@ -1347,8 +1368,695 @@ async function refreshScheduleTexts() {
     schedule.personal_text = d.personal_text;
     schedule.csv = d.csv;
   } catch (e) {
-    toast(`Nama court belum masuk ke teks salinan: ${e.message}`);
+    toast(`Teks salinan belum ikut diperbarui: ${e.message}`);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Kalibrasi manual: menukar orang di dalam satu ronde
+// ---------------------------------------------------------------------------
+//
+// Kenapa ini ada. Penjadwal mengoptimalkan apa yang bisa diukurnya - keunikan
+// partner, keunikan lawan, kerataan main, giliran. Yang tidak bisa diukurnya
+// adalah yang cuma diketahui host: satu orang datang telat dan minta main
+// lebih banyak di ronde akhir, satu orang cedera ringan dan minta duduk, satu
+// pasangan sengaja dipertemukan karena tamu. Menjadwal ulang untuk itu berarti
+// membuang seluruh susunan yang mungkin sudah diumumkan; jadi yang disediakan
+// di sini adalah pisau bedah, bukan gergaji.
+//
+// Bentuk operasinya SATU dan cuma satu: dua orang di ronde yang sama bertukar
+// posisi. Itu bukan penyederhanaan - itu yang membuatnya mustahil merusak
+// jadwal. Tiap orang selalu punya tepat satu posisi per ronde (main di slot
+// tertentu, bertugas, atau duduk), jadi menukar dua posisi selalu menghasilkan
+// ronde yang tetap sah bentuknya: tidak ada tim isi tiga, tidak ada orang di
+// dua court sekaligus, tidak ada court tanpa wasit. Yang bisa dilanggar
+// hanyalah aturan LUNAK dan aturan babak, dan itu dilaporkan, bukan dicegah.
+
+/** Nama peserta di kartu ronde, sebagai tombol penukar.
+ *
+ * Tombol, bukan span ber-onclick: ia harus bisa dicapai dengan Tab dan
+ * ditekan dengan Enter. Host yang sedang menyusun acara sering punya satu
+ * tangan di keyboard dan satu tangan memegang telepon.
+ */
+function namaTukar(pid, ri) {
+  return `<button type="button" class="nm-swap" data-tukar="${ri}:${pid}"`
+    + ` title="Klik untuk menukar dengan peserta lain di ronde ini">`
+    + `${gname(pid)}</button>`;
+}
+
+// Satu penangan untuk seluruh kartu ronde. Isi #rounds diganti tiap kali nama
+// court diketik, jadi penangan per tombol akan dipasang ulang puluhan kali per
+// detik; wadahnya sendiri tidak pernah diganti.
+$('rounds').addEventListener('click', (e) => {
+  const tombol = e.target.closest('.nm-swap');
+  if (!tombol) return;
+  const [ri, pid] = tombol.dataset.tukar.split(':').map(Number);
+  bukaPemilih(tombol, ri, pid);
+});
+
+// Tumpukan urung: isi rounds sebelum tiap pertukaran, sebagai teks JSON.
+// Dibatasi supaya sesi panjang tidak menumpuk salinan jadwal tanpa henti.
+let kalibrasiUrung = [];
+const KALIBRASI_URUNG_MAX = 50;
+// Susunan hasil generate, sebelum satu pun tangan menyentuhnya.
+let kalibrasiAsli = null;
+// Berapa pertukaran yang sudah dilakukan pada jadwal ini. Disimpan di dalam
+// catatan jadwal, bukan cuma di variabel: jadwal yang disimpan lalu dibuka
+// lagi harus tetap mengaku sudah dikalibrasi, kalau tidak angka di catatan
+// lama terbaca sebagai fakta terkini.
+let kalibrasiN = 0;
+let kalibrasiSibuk = false;
+
+const TANDA_KALIBRASI = 'Kalibrasi manual';
+
+/** Pasang jadwal baru sebagai yang sedang dilihat, dan lupakan riwayat kalibrasi. */
+function pasangJadwal(data) {
+  schedule = data;
+  kalibrasiUrung = [];
+  kalibrasiAsli = JSON.stringify(data.rounds || []);
+  const catatan = (data.notes || []).find((n) => n.startsWith(`${TANDA_KALIBRASI}:`));
+  const angka = catatan && catatan.match(/(\d+)\s+pertukaran/);
+  kalibrasiN = angka ? +angka[1] : 0;
+}
+
+/** Posisi seseorang di satu ronde: slot match, tugas, atau duduk. */
+function posisiDi(rnd, pid) {
+  for (const m of rnd.matches || []) {
+    for (const tim of ['team_a', 'team_b']) {
+      const slot = (m[tim] || []).find((x) => x.id === pid);
+      if (slot) return { jenis: 'main', slot, court: m.court, match: m, tim };
+    }
+  }
+  const tugas = (rnd.roles || []).find((x) => x.player_id === pid);
+  if (tugas) return { jenis: 'tugas', tugas };
+  return { jenis: 'duduk' };
+}
+
+/** Daftar istirahat & istirahat-tanpa-tugas disusun ulang dari susunan match.
+ *
+ * Dihitung ulang dari nol, bukan ditambal: sesudah pertukaran, "siapa yang
+ * duduk" adalah turunan murni dari "siapa yang main". Menambalnya di tiap
+ * cabang pertukaran berarti enam tempat yang bisa keliru; menurunkannya sekali
+ * di sini berarti nol.
+ */
+function segarkanIstirahat(rnd) {
+  const main = new Set();
+  (rnd.matches || []).forEach((m) => {
+    (m.team_a || []).concat(m.team_b || []).forEach((x) => main.add(x.id));
+  });
+  const bertugas = new Set((rnd.roles || []).map((x) => x.player_id));
+  rnd.byes = schedule.players.filter((p) => !main.has(p.id))
+    .map((p) => ({ id: p.id, name: p.name }));
+  rnd.resting_only = rnd.byes.filter((b) => !bertugas.has(b.id));
+}
+
+/** Tukar posisi dua orang di ronde r. Selalu menghasilkan ronde yang sah. */
+function tukarDiRonde(r, idA, idB) {
+  const rnd = schedule.rounds[r];
+  const a = posisiDi(rnd, idA), b = posisiDi(rnd, idB);
+  const namaOf = (id) => (playerById.get(id) || {}).name || '';
+  const isiSlot = (slot, id) => { slot.id = id; slot.name = namaOf(id); };
+  const isiTugas = (t, id) => { t.player_id = id; t.name = namaOf(id); };
+
+  if (a.jenis === 'main') isiSlot(a.slot, idB);
+  if (b.jenis === 'main') isiSlot(b.slot, idA);
+  if (a.jenis === 'tugas') isiTugas(a.tugas, idB);
+  if (b.jenis === 'tugas') isiTugas(b.tugas, idA);
+  segarkanIstirahat(rnd);
+}
+
+/** Aturan babak ronde ini. Jadwal lama tidak menyimpannya; kosong = bebas. */
+function aturanRonde(rnd) {
+  return rnd.rule || 'open';
+}
+
+/**
+ * Apakah susunan satu court melanggar aturan KERAS, dan kenapa.
+ *
+ * Ini cermin dari Rules.quad_ok di optimizer.py, dan sengaja hanya menyalin
+ * tiga aturan yang paling sering kena pertukaran manual: aturan babak, pool
+ * rating, dan partner terkunci. Format match yang diizinkan tidak ikut - ia
+ * jarang dipakai dan cerminnya mahal. Yang di sini cuma untuk MENANDAI pilihan
+ * sebelum diklik; yang menghakimi setelahnya tetap server, dengan kode aturan
+ * yang asli, dan hasilnya mendarat di panel Catatan.
+ */
+function langgarQuad(quad, rnd) {
+  const g = (id) => (playerById.get(id) || {}).gender || null;
+  const t = (id) => (playerById.get(id) || {}).tier;
+  const rule = aturanRonde(rnd);
+  if (rule === 'men' && quad.some((p) => g(p) !== 'M')) return 'babak putra';
+  if (rule === 'women' && quad.some((p) => g(p) !== 'F')) return 'babak putri';
+  if (rule === 'mixed') {
+    const ok = g(quad[0]) && g(quad[1]) && g(quad[2]) && g(quad[3])
+      && g(quad[0]) !== g(quad[1]) && g(quad[2]) !== g(quad[3]);
+    if (!ok) return 'babak mixed (tiap tim 1L + 1P)';
+  }
+  if (rule === 'same_gender') {
+    const ga = g(quad[0]);
+    if (!ga || quad.some((p) => g(p) !== ga)) return 'babak sesama gender';
+  }
+  if (t(quad[0]) !== undefined && t(quad[0]) !== null
+      && quad.some((p) => t(p) !== t(quad[0]))) return 'pool rating';
+  for (const [x, rekan] of [[0, 1], [1, 0], [2, 3], [3, 2]]) {
+    const mate = (playerById.get(quad[x]) || {}).partner_id;
+    if (mate !== null && mate !== undefined && mate !== quad[rekan]
+        && quad.includes(mate)) return 'partner terkunci';
+  }
+  return null;
+}
+
+/** Susunan tiap court seandainya idA dan idB bertukar, untuk diperiksa. */
+function quadSetelahTukar(rnd, idA, idB) {
+  return (rnd.matches || []).map((m) => {
+    const tukar = (x) => (x.id === idA ? idB : x.id === idB ? idA : x.id);
+    return [...(m.team_a || []), ...(m.team_b || [])].map(tukar);
+  });
+}
+
+/**
+ * Siapa saja yang bisa ditukar dengan pid di ronde r, beserta akibatnya.
+ *
+ * Semua peserta lain di ronde itu masuk daftar - yang duduk, yang bertugas,
+ * dan yang sedang main di court mana pun. Tidak ada yang disaring keluar
+ * karena melanggar aturan: host yang memutuskan, dan pelanggarannya ditulis di
+ * barisnya sendiri supaya keputusan itu diambil sambil melihat harganya.
+ */
+function kandidatTukar(r, pid) {
+  const rnd = schedule.rounds[r];
+  const asal = posisiDi(rnd, pid);
+  const main = (id) => (schedule.stats.plays_per_player || {})[id] || 0;
+  const out = [];
+  schedule.players.forEach((p) => {
+    if (p.id === pid) return;
+    const pos = posisiDi(rnd, p.id);
+    // Dua orang yang sama-sama duduk tanpa tugas tidak menukar apa pun.
+    // Menawarkannya berarti mengisi menu dengan pilihan yang tidak melakukan
+    // apa-apa - dan di roster 26 orang, itu mayoritas isi menunya.
+    if (asal.jenis === 'duduk' && pos.jenis === 'duduk') return;
+    // Akibat pada jumlah main: hanya berubah kalau salah satunya main dan yang
+    // lain tidak. Tukar sesama pemain cuma memindahkan posisi.
+    const delta = (asal.jenis === 'main' ? 1 : 0) - (pos.jenis === 'main' ? 1 : 0);
+    // Aturan pertama yang dilanggar sudah cukup untuk ditulis di barisnya;
+    // menyebut ketiganya sekaligus tidak mengubah keputusan host.
+    const langgar = quadSetelahTukar(rnd, pid, p.id)
+      .map((q) => langgarQuad(q, rnd)).find(Boolean) || null;
+    out.push({
+      id: p.id,
+      nama: p.name,
+      gender: p.gender,
+      jenis: pos.jenis,
+      court: pos.jenis === 'main' ? courtLabel(pos.court) : '',
+      peran: pos.jenis === 'tugas'
+        ? (pos.tugas.role === 'wasit' ? 'W' : 'B') : '',
+      main: main(p.id),
+      delta,
+      langgar,
+    });
+  });
+  // Yang tidak melanggar naik ke atas kelompoknya. Di babak putra, SELURUH
+  // yang istirahat adalah putri dan semuanya bertanda - kalau yang bertanda
+  // tidak ditenggelamkan, pilihan yang sah bisa terkubur di bawah tujuh
+  // peringatan.
+  const urut = { duduk: 0, tugas: 1, main: 2 };
+  out.sort((a, b) => (urut[a.jenis] - urut[b.jenis])
+    || ((a.langgar ? 1 : 0) - (b.langgar ? 1 : 0))
+    || a.nama.localeCompare(b.nama));
+  return { asal, kandidat: out };
+}
+
+let pemilihTerbuka = null;
+
+function tutupPemilih() {
+  if (pemilihTerbuka) { pemilihTerbuka.remove(); pemilihTerbuka = null; }
+}
+
+/** Popup pilihan tukar, ditambatkan ke nama yang barusan diklik. */
+function bukaPemilih(tombol, r, pid) {
+  tutupPemilih();
+  const { asal, kandidat } = kandidatTukar(r, pid);
+  const orang = playerById.get(pid) || { name: '?' };
+  const dimana = asal.jenis === 'main'
+    ? `main di ${courtLabel(asal.court)}`
+    : asal.jenis === 'tugas'
+      ? (asal.tugas.role === 'wasit' ? 'jadi wasit' : 'jadi ballboy')
+      : 'sedang istirahat';
+
+  const judul = { duduk: 'Istirahat', tugas: 'Bertugas ronde ini', main: 'Sedang main' };
+  let html = `<div class="sm-h">Tukar <b>${esc(orang.name)}</b>`
+    + `<span class="sm-sub">R${schedule.rounds[r].index} &middot; ${esc(dimana)}`
+    + ` &middot; main ${(schedule.stats.plays_per_player || {})[pid] || 0} ronde</span></div>`;
+  let grup = null;
+  kandidat.forEach((k) => {
+    if (k.jenis !== grup) {
+      grup = k.jenis;
+      html += `<div class="sm-g">${judul[grup]}</div>`;
+    }
+    const akibat = k.delta > 0
+      ? `main ${k.main} &rarr; ${k.main + 1}`
+      : k.delta < 0 ? `main ${k.main} &rarr; ${k.main - 1}`
+        : k.jenis === 'main' ? 'tukar posisi' : 'tukar tugas';
+    const cls = k.gender === 'M' ? 'g-m' : k.gender === 'F' ? 'g-f' : '';
+    html += `<button type="button" class="sm-row${k.langgar ? ' bad' : ''}" `
+      + `data-pilih="${k.id}">`
+      + `<span class="sm-n ${cls}">${esc(k.nama)}</span>`
+      + `<span class="sm-w">${esc(k.court || k.peran)}</span>`
+      + `<span class="sm-e">${akibat}</span>`
+      + (k.langgar ? `<span class="sm-x">melanggar ${esc(k.langgar)}</span>` : '')
+      + '</button>';
+  });
+  if (!kandidat.length) html += '<div class="sm-g">Tidak ada peserta lain.</div>';
+
+  const box = el('div', 'swapmenu');
+  box.innerHTML = html;
+  document.body.appendChild(box);
+  const b = tombol.getBoundingClientRect();
+  const lebar = box.offsetWidth, tinggi = box.offsetHeight;
+  // Dijepit ke dalam layar: nama di kartu paling kanan atau paling bawah
+  // kalau tidak dijepit akan membuka menu yang separuhnya di luar jendela.
+  const x = Math.max(8, Math.min(b.left + scrollX, scrollX + innerWidth - lebar - 8));
+  const y = b.bottom + scrollY + 4 + tinggi > scrollY + innerHeight - 8
+    ? Math.max(scrollY + 8, b.top + scrollY - tinggi - 4)
+    : b.bottom + scrollY + 4;
+  box.style.left = `${x}px`;
+  box.style.top = `${y}px`;
+  pemilihTerbuka = box;
+
+  box.querySelectorAll('button[data-pilih]').forEach((row) => {
+    row.onclick = () => {
+      tutupPemilih();
+      lakukanTukar(r, pid, +row.dataset.pilih);
+    };
+  });
+  const kandidatPertama = box.querySelector('button[data-pilih]');
+  if (kandidatPertama) kandidatPertama.focus();
+}
+
+document.addEventListener('mousedown', (e) => {
+  if (pemilihTerbuka && !pemilihTerbuka.contains(e.target)
+      && !e.target.closest('.nm-swap')) tutupPemilih();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') tutupPemilih();
+});
+
+/** Jalankan satu pertukaran, lalu hitung ulang seluruh angkanya. */
+async function lakukanTukar(r, idA, idB) {
+  if (kalibrasiSibuk || !schedule) return;
+  kalibrasiUrung.push(JSON.stringify(schedule.rounds));
+  if (kalibrasiUrung.length > KALIBRASI_URUNG_MAX) kalibrasiUrung.shift();
+  const a = (playerById.get(idA) || {}).name, b = (playerById.get(idB) || {}).name;
+  tukarDiRonde(r, idA, idB);
+  kalibrasiN += 1;
+  await hitungUlangJadwal(`R${schedule.rounds[r].index}: ${a} <-> ${b}`);
+}
+
+/** Urungkan pertukaran terakhir. */
+async function urungkanTukar() {
+  if (kalibrasiSibuk || !kalibrasiUrung.length) return;
+  schedule.rounds = JSON.parse(kalibrasiUrung.pop());
+  kalibrasiN = Math.max(0, kalibrasiN - 1);
+  await hitungUlangJadwal('Pertukaran terakhir diurungkan');
+}
+
+/** Kembali ke susunan hasil generate, membuang seluruh kalibrasi. */
+async function kembalikanAsli() {
+  if (kalibrasiSibuk || !kalibrasiAsli) return;
+  if (!confirm(`Buang ${kalibrasiUrung.length} pertukaran dan kembali ke `
+    + 'susunan seperti saat jadwal ini dibuat atau dibuka?')) return;
+  kalibrasiUrung.push(JSON.stringify(schedule.rounds));
+  schedule.rounds = JSON.parse(kalibrasiAsli);
+  kalibrasiN = 0;
+  await hitungUlangJadwal('Kembali ke susunan hasil generate');
+}
+
+/**
+ * Tulis ulang catatan kalibrasi di jadwal.
+ *
+ * Catatan lain TIDAK disentuh, dan itu disengaja: catatan yang lahir bersama
+ * jadwal menjelaskan bagaimana jadwal itu disusun, dan itu tetap benar. Yang
+ * bisa jadi tidak benar lagi adalah angkanya - dan itulah yang dikatakan baris
+ * pertama di bawah, supaya "0 pasang berulang" di catatan lama tidak dibaca
+ * sebagai keadaan sekarang.
+ */
+function tulisCatatanKalibrasi(langgar) {
+  const lain = (schedule.notes || []).filter((n) => !n.startsWith(TANDA_KALIBRASI));
+  const baris = [];
+  if (kalibrasiN) {
+    baris.push(`${TANDA_KALIBRASI}: ${kalibrasiN} pertukaran. Kartu statistik, `
+      + 'rekap pemain, dan matriks pertemuan di atas sudah dihitung ulang untuk '
+      + 'susunan yang sekarang. Catatan lain di bawah menggambarkan jadwal saat '
+      + 'pertama dibuat.');
+  }
+  (langgar || []).forEach((x) => baris.push(x));
+  schedule.notes = lain.concat(baris);
+}
+
+/**
+ * Hitung ulang statistik di server, lalu gambar ulang seluruh tab.
+ *
+ * Angkanya TIDAK dihitung di sini. Skor kualitas, tunggu terpanjang, giliran
+ * terlewat, dan batas bawah teoretis lahir dari dua ratus baris penilaian di
+ * scheduler.py; menyalinnya ke browser berarti dua salinan yang akan berbeda
+ * pelan-pelan, dan yang pertama terlihat adalah skor yang melompat tanpa ada
+ * yang menyentuh jadwalnya. Jadi jadwal yang tampil dikirim apa adanya dan
+ * server menjawab dengan angka yang dihitung mesin yang sama.
+ */
+async function hitungUlangJadwal(pesan) {
+  kalibrasiSibuk = true;
+  try {
+    const d = await api('/api/schedule/recalc', { ...buildPayload(), schedule });
+    schedule.stats = d.stats;
+    schedule.violations = d.violations;
+    schedule.text = d.text;
+    schedule.personal_text = d.personal_text;
+    schedule.csv = d.csv;
+    tulisCatatanKalibrasi(d.rule_breaks);
+    renderSchedule();
+    const n = (d.rule_breaks || []).length;
+    toast(n ? `${pesan} - ${n} aturan dilanggar, lihat Catatan` : pesan);
+  } catch (e) {
+    // Susunannya sudah berubah di layar; yang gagal cuma angkanya. Digambar
+    // ulang apa adanya supaya host tidak melihat jadwal lama yang sudah tidak
+    // ada, dan diberi tahu bahwa angkanya belum ikut.
+    renderSchedule();
+    toast(`Susunan berubah, tapi statistiknya belum ikut dihitung: ${e.message}`);
+  } finally {
+    kalibrasiSibuk = false;
+  }
+}
+
+/** Baris tombol kalibrasi di atas kartu ronde. */
+function renderKalibrasi() {
+  const host = $('kalibrasi');
+  if (!host) return;
+  if (!schedule) { host.innerHTML = ''; return; }
+  // Kedua tombol hanya berlaku untuk pertukaran di SESI INI: susunan hasil
+  // generate tidak ikut tersimpan ke database, jadi jadwal yang dibuka dari
+  // riwayat tidak punya titik kembali - dan tombol yang tidak bisa
+  // mengembalikan apa pun lebih buruk daripada tombol yang tidak ada.
+  const bisaUrung = kalibrasiUrung.length > 0;
+  host.innerHTML = '<div class="kal-h">Kalibrasi manual '
+    + '<span class="hint">Klik nama siapa pun di kartu ronde untuk menukarnya '
+    + 'dengan peserta lain di ronde yang sama - supaya seseorang main lebih '
+    + 'banyak, lebih sedikit, atau bertukar tugas. Semua angka dihitung ulang; '
+    + 'ronde lain tidak disentuh.</span></div>'
+    + (kalibrasiN
+      ? `<div class="kal-n">${kalibrasiN} pertukaran pada jadwal ini</div>` : '')
+    + (bisaUrung
+      ? '<div class="btn-row">'
+        + '<button class="btn ghost sm" id="kal-urung">Urungkan</button>'
+        + '<button class="btn ghost sm" id="kal-asli">Kembali ke susunan awal'
+        + '</button></div>'
+      : '');
+  if (bisaUrung) {
+    $('kal-urung').onclick = urungkanTukar;
+    $('kal-asli').onclick = kembalikanAsli;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Ganti nama peserta
+// ---------------------------------------------------------------------------
+
+/** Sel nama di tabel rekap, sebagai kotak isian.
+ *
+ * Namanya diganti DI SINI, bukan di tab Peserta, karena di sinilah salah
+ * ketiknya ketahuan: host membaca jadwal yang sudah jadi, melihat "Rina" yang
+ * mestinya "Rina S", dan membetulkannya di halaman yang sedang ia baca.
+ * Mengirimnya ke tab Peserta lalu Generate lagi berarti membuang seluruh
+ * susunan yang mungkin sudah diumumkan - padahal yang salah cuma labelnya.
+ *
+ * Warna gender ditempelkan ke kotaknya sendiri supaya nama di rekap tetap
+ * berkode warna sama dengan nama yang sama di kartu ronde.
+ */
+function namaEditor(p) {
+  const cls = p.gender === 'M' ? 'g-m' : p.gender === 'F' ? 'g-f' : '';
+  return `<input class="nm-edit ${cls}" type="text" spellcheck="false"`
+    + ` data-rename="${p.id}" value="${esc(p.name)}"`
+    + ` aria-label="Nama peserta" title="Klik untuk mengganti nama">`;
+}
+
+/** Sambungkan kotak nama di rekap ke penggantinya. */
+function pasangEditorNama() {
+  $('recap').querySelectorAll('input[data-rename]').forEach((inp) => {
+    const id = +inp.dataset.rename;
+    const semula = inp.value;
+    // Diterapkan saat isian DITINGGALKAN (atau Enter), bukan tiap huruf.
+    // Baris rekap dan baris matriks sama-sama diurutkan menurut nama, jadi
+    // menggambar ulang sambil mengetik membuat barisnya melompat pergi dari
+    // bawah kursor - dan huruf berikutnya mendarat di orang lain.
+    inp.onchange = () => { if (!gantiNamaPemain(id, inp.value)) inp.value = semula; };
+    inp.onkeydown = (e) => {
+      if (e.key === 'Enter') inp.blur();
+      // Batal: nilainya dikembalikan dulu, jadi blur tidak memicu onchange.
+      else if (e.key === 'Escape') { inp.value = semula; inp.blur(); }
+    };
+  });
+}
+
+/** Sel rating di tabel rekap, sebagai kotak isian.
+ *
+ * Kolomnya SELALU tampil, tidak seperti kolom L/P yang cuma muncul kalau ada
+ * yang mengisi gender. Bedanya nyata: gender boleh benar-benar tidak ada -
+ * null untuk semua orang, dan tidak ada satu pun aturan yang membacanya -
+ * sedangkan rating selalu punya angka (bawaannya 3.0) dan selalu ikut
+ * dihitung. Menyembunyikannya saat semua rating kebetulan sama juga membuat
+ * jalan buntu: host tidak punya cara membedakan pengganti yang lebih kuat.
+ */
+function ratingEditor(p) {
+  return '<input class="rt-edit" type="number" step="0.5" min="0" max="7"'
+    + ` data-rating="${p.id}" value="${p.rating}" aria-label="Rating peserta"`
+    + ' title="Ubah kalau penggantinya beda kekuatan">';
+}
+
+/** Sambungkan kotak rating di rekap ke penggantinya. */
+function pasangEditorRating() {
+  $('recap').querySelectorAll('input[data-rating]').forEach((inp) => {
+    const semula = inp.value;
+    inp.onchange = () => {
+      const hasil = gantiRatingPemain(+inp.dataset.rating, inp.value);
+      // Angka yang dijepit ke rentang sah dikembalikan ke kotaknya sekarang
+      // juga, bukan menunggu jawaban server: host yang mengetik 9 harus
+      // melihat 7 seketika, bukan setengah detik kemudian.
+      inp.value = hasil === null ? semula : hasil;
+    };
+    inp.onkeydown = (e) => {
+      if (e.key === 'Enter') inp.blur();
+      else if (e.key === 'Escape') { inp.value = semula; inp.blur(); }
+    };
+  });
+}
+
+/**
+ * Ganti rating satu peserta di jadwal yang sedang tampil.
+ *
+ * Rating tidak menyentuh skor kualitas - penilaian jadwal tidak memuat satu
+ * suku rating pun - tapi ia menggerakkan dua hal lain. Selisih rating antar
+ * tim ikut dihitung ulang dan tercetak di laporan; dan di mode pool rating,
+ * pool tiap orang DITURUNKAN dari ratingnya, jadi mengubah angka ini bisa
+ * membuat court yang tadinya satu pool jadi campur. Yang kedua itu bukan
+ * kesalahan yang boleh diam: server menilainya ulang dengan aturan yang asli
+ * dan melaporkannya di panel Catatan.
+ *
+ * Mengembalikan angka yang benar-benar dipakai, atau null kalau ditolak -
+ * pemanggil yang mengembalikan isian ke nilai lama.
+ */
+function gantiRatingPemain(id, mentah) {
+  if (!schedule || kalibrasiSibuk) return null;
+  const p = (schedule.players || []).find((x) => x.id === id);
+  if (!p) return null;
+  // Koma diterima: papan ketik Indonesia menaruhnya sebagai pemisah desimal,
+  // dan "3,5" yang jatuh jadi NaN akan terbaca sebagai penolakan tanpa sebab.
+  const angka = parseFloat(String(mentah).replace(',', '.'));
+  if (!isFinite(angka)) { toast('Rating harus berupa angka'); return null; }
+  const baru = Math.max(0, Math.min(7, angka));
+  if (baru === p.rating) return baru;
+  const lama = p.rating;
+
+  const basiSebelumnya = scheduleStamp !== null
+    && scheduleStamp !== schedulingStamp();
+  p.rating = baru;
+  const diSetup = players.find((x) => x.id === id);
+  if (diSetup) { diSetup.rating = baru; renderPlayers(); }
+  if (!basiSebelumnya) scheduleStamp = schedulingStamp();
+
+  hitungUlangJadwal(`${p.name}: rating ${lama} jadi ${baru}`);
+  return baru;
+}
+
+/** Sel L/P di tabel rekap, sebagai pilihan yang bisa diubah.
+ *
+ * Ada di sini karena ganti nama di rekap sebenarnya dipakai untuk SUBSTITUSI
+ * peserta, bukan cuma membetulkan salah ketik: seseorang batal datang dan
+ * digantikan orang lain. Kalau penggantinya beda gender, mengganti namanya
+ * saja meninggalkan jadwal yang diam-diam memperlakukan dia sebagai gender
+ * orang yang digantikan - dan yang ikut salah bukan cuma warna namanya:
+ * aturan babak putra/putri/mixed, pelanggaran preferensi court, dan hitungan
+ * komposisi tim semuanya membaca field ini.
+ *
+ * Jadi L/P duduk tepat di sebelah namanya, di baris yang sama, dan mengubahnya
+ * memicu hitung ulang yang sama dengan kalibrasi manual - termasuk laporan
+ * aturan babak yang jadi terlanggar karenanya.
+ */
+function genderEditor(p) {
+  const cls = p.gender === 'M' ? 'm' : p.gender === 'F' ? 'f' : '';
+  const opsi = (nilai, label) => `<option value="${nilai}"`
+    + `${(p.gender || '') === nilai ? ' selected' : ''}>${label}</option>`;
+  return `<select class="gp-edit ${cls}" data-gender="${p.id}"`
+    + ' aria-label="Gender peserta" title="Ubah kalau penggantinya beda gender">'
+    + opsi('', '-') + opsi('M', 'L') + opsi('F', 'P') + '</select>';
+}
+
+/** Sambungkan pilihan L/P di rekap ke penggantinya. */
+function pasangEditorGender() {
+  $('recap').querySelectorAll('select[data-gender]').forEach((sel) => {
+    sel.onchange = () => gantiGenderPemain(+sel.dataset.gender, sel.value);
+  });
+}
+
+/**
+ * Ganti L/P satu peserta di jadwal yang sedang tampil.
+ *
+ * Berbeda dari ganti nama, ini mengubah ANGKA: aturan babak dinilai ulang dari
+ * gender, begitu juga permintaan court 4 perempuan / 4 laki-laki dan komposisi
+ * tim mixed. Karena itu ia lewat jalur hitung ulang yang sama dengan kalibrasi
+ * manual - server yang menilai, dengan aturan yang asli, dan apa pun yang jadi
+ * terlanggar muncul di panel Catatan alih-alih diam.
+ */
+async function gantiGenderPemain(id, nilai) {
+  if (!schedule || kalibrasiSibuk) return;
+  const p = (schedule.players || []).find((x) => x.id === id);
+  if (!p) return;
+  const baru = nilai || null;
+  if (baru === (p.gender || null)) return;
+  const lama = p.gender;
+
+  // Sama seperti ganti nama: jadwal dan setup berubah bersamaan, jadi jadwalnya
+  // tidak jadi basi - kecuali memang sudah basi sebelum ini.
+  const basiSebelumnya = scheduleStamp !== null
+    && scheduleStamp !== schedulingStamp();
+  p.gender = baru;
+  const diSetup = players.find((x) => x.id === id);
+  if (diSetup) { diSetup.gender = baru; renderPlayers(); }
+  if (!basiSebelumnya) scheduleStamp = schedulingStamp();
+
+  const kata = (g) => (g === 'M' ? 'L' : g === 'F' ? 'P' : '-');
+  await hitungUlangJadwal(`${p.name}: ${kata(lama)} jadi ${kata(baru)}`);
+}
+
+// Catatan jadwal yang memang menyebut nama peserta di dalam kalimatnya.
+// Penggantian nama sengaja DIBATASI ke dua bentuk ini: catatan lain berisi
+// kalimat Indonesia biasa, dan peserta bernama "Ada" akan mengubah kata di
+// tengah kalimat kalau semua catatan disapu. Gagal mengganti cuma menyisakan
+// nama lama di satu catatan; salah mengganti merusak kalimatnya.
+const CATATAN_BERNAMA = ['partner tetap ', 'permintaan komposisi court'];
+
+/** Escape karakter yang punya arti khusus di regex. */
+function escRe(s) { return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); }
+
+/** Ganti nama di dalam sebuah kalimat, hanya kalau ia berdiri sebagai kata utuh.
+ *
+ * \b tidak dipakai: di JavaScript ia hanya mengenal [A-Za-z0-9_], jadi nama
+ * ber-aksen ("Nena" vs "Nena Rahmi") dan nama dua kata tidak terbatasi dengan
+ * benar - "Rina" akan ikut termakan di dalam "Rinaldi".
+ */
+function tukarNama(teks, lama, baru) {
+  const pola = new RegExp(
+    `(^|[^\\p{L}\\p{N}])${escRe(lama)}(?=[^\\p{L}\\p{N}]|$)`, 'gu');
+  return String(teks).replace(pola, (m, depan) => depan + baru);
+}
+
+/**
+ * Ganti nama satu peserta di jadwal yang sedang tampil.
+ *
+ * Nama peserta tidak muncul di satu tempat saja: ada di kartu ronde, rekap,
+ * garis waktu peran, grafik keterlibatan, dua matriks pertemuan, catatan,
+ * teks WhatsApp, jadwal per pemain, CSV, dan laporan cetak. Semua yang di
+ * layar membacanya dari schedule.players lewat gname(), jadi satu nilai yang
+ * diubah plus satu kali gambar ulang sudah menyeret semuanya - termasuk
+ * URUTAN baris kedua matriks, yang memang diurutkan menurut nama, dan nomor
+ * kolomnya yang ikut bergeser.
+ *
+ * Yang tidak ikut sendiri ada empat, dan keempatnya diurus di sini:
+ *
+ *   - salinan nama yang menempel di tiap match, bye, dan tugas di dalam
+ *     jadwal. Layar membacanya lewat id, tapi jadwal ini dikirim apa adanya
+ *     ke database - membiarkannya berarti menyimpan dua nama untuk satu orang;
+ *   - catatan dan daftar pelanggaran, yang menyebut nama di dalam kalimat;
+ *   - daftar peserta di tab Setup, supaya Generate berikutnya tidak
+ *     menghidupkan lagi nama yang barusan dibuang;
+ *   - teks WhatsApp, jadwal per pemain, dan CSV, yang lahir di server.
+ *
+ * Master pemain SENGAJA tidak disentuh: mengganti nama di satu acara bukan
+ * berarti nama orangnya di klub ikut berubah, dan menulisnya diam-diam akan
+ * mengubah seluruh riwayatnya.
+ *
+ * Mengembalikan false kalau namanya ditolak - pemanggil yang mengembalikan
+ * isian ke nama lama.
+ */
+function gantiNamaPemain(id, mentah) {
+  if (!schedule) return false;
+  const p = (schedule.players || []).find((x) => x.id === id);
+  if (!p) return false;
+  const lama = p.name;
+  // Dirapikan, bukan ditolak: nama ini masuk ke teks WhatsApp yang dibaca
+  // per baris, dan "Rina  S" berspasi dua bukan orang yang berbeda.
+  const baru = String(mentah || '').replace(/\s+/g, ' ').trim();
+  if (!baru) { toast('Nama peserta tidak boleh kosong'); return false; }
+  if (baru === lama) return false;
+  if (schedule.players.some(
+    (x) => x.id !== id && x.name.toLowerCase() === baru.toLowerCase())) {
+    // Dua peserta bernama sama akan LEBUR jadi satu baris begitu jadwalnya
+    // disimpan - tabel peserta acara berkunci (event_id, nama). Ditolak di
+    // sini supaya barisnya tidak hilang diam-diam di database.
+    toast(`Sudah ada peserta bernama "${baru}"`);
+    return false;
+  }
+
+  // Apakah setupnya memang sudah basi SEBELUM nama ini diganti. Tandanya tidak
+  // boleh terhapus oleh sebuah label, dan tidak boleh muncul karenanya.
+  const basiSebelumnya = scheduleStamp !== null
+    && scheduleStamp !== schedulingStamp();
+
+  p.name = baru;
+  (schedule.rounds || []).forEach((r) => {
+    (r.matches || []).forEach((m) => {
+      (m.team_a || []).concat(m.team_b || [])
+        .forEach((x) => { if (x.id === id) x.name = baru; });
+    });
+    (r.byes || []).concat(r.resting_only || [])
+      .forEach((x) => { if (x.id === id) x.name = baru; });
+    (r.roles || []).forEach((x) => { if (x.player_id === id) x.name = baru; });
+  });
+
+  // Pelanggaran preferensi menyebut namanya dua kali: sebagai data, dan di
+  // dalam kalimat yang dibaca host. Yang dicocokkan id-nya, bukan namanya.
+  (schedule.violations || []).forEach((v) => {
+    if (v.player_id !== id) return;
+    v.player_name = baru;
+    v.reason = tukarNama(v.reason || '', lama, baru);
+  });
+  schedule.notes = (schedule.notes || []).map(
+    (n) => (CATATAN_BERNAMA.some((k) => n.includes(k)) ? tukarNama(n, lama, baru) : n));
+
+  const diSetup = players.find((x) => x.id === id);
+  if (diSetup) { diSetup.name = baru; renderPlayers(); }
+
+  if (!basiSebelumnya) scheduleStamp = schedulingStamp();
+
+  renderSchedule();
+  refreshScheduleTexts();
+  // Ganti nama di rekap sebenarnya lebih sering dipakai untuk SUBSTITUSI
+  // peserta daripada untuk salah ketik. Kalau meet-nya memakai gender, yang
+  // paling gampang tertinggal adalah L/P-nya - dan yang ikut salah bukan cuma
+  // warna namanya, tapi aturan babak dan permintaan court. Diingatkan di sini,
+  // saat orangnya masih menatap baris yang sama.
+  const pakaiGender = schedule.players.some((x) => x.gender)
+    || (schedule.rounds || []).some((r) => r.rule && r.rule !== 'open');
+  toast(pakaiGender
+    ? `"${lama}" jadi "${baru}" - cek L/P kalau ini orang lain`
+    : `"${lama}" jadi "${baru}"`);
+  return true;
 }
 
 // Peta id -> peserta untuk jadwal yang sedang ditampilkan. Dulu tiap nama
@@ -1906,7 +2614,7 @@ $('events').addEventListener('click', async (e) => {
   if (open) {
     const d = await api('/api/events/get?id=' + open);
     applyRequest(d.event.request);
-    schedule = d.event.schedule;
+    pasangJadwal(d.event.schedule);
     currentEventId = +open;
     // Setup baru saja diisi dari acara ini, jadi jadwal yang dimuat memang
     // hasil dari setup yang tampil - belum basi.

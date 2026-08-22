@@ -568,6 +568,7 @@ def main() -> int:
             # Rekam jawaban endpoint penulisan ulang teks.
             b.js("""(() => {
               window.__cn = [];
+              window.__cnHook = true;
               const asli = window.fetch;
               window.fetch = async (u, o) => {
                 const res = await asli(u, o);
@@ -618,6 +619,384 @@ def main() -> int:
             assert balik == "C1", f"tidak kembali ke nama bawaan: '{balik}'"
             return f"{jml_court} court bisa dinamai, teks server ikut berubah"
         check("Ganti nama court", ganti_nama_court)
+
+        # --- 3a2. ganti nama peserta --------------------------------------
+        # Nama peserta muncul di jauh lebih banyak tempat daripada nama court:
+        # kartu ronde, rekap, dua matriks pertemuan (yang BARISNYA diurutkan
+        # menurut nama, jadi urutannya ikut bergeser), daftar peserta di tab
+        # Setup, dan tiga teks yang dibuat server. Yang diuji bukan cuma nama
+        # barunya muncul - tapi nama lamanya tidak tertinggal di satu pun.
+        def ganti_nama_pemain():
+            b.js("""(() => {
+              window.__cn = [];
+              if (window.__cnHook) return;
+              window.__cnHook = true;
+              const asli = window.fetch;
+              window.fetch = async (u, o) => {
+                const res = await asli(u, o);
+                if (String(u).includes('/api/schedule/text')) {
+                  res.clone().json().then(d => window.__cn.push(d))
+                     .catch(() => {});
+                }
+                return res;
+              };
+            })(); true""")
+
+            # Yang diganti adalah nama yang BUKAN bagian dari nama lain, supaya
+            # "nama lama sudah hilang" tidak gagal palsu gara-gara "Pemain 1"
+            # yang memang hidup di dalam "Pemain 12".
+            target = b.js("""(() => {
+              const kotak = [...document.querySelectorAll(
+                '#recap input[data-rename]')];
+              const nama = kotak.map((i) => i.value);
+              const pilih = kotak.find(
+                (i) => !nama.some((n) => n !== i.value && n.includes(i.value)));
+              return pilih ? {id: pilih.dataset.rename, nama: pilih.value} : null;
+            })()""")
+            assert target, "kotak nama di rekap tidak muncul"
+            lama, pid = target["nama"], target["id"]
+            baru = "Zulaikha Uji"
+            sel = json.dumps(f'#recap input[data-rename="{pid}"]')
+
+            def isi(nilai):
+                b.js("(() => { const i = document.querySelector(" + sel + ");"
+                     " i.value = " + json.dumps(nilai) + ";"
+                     " i.dispatchEvent(new Event('change', {bubbles:true}));"
+                     " })(); true")
+
+            def nama_rekap():
+                return b.js("[...document.querySelectorAll("
+                            "'#recap input[data-rename]')].map((i) => i.value)")
+
+            isi(baru)
+            rekap = nama_rekap()
+            assert baru in rekap, f"rekap belum memakai nama baru: {rekap[:3]}"
+            assert lama not in rekap, "nama lama masih ada di rekap"
+
+            # Matriks: isinya harus menyebut nama baru (termasuk di title tiap
+            # sel), dan urutan barisnya harus tetap sama dengan urutan rekap -
+            # keduanya diurutkan menurut nama, jadi kalau matriksnya tidak ikut
+            # digambar ulang, urutannya langsung berbeda.
+            for panel in ("rounds", "matrix"):
+                html = b.js(f"document.getElementById('{panel}').innerHTML")
+                assert baru in html, f"nama baru tidak muncul di #{panel}"
+                assert lama not in html, f"nama lama tertinggal di #{panel}"
+            baris_mx = b.js("""(() => {
+              return [...document.querySelectorAll('#mx-partner .mx-row')]
+                .map((e) => {
+                  const no = e.querySelector('.mx-no');
+                  return e.textContent.slice(no ? no.textContent.length : 0);
+                });
+            })()""")
+            assert baris_mx == rekap, (
+                f"urutan baris matriks tidak ikut nama baru: {baris_mx[:3]} "
+                f"vs {rekap[:3]}")
+
+            # Daftar peserta di tab Setup ikut, kalau tidak Generate berikutnya
+            # menghidupkan lagi nama yang barusan dibuang.
+            setup = b.js("[...document.querySelectorAll('#ptable .nm')]"
+                         ".map((i) => i.value)")
+            assert baru in setup, "tab Setup masih memakai nama lama"
+            assert lama not in setup, "nama lama masih ada di tab Setup"
+
+            b.wait_for("window.__cn.length > 0", timeout=15,
+                       label="teks ditulis ulang server")
+            d = b.js("window.__cn[window.__cn.length - 1]")
+            for kunci in ("text", "personal_text", "csv"):
+                teks = d.get(kunci) or ""
+                assert baru in teks, f"nama baru tidak masuk ke {kunci}"
+                assert lama not in teks, f"nama lama masih ada di {kunci}"
+
+            # Nama kembar ditolak, tanpa membedakan huruf besar-kecil: dua
+            # peserta bernama sama akan lebur jadi satu baris di database.
+            lain = [n for n in nama_rekap() if n != baru][0]
+            isi(lain.lower())
+            sesudah = nama_rekap()
+            assert sesudah.count(lain) == 1, f"nama kembar lolos: {lain}"
+            assert baru in sesudah, "penolakan ikut menghapus nama yang sah"
+
+            # Nama kosong juga ditolak, dan isiannya kembali ke nama semula.
+            isi("")
+            assert b.js("document.querySelector(" + sel + ").value") == baru, \
+                "nama kosong tidak dikembalikan"
+
+            isi(lama)
+            assert lama in nama_rekap(), "tidak bisa dikembalikan ke nama semula"
+            return (f"'{lama}' -> '{baru}' menyeret rekap, matriks, kartu ronde, "
+                    f"tab Setup, dan tiga teks server")
+        check("Ganti nama peserta", ganti_nama_pemain)
+
+        # --- 3a4. ganti L/P di rekap --------------------------------------
+        # Ganti nama di rekap sebenarnya dipakai untuk SUBSTITUSI peserta, dan
+        # pengganti yang beda gender meninggalkan jadwal yang diam-diam
+        # memperlakukan dia sebagai gender orang yang digantikan. Yang diuji:
+        # L/P bisa diubah di baris yang sama, dan perubahannya menyeret warna
+        # nama di kartu ronde, tab Setup, serta penilaian aturan di server.
+        def ganti_gender():
+            target = b.js("""(() => {
+              const sel = [...document.querySelectorAll('#recap select[data-gender]')]
+                .find((s) => s.value === 'M' || s.value === 'F');
+              if (!sel) return null;
+              const id = +sel.dataset.gender;
+              const nama = sel.closest('tr').querySelector('input').value;
+              return {id, nama, semula: sel.value,
+                      tujuan: sel.value === 'M' ? 'F' : 'M'};
+            })()""")
+            assert target, "tidak ada peserta bergender di rekap"
+            pid, semula, tujuan = target["id"], target["semula"], target["tujuan"]
+            kelas_awal = "g-m" if semula == "M" else "g-f"
+            kelas_baru = "g-m" if tujuan == "M" else "g-f"
+
+            warna = (f"[...document.querySelectorAll("
+                     f"'#rounds .nm-swap[data-tukar$=\\\":{pid}\\\"] span')]"
+                     f".every((s) => s.classList.contains('{kelas_baru}'))")
+            jumlah = b.js(f"document.querySelectorAll("
+                          f"'#rounds .nm-swap[data-tukar$=\":{pid}\"]').length")
+            assert jumlah > 0, "nama peserta ini tidak muncul di kartu ronde"
+
+            b.js(f"""(() => {{
+              const s = document.querySelector(
+                '#recap select[data-gender="{pid}"]');
+              s.value = '{tujuan}';
+              s.dispatchEvent(new Event('change', {{bubbles:true}}));
+            }})(); true""")
+            b.wait_for(warna, timeout=25,
+                       label="warna nama di kartu ronde ikut berubah")
+
+            pil = b.js(f"""document.querySelector(
+              '#recap select[data-gender="{pid}"]').className""")
+            assert pil.strip().endswith("f" if tujuan == "F" else "m"), \
+                f"pil L/P di rekap tidak ikut berubah: '{pil}'"
+            di_setup = b.js(f"""(() => {{
+              const baris = [...document.querySelectorAll('#ptable tbody tr')]
+                .find((r) => r.querySelector('.nm').value === """
+                            + json.dumps(target["nama"]) + """);
+              return baris ? baris.querySelector('[data-f="gender"]').value : null;
+            })()""")
+            assert di_setup == tujuan, \
+                f"tab Setup masih menyebut L/P lama: {di_setup}"
+
+            # Dikembalikan: angkanya harus pulih, termasuk catatan pelanggaran
+            # yang mungkin lahir dari perubahan tadi.
+            b.js(f"""(() => {{
+              const s = document.querySelector(
+                '#recap select[data-gender="{pid}"]');
+              s.value = '{semula}';
+              s.dispatchEvent(new Event('change', {{bubbles:true}}));
+            }})(); true""")
+            b.wait_for(
+                f"[...document.querySelectorAll("
+                f"'#rounds .nm-swap[data-tukar$=\":{pid}\"] span')]"
+                f".every((s) => s.classList.contains('{kelas_awal}'))",
+                timeout=25, label="warna nama kembali")
+            return (f"{target['nama']}: {semula} -> {tujuan} menyeret {jumlah} "
+                    f"nama di kartu ronde, pil rekap, dan tab Setup")
+        check("Ganti L/P peserta di rekap", ganti_gender)
+
+        # --- 3a5. ganti rating di rekap -----------------------------------
+        # Bagian ketiga dari substitusi peserta: pengganti bisa beda kekuatan.
+        # Rating tidak menyentuh skor kualitas, tapi ia menggerakkan selisih
+        # rating antar tim yang tercetak di laporan, dan di mode pool rating ia
+        # yang MENENTUKAN pool tiap orang - jadi ia harus lewat hitung ulang
+        # server, bukan cuma diubah di layar.
+        def ganti_rating():
+            b.js("""(() => {
+              window.__rc = [];
+              if (window.__rcHook) return;
+              window.__rcHook = true;
+              const asli = window.fetch;
+              window.fetch = async (u, o) => {
+                const res = await asli(u, o);
+                if (String(u).includes('/api/schedule/recalc')) {
+                  res.clone().json().then((d) => window.__rc.push(d))
+                     .catch(() => {});
+                }
+                return res;
+              };
+            })(); true""")
+
+            target = b.js("""(() => {
+              const inp = document.querySelector('#recap input[data-rating]');
+              return inp ? {id: +inp.dataset.rating, nilai: inp.value,
+                            nama: inp.closest('tr').querySelector('input').value}
+                : null;
+            })()""")
+            assert target, "kolom rating tidak muncul di rekap"
+            pid, semula, nama = target["id"], target["nilai"], target["nama"]
+            baru = "6.5" if float(semula) != 6.5 else "2.5"
+
+            def isi(nilai):
+                b.js("(() => { const i = document.querySelector("
+                     + json.dumps(f'#recap input[data-rating="{pid}"]')
+                     + "); i.value = " + json.dumps(nilai) + ";"
+                     " i.dispatchEvent(new Event('change', {bubbles:true}));"
+                     " })(); true")
+
+            isi(baru)
+            b.wait_for("window.__rc.length > 0", timeout=25,
+                       label="statistik dihitung ulang server")
+            b.wait_for(f"""document.querySelector(
+              '#recap input[data-rating="{pid}"]').value === {json.dumps(baru)}""",
+                       timeout=10, label="rating baru bertahan setelah digambar ulang")
+            di_setup = b.js("""(() => {
+              const baris = [...document.querySelectorAll('#ptable tbody tr')]
+                .find((r) => r.querySelector('.nm').value === """
+                            + json.dumps(nama) + """);
+              return baris ? baris.querySelector('[data-f="rating"]').value : null;
+            })()""")
+            assert float(di_setup) == float(baru), \
+                f"tab Setup masih menyebut rating lama: {di_setup}"
+
+            # Di luar rentang dijepit SEKETIKA, bukan menunggu jawaban server.
+            isi("99")
+            jepit = b.js(f"""document.querySelector(
+              '#recap input[data-rating="{pid}"]').value""")
+            assert float(jepit) == 7, f"rating 99 tidak dijepit ke 7: {jepit}"
+
+            # Bukan angka ditolak, dan isiannya kembali ke nilai sebelumnya.
+            b.wait_for("window.__rc.length >= 2", timeout=25, label="jepitan dihitung")
+            isi("bukan angka")
+            tolak = b.js(f"""document.querySelector(
+              '#recap input[data-rating="{pid}"]').value""")
+            assert float(tolak) == 7, f"isian tidak sah tidak dikembalikan: {tolak}"
+
+            isi(semula)
+            b.wait_for(f"""document.querySelector(
+              '#recap input[data-rating="{pid}"]').value === {json.dumps(semula)}""",
+                       timeout=25, label="rating kembali ke semula")
+            return (f"{nama}: rating {semula} -> {baru} sampai ke tab Setup, "
+                    f"99 dijepit ke 7, bukan-angka ditolak")
+        check("Ganti rating peserta di rekap", ganti_rating)
+
+        # --- 3a3. kalibrasi manual: tukar orang di dalam satu ronde -------
+        # Yang diuji bukan namanya pindah di kartu ronde - itu bagian yang
+        # gampang. Yang diuji adalah seluruh TURUNANNYA ikut bergeser: jumlah
+        # main di rekap pemain, skor kualitas, dan teks salinan. Angka itu
+        # lahir di server dari kode penilaian yang sama dengan saat generate,
+        # jadi kalau round-trip-nya putus yang tampil adalah angka jadwal yang
+        # sudah tidak ada - dan itu tidak kelihatan dari layar.
+        #
+        # Semuanya dibaca dari DOM, bukan dari variabel app.js: app.js dimuat
+        # sebagai module, jadi state-nya memang tidak bisa dijangkau dari luar -
+        # dan yang ingin dijamin justru apa yang benar-benar dibaca host.
+        def kalibrasi_tukar():
+            # Kolom "Main" dicari lewat kepala tabel, bukan dihitung dari kiri:
+            # kolom L/P dan kolom tugas muncul-hilang mengikuti setup.
+            def main_di_rekap(nama):
+                return b.js("""(() => {
+                  const th = [...document.querySelectorAll(
+                    '#recap table.data thead th')].map((x) => x.textContent.trim());
+                  const i = th.indexOf('Main');
+                  const row = [...document.querySelectorAll(
+                    '#recap table.data tbody tr')].find(
+                      (x) => x.querySelector('input').value === """
+                            + json.dumps(nama) + """);
+                  return row ? +row.children[i].textContent : null;
+                })()""")
+
+            def kualitas():
+                return b.js("""(() => {
+                  const k = [...document.querySelectorAll('#sched-stats .stat')]
+                    .find((s) => s.querySelector('.k').textContent === 'Kualitas');
+                  // Angkanya saja: kartu berstatus membawa glif di depan
+                  // nilainya, dan glif itu tidak bisa dicetak di konsol Windows.
+                  return k ? k.querySelector('.v').textContent
+                    .replace(/[^0-9.]/g, '') : null;
+                })()""")
+
+            # Ronde yang punya orang menganggur DAN orang main: hanya di situ
+            # pertukaran menggeser jumlah main.
+            target = b.js("""(() => {
+              const per = {};
+              document.querySelectorAll('#rounds .nm-swap').forEach((t) => {
+                const [ri, pid] = t.dataset.tukar.split(':');
+                const posisi = t.closest('.resting') ? 'duduk'
+                  : t.closest('.duty') ? 'tugas' : 'main';
+                (per[ri] = per[ri] || []).push(
+                  {pid: +pid, nama: t.textContent.trim(), posisi});
+              });
+              for (const ri of Object.keys(per)) {
+                const duduk = per[ri].find((o) => o.posisi === 'duduk');
+                const main = per[ri].find((o) => o.posisi === 'main');
+                if (duduk && main) return {ri: +ri, duduk, main};
+              }
+              return null;
+            })()""")
+            assert target, "tidak ada ronde dengan peserta menganggur"
+            ri, duduk, main = target["ri"], target["duduk"], target["main"]
+            m_duduk, m_main = main_di_rekap(duduk["nama"]), main_di_rekap(main["nama"])
+            skor_awal = kualitas()
+            assert m_duduk is not None and m_main is not None, "rekap tidak terbaca"
+
+            # Menu dibuka lewat klik pada nama, persis seperti host.
+            b.js(f"""document.querySelector(
+              '#rounds .nm-swap[data-tukar="{ri}:{main['pid']}"]').click(); true""")
+            b.wait_for("document.querySelector('.swapmenu')", timeout=5,
+                       label="menu tukar")
+            baris = b.js("document.querySelectorAll('.swapmenu .sm-row').length")
+            assert baris >= 3, f"pilihan tukar terlalu sedikit: {baris}"
+            kepala = b.js("document.querySelector('.swapmenu .sm-h').textContent")
+            assert "main" in kepala, f"kepala menu tidak menyebut posisinya: {kepala}"
+            akibat = b.js(f"""document.querySelector(
+              '.swapmenu .sm-row[data-pilih="{duduk['pid']}"] .sm-e').textContent""")
+            assert f"{m_duduk}" in akibat and f"{m_duduk + 1}" in akibat, \
+                f"akibat pertukaran tidak disebut dengan benar: '{akibat}'"
+
+            b.js(f"""document.querySelector(
+              '.swapmenu .sm-row[data-pilih="{duduk['pid']}"]').click(); true""")
+            # Angkanya baru berubah setelah server menjawab; menunggu di rekap
+            # berarti yang ditunggu adalah yang benar-benar dibaca host.
+            b.wait_for(f"""(() => {{
+              const th = [...document.querySelectorAll(
+                '#recap table.data thead th')].map((x) => x.textContent.trim());
+              const row = [...document.querySelectorAll(
+                '#recap table.data tbody tr')].find(
+                  (x) => x.querySelector('input').value === {json.dumps(duduk['nama'])});
+              return row && +row.children[th.indexOf('Main')].textContent
+                === {m_duduk + 1};
+            }})()""", timeout=25, label="rekap dihitung ulang server")
+
+            assert not b.js("!!document.querySelector('.swapmenu')"), \
+                "menu tidak tertutup setelah memilih"
+            assert main_di_rekap(main["nama"]) == m_main - 1, \
+                "yang keluar tidak berkurang jumlah mainnya di rekap"
+            # Namanya benar-benar bertukar di kartu ronde.
+            posisi_baru = b.js(f"""(() => {{
+              const t = document.querySelector(
+                '#rounds .nm-swap[data-tukar="{ri}:{duduk['pid']}"]');
+              return t ? (t.closest('.resting') ? 'duduk'
+                : t.closest('.duty') ? 'tugas' : 'main') : null;
+            }})()""")
+            assert posisi_baru == "main", \
+                f"yang masuk tidak jadi main di kartu ronde: {posisi_baru}"
+
+            skor_baru = kualitas()
+            catatan = b.js("document.getElementById('notes').textContent")
+            assert "Kalibrasi manual" in catatan, \
+                "catatan tidak menyebut jadwal ini sudah dikalibrasi"
+            assert "1 pertukaran" in catatan, f"jumlah kalibrasi salah: {catatan[:80]}"
+
+            # Urungkan harus mengembalikan ANGKANYA, bukan cuma susunannya.
+            b.js("document.getElementById('kal-urung').click(); true")
+            b.wait_for(f"""(() => {{
+              const th = [...document.querySelectorAll(
+                '#recap table.data thead th')].map((x) => x.textContent.trim());
+              const row = [...document.querySelectorAll(
+                '#recap table.data tbody tr')].find(
+                  (x) => x.querySelector('input').value === {json.dumps(duduk['nama'])});
+              return row && +row.children[th.indexOf('Main')].textContent === {m_duduk};
+            }})()""", timeout=25, label="urung dihitung ulang")
+            assert kualitas() == skor_awal, \
+                f"skor tidak kembali setelah diurungkan: {skor_awal} -> {kualitas()}"
+            assert not b.js("!!document.getElementById('kal-urung')"), \
+                "tombol urung masih ada padahal tidak ada lagi yang bisa diurungkan"
+            assert "Kalibrasi manual" not in b.js(
+                "document.getElementById('notes').textContent"), \
+                "catatan kalibrasi tidak ikut hilang saat diurungkan"
+            return (f"R{ri + 1}: {duduk['nama']} main {m_duduk}->{m_duduk + 1}, "
+                    f"{main['nama']} {m_main}->{m_main - 1}, kualitas "
+                    f"{skor_awal}->{skor_baru}, urung mengembalikan semuanya")
+        check("Kalibrasi manual: tukar orang di satu ronde", kalibrasi_tukar)
 
         # --- 3b. log kemajuan terisi dari server --------------------------
         def proglog():

@@ -379,6 +379,87 @@ dan tidak bertugas. Dengan 26 pemain di 4 court,
 10 orang duduk tiap ronde — tapi 8 di antaranya bertugas, jadi hanya 2 yang
 benar-benar menganggur. Ini yang membuat court sedikit tetap masuk akal.
 
+**Ganti nama peserta setelah jadwal jadi**
+Salah ketik nama biasanya baru ketahuan saat jadwalnya dibaca, bukan saat
+diketik. Nama bisa diganti langsung di tabel rekap pemain di tab Jadwal, dan
+satu kali ganti menyeret semuanya: kartu ronde, rekap, garis waktu peran,
+grafik keterlibatan, kedua matriks pertemuan (termasuk urutan barisnya, yang
+memang diurutkan menurut nama), catatan, daftar peserta di tab Setup, teks
+WhatsApp, jadwal per pemain, CSV, dan laporan cetak. Susunan pertandingannya
+sendiri tidak disentuh — tidak ada penjadwalan ulang, jadi jadwal yang sudah
+diumumkan ke peserta tetap sama persis.
+
+**L/P bisa diubah di baris yang sama**, dan itu bukan hiasan: ganti nama di
+rekap lebih sering dipakai untuk SUBSTITUSI peserta daripada untuk salah ketik —
+seseorang batal datang dan digantikan orang lain. Kalau penggantinya beda
+gender, mengganti namanya saja meninggalkan jadwal yang diam-diam
+memperlakukan dia sebagai gender orang yang digantikan, dan yang ikut salah
+bukan cuma warna namanya: aturan babak putra/putri/mixed, permintaan court 4
+perempuan / 4 laki-laki, dan komposisi tim semuanya membaca field itu.
+
+**Rating juga bisa diubah di baris yang sama.** Ia tidak menyentuh skor
+kualitas — penilaian jadwal tidak memuat satu suku rating pun — tapi ia
+menggerakkan dua hal lain: selisih rating antar tim yang tercetak di laporan,
+dan di mode pool rating, pool tiap orang yang memang DITURUNKAN dari
+ratingnya. Yang kedua berarti satu angka yang diubah bisa membuat court yang
+tadinya satu pool jadi campur, dan itu ikut dilaporkan.
+
+Ketiganya — nama, L/P, rating — memicu hitung ulang yang sama dengan kalibrasi
+manual di bawah, jadi aturan yang jadi terlanggar karenanya muncul di panel
+Catatan, bukan diam. Kalau satu perubahan melanggar banyak court sekaligus,
+catatannya dirinci sampai delapan lalu sisanya diringkas — peringatan yang
+sama belasan kali berhenti jadi peringatan. Ganti nama sendiri mengingatkan
+soal L/P lewat toast kalau meet-nya memang memakai gender.
+
+Nama kembar ditolak, tanpa membedakan huruf besar-kecil: tabel peserta acara
+berkunci nama, jadi dua orang bernama sama akan lebur jadi satu baris begitu
+disimpan. Master pemain sengaja tidak ikut berubah — mengganti nama di satu
+acara bukan berarti nama orangnya di klub ikut berganti, dan menulisnya
+diam-diam akan mengubah seluruh riwayatnya.
+
+**Kalibrasi manual: tukar orang di dalam satu ronde**
+Penjadwal mengoptimalkan apa yang bisa diukurnya. Yang tidak bisa diukurnya
+adalah yang cuma diketahui host: satu orang datang telat dan minta main lebih
+banyak di ronde akhir, satu orang cedera ringan dan minta duduk, satu pasangan
+sengaja dipertemukan karena tamu. Menjadwal ulang untuk itu berarti membuang
+seluruh susunan yang mungkin sudah diumumkan.
+
+Klik nama siapa pun di kartu ronde — yang main, yang bertugas, atau yang
+istirahat — dan muncul daftar semua peserta lain di ronde yang sama, dikelompokkan
+menurut posisinya, lengkap dengan akibatnya sebelum diklik (`main 4 → 5`,
+`tukar posisi`, `tukar tugas`).
+
+Bentuk operasinya **satu dan cuma satu: dua orang bertukar posisi**. Itu bukan
+penyederhanaan, itu yang membuatnya mustahil merusak jadwal — tiap orang selalu
+punya tepat satu posisi per ronde, jadi menukar dua posisi selalu menghasilkan
+ronde yang tetap sah bentuknya: tidak ada tim isi tiga, tidak ada orang di dua
+court sekaligus, tidak ada court yang kehilangan wasitnya.
+
+Seluruh angka dihitung ulang **di server, dengan kode penilaian yang sama persis
+dengan yang dipakai saat generate** — jumlah main, matriks partner & lawan, duduk
+beruntun, tunggu terpanjang, giliran terlewat, dan skor kualitas yang merangkum
+semuanya. Menghitungnya di browser berarti menyalin dua ratus baris penilaian
+paling halus di repo ini lalu menjaga dua salinan tetap sama; yang pertama
+terlihat kalau salinannya melenceng adalah skor yang bergeser tanpa ada yang
+menukar siapa pun. Karena itu satu tes menjaga invariannya: atas jadwal yang
+belum disentuh, penghitung ulang harus mengembalikan angka yang identik dengan
+keluaran penjadwal — diuji pada americano, pool rating, mexicano, 1 court, dan
+babak bersegmen (termasuk yang selang-seling).
+
+Aturan keras yang dilanggar **dilaporkan, bukan dicegah**. Memasukkan peserta
+putri ke ronde babak putra tetap bisa dilakukan — host biasanya tahu sesuatu
+yang tidak diketahui mesin — tapi pilihannya ditandai di daftar sebelum diklik,
+dan pelanggarannya muncul di panel Catatan serta di laporan cetak. Catatan
+kalibrasi juga menyebut berapa pertukaran yang sudah dilakukan, supaya angka di
+catatan lama (yang menggambarkan jadwal saat pertama dibuat) tidak dibaca
+sebagai keadaan sekarang.
+
+Tiap pertukaran bisa diurungkan berurutan, dan ada tombol kembali ke susunan
+awal. Keduanya hanya berlaku untuk sesi ini: susunan hasil generate tidak ikut
+tersimpan ke database, jadi jadwal yang dibuka dari riwayat tidak punya titik
+kembali — dan tombol yang tidak bisa mengembalikan apa pun lebih buruk daripada
+tombol yang tidak ada.
+
 **Biaya & margin**
 Rekomendasi tidak berhenti di "sewa lebih banyak court". Panel ini menunjukkan
 biaya, pemasukan, margin, dan waktu main per peserta untuk tiap kombinasi
@@ -650,8 +731,8 @@ Data acara ada di `%APPDATA%\Padelin` saat dipasang lewat installer, dan
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 250 tes unit
-python tools/uitest.py                  # 30 uji interaksi di browser sungguhan
+python -m unittest discover -s tests    # 257 tes unit
+python tools/uitest.py                  # 36 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 python tools/cetaktest.py               # 15 uji jalur cetak & pratinjau (Electron)
 python tools/apptest.py                 # 18 uji aplikasi desktop sungguhan

@@ -250,7 +250,9 @@ input[type=date],input[type=time]{color-scheme:dark}
 
 /* Ganti nama court. Kotaknya sempit dan berjajar: namanya pendek, dan host
    membandingkan keempatnya sekaligus dengan kartu ronde di bawahnya. */
-.court-names{margin-bottom:10px}
+/* Selektor id, bukan kelas: elemennya cuma ber-id, dan versi kelasnya membuat
+   jarak ini tidak pernah berlaku - legenda gender menempel ke kotak isian. */
+#court-names{margin-bottom:12px}
 .cn-h{font-size:11px;color:var(--muted);font-weight:600;margin-bottom:6px}
 .cn-h .hint{display:block;color:var(--dim);font-weight:400;font-style:italic;
   margin:3px 0 0;line-height:1.5}
@@ -267,8 +269,10 @@ input[type=date],input[type=time]{color-scheme:dark}
    memuat hurufnya, jadi warnanya mempercepat, bukan menggantikan. */
 .g-m{color:var(--male)}
 .g-f{color:var(--female)}
+/* Legenda berdiri di antara kotak isian nama court dan kartu ronde, jadi
+   jaraknya dibawa sendiri - tidak ada yang bisa diandalkan dari tetangganya. */
 .gkey{display:flex;gap:14px;flex-wrap:wrap;font-size:11px;color:var(--muted);
-  margin:0 0 8px}
+  margin:2px 0 10px}
 .gkey b{font-weight:700}
 
 /* Pil L/P di tabel peserta & rekap: hurufnya tetap ada, warnanya cuma
@@ -290,6 +294,78 @@ table.data tr:hover td{background:var(--panel-2)}
 table.data td.num,table.data th.num{text-align:center}
 table.data td.num{font-variant-numeric:tabular-nums}
 table.data .pick{color:var(--good);font-weight:700}
+
+/* Nama peserta yang bisa diganti di tempat (tabel rekap). Kotaknya sengaja
+   tidak terlihat sebagai kotak sampai disentuh: rekap jauh lebih sering
+   DIBACA daripada diubah, dan 26 kotak berbingkai membuat tabel angka
+   terbaca seperti formulir isian. Warna gendernya diwarisi dari kelas
+   g-m / g-f yang menempel di kotaknya sendiri. */
+/* min-width sengaja NOL. Dengan lantai lebar di sini, tabel rekap tidak bisa
+   memampatkan kolom namanya, jadi ia tumbuh melewati kartunya sendiri dan
+   menindih kolom di sebelah kanan - paling cepat terlihat saat kolom wasit
+   dan ballboy ikut menyala. Yang menahan lebarnya sekarang .rk-wrap. */
+table.data input.nm-edit{
+  width:100%;min-width:0;background:none;color:inherit;font:inherit;
+  border:1px solid transparent;border-radius:5px;padding:2px 6px;margin:-2px 0;
+}
+table.data input.nm-edit:hover{border-color:var(--line);background:var(--bg)}
+table.data input.nm-edit:focus{border-color:var(--accent);background:var(--bg)}
+/* Warna gender ditulis ulang di sini karena color:inherit di atas lebih
+   spesifik daripada .g-m / .g-f - tanpa dua baris ini nama di rekap kehilangan
+   kode warna yang masih dipakai kartu ronde di sebelahnya. */
+table.data input.nm-edit.g-m{color:var(--male)}
+table.data input.nm-edit.g-f{color:var(--female)}
+
+/* L/P di rekap: pil yang bisa diubah. Rupanya dijaga sama persis dengan pil
+   .gp yang statis di tabel peserta - hurufnya tetap dicetak, warnanya cuma
+   mempercepat - supaya kolom yang sama di dua tabel tidak terbaca sebagai dua
+   hal yang berbeda. Panah dropdown bawaan dibuang: di kotak selebar 28px ia
+   memakan ruang hurufnya sendiri, dan yang perlu diberitahukan sudah
+   disampaikan oleh tepi yang muncul saat disentuh. */
+select.gp-edit{
+  appearance:none;-webkit-appearance:none;width:auto;min-width:28px;
+  border:1px solid transparent;border-radius:4px;padding:1px 5px;
+  font-size:10px;font-weight:700;line-height:1.4;text-align:center;
+  cursor:pointer;background:none;color:var(--dim);
+}
+select.gp-edit.m{color:var(--male);background:var(--male-dim)}
+select.gp-edit.f{color:var(--female);background:var(--female-dim)}
+select.gp-edit:hover{border-color:var(--line)}
+select.gp-edit:focus{border-color:var(--accent);outline:0}
+
+/* Rating di rekap. Tombol panah bawaan input number dibuang: di kolom
+   selebar 52px ia memakan ruang angkanya sendiri, dan naik-turun 0,5 lebih
+   cepat diketik daripada diklik. */
+table.data input.rt-edit{
+  width:46px;min-width:0;background:none;color:inherit;font:inherit;
+  text-align:center;font-variant-numeric:tabular-nums;
+  border:1px solid transparent;border-radius:5px;padding:2px 4px;margin:-2px 0;
+  -moz-appearance:textfield;appearance:textfield;
+}
+table.data input.rt-edit::-webkit-inner-spin-button,
+table.data input.rt-edit::-webkit-outer-spin-button{
+  -webkit-appearance:none;appearance:none;margin:0;
+}
+table.data input.rt-edit:hover{border-color:var(--line);background:var(--bg)}
+table.data input.rt-edit:focus{border-color:var(--accent);background:var(--bg)}
+
+/* Tabel rekap menggulir di dalam kartunya, bukan meluber keluar. Kartunya
+   duduk di kolom kiri yang lebarnya dibatasi 420px, sementara isinya bisa
+   sampai tujuh kolom saat wasit & ballboy menyala. */
+.rk-wrap{overflow-x:auto;margin:0 -2px;padding:0 2px}
+/* Padding mendatar dipersempit dan kolom nama diberi lantai: tanpa lantainya
+   nama peserta yang menyusut duluan saat kolomnya sesak, dan "Pemain 12"
+   terpotong jadi "Pem" sementara kolom angka tetap lapang. */
+.rk-wrap table.data th,.rk-wrap table.data td{padding-left:7px;padding-right:7px}
+.rk-wrap table.data th:first-child,.rk-wrap table.data td:first-child{
+  min-width:100px;
+}
+
+/* Catatan kecil di atas tabel yang isinya bisa diubah di tempat. Ia duduk di
+   dekat tabelnya, bukan di judul kartu: yang perlu tahu "nama ini ikut ke
+   mana" adalah orang yang tangannya sudah di atas namanya. */
+.rk-hint{font-size:11px;color:var(--dim);font-style:italic;line-height:1.5;
+  margin:0 0 8px}
 
 /* Matriks pertemuan.
    Lebarnya tumbuh kuadrat terhadap jumlah peserta - 26 orang sudah jauh
@@ -586,4 +662,61 @@ input[type=file]{padding:6px 8px;font-size:12px}
 #debug-out{
   margin-top:10px;font-family:ui-monospace,Menlo,Consolas,monospace;
   font-size:11px;line-height:1.5;color:var(--muted);background:var(--bg);
+}
+
+/* =========================================================================
+   Kalibrasi manual: tukar orang di dalam satu ronde
+   ========================================================================= */
+
+/* Nama di kartu ronde bisa diklik, tapi TIDAK boleh terlihat seperti tombol.
+   Satu kartu ronde memuat sampai enam belas nama; enam belas kotak bertepi
+   akan mengubah jadwal yang dibaca sekilas jadi papan kontrol. Jadi yang
+   ditambahkan cuma garis bawah putus-putus samar - cukup untuk memberi tahu
+   ada sesuatu di balik nama, tidak cukup untuk merebut perhatian dari
+   susunannya sendiri. */
+.nm-swap{
+  background:none;border:0;padding:0;margin:0;color:inherit;font:inherit;
+  cursor:pointer;border-bottom:1px dotted var(--line);border-radius:0;
+}
+.nm-swap:hover,.nm-swap:focus-visible{
+  border-bottom-color:var(--accent);background:var(--accent-dim);outline:0;
+}
+.resting .nm-swap,.match .duty .nm-swap{border-bottom-color:transparent}
+.resting .nm-swap:hover,.match .duty .nm-swap:hover{border-bottom-color:var(--accent)}
+
+.kal-h{font-size:11px;color:var(--muted);font-weight:600;margin-bottom:6px}
+.kal-h .hint{display:block;color:var(--dim);font-weight:400;font-style:italic;
+  margin:3px 0 0;line-height:1.5}
+.kal-n{font-size:11.5px;color:var(--warn);margin-bottom:6px}
+#kalibrasi{margin-bottom:12px}
+#kalibrasi .btn-row{margin:0}
+
+/* Menu pilihan tukar. Ditambatkan ke nama yang diklik, jadi posisinya diatur
+   JS - CSS di sini cuma mengurus rupanya. */
+.swapmenu{
+  position:absolute;z-index:120;min-width:250px;max-width:330px;
+  max-height:min(420px,70vh);overflow-y:auto;
+  background:var(--panel-2);border:1px solid var(--line);border-radius:8px;
+  box-shadow:0 10px 30px rgba(0,0,0,.5);padding:4px;
+}
+.sm-h{padding:8px 9px 6px;font-size:12.5px;color:var(--ink)}
+.sm-sub{display:block;color:var(--dim);font-size:11px;margin-top:2px}
+.sm-g{
+  padding:7px 9px 3px;font-size:10px;text-transform:uppercase;
+  letter-spacing:.06em;color:var(--muted);font-weight:700;
+}
+.sm-row{
+  display:grid;grid-template-columns:1fr auto auto;gap:8px;align-items:baseline;
+  width:100%;text-align:left;background:none;border:0;border-radius:6px;
+  padding:6px 9px;cursor:pointer;color:var(--ink);font:inherit;font-size:12.5px;
+}
+.sm-row:hover,.sm-row:focus-visible{background:var(--accent-dim);outline:0}
+.sm-w{color:var(--dim);font-size:11px}
+.sm-e{color:var(--muted);font-size:11px;white-space:nowrap;
+  font-variant-numeric:tabular-nums}
+/* Pilihan yang melanggar aturan keras tetap bisa diklik - host yang memutuskan.
+   Yang diberikan warna adalah ALASANNYA, di barisnya sendiri, supaya
+   keputusannya diambil sambil melihat harganya. */
+.sm-row.bad .sm-x{
+  grid-column:1 / -1;color:var(--warn);font-size:11px;font-style:italic;
 }
