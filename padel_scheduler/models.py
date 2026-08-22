@@ -188,6 +188,12 @@ class Round:
     end_min: int = 0
     # Label segmen ("Putra" / "Putri" / "Mixed"), kosong kalau meet satu babak.
     segment: str = ""
+    # Aturan komposisi babak ronde ini: "open" | "men" | "women" | "mixed" |
+    # "same_gender". Label saja tidak cukup untuk menilai apakah sebuah
+    # pertukaran manual sah - host boleh menamai babaknya apa saja, dan dua
+    # babak boleh bernama sama. Jadwal lama tidak punya field ini; kosong
+    # dibaca sebagai "open", yang berarti tidak ada yang dilarang.
+    rule: str = ""
     # Mode tiered: label pool per court, supaya bisa ditampilkan di UI.
     court_labels: dict[int, str] = field(default_factory=dict)
     # Wasit & ballboy ronde ini, diambil dari yang istirahat.

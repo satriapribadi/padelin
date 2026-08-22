@@ -11,8 +11,10 @@ yang tidak boleh dilanggar apa pun setup-nya:
 
 from __future__ import annotations
 
+import json
 import math
 import unittest
+from dataclasses import asdict
 from collections import Counter
 from itertools import combinations
 
@@ -45,7 +47,8 @@ from padel_scheduler.optimizer import (
     play_counts,
     polish_pairs,
 )
-from padel_scheduler.scheduler import ScheduleError
+from padel_scheduler.report import from_dict, to_dict
+from padel_scheduler.scheduler import LANGGAR_MAX, ScheduleError, hitung_ulang
 
 
 def make_players(n, genders=None, ratings=None):
@@ -3135,3 +3138,163 @@ class TestPenyempurnaanJendela(unittest.TestCase):
                         cat[0], r"\d",
                         "pemeriksaan berjalan tapi catatannya tidak menyebut "
                         "satu angka pun")
+
+
+class TestHitungUlang(unittest.TestCase):
+    """Penghitung ulang untuk jadwal yang dikalibrasi tangan.
+
+    Satu invarian menjaga seluruh fitur ini: atas jadwal yang BELUM disentuh,
+    hitung_ulang() harus mengembalikan angka yang persis sama dengan yang
+    dikeluarkan penjadwal. Kalau invarian itu pecah, kalibrasi manual akan
+    memindahkan skor kualitas tanpa ada yang menukar siapa pun - dan tidak ada
+    satu pun layar yang bisa memberi tahu bedanya.
+    """
+
+    KASUS = [
+        ("americano 12/2", 12,
+         dict(courts=2, duration_minutes=90, referees_per_court=1)),
+        ("americano 26/4", 26,
+         dict(courts=4, duration_minutes=120, referees_per_court=1,
+              ballboys_per_court=1)),
+        ("tiered 16/3", 16,
+         dict(courts=3, duration_minutes=120, mode="tiered", tier_count=2)),
+        ("mexicano 10/2", 10, dict(courts=2, duration_minutes=90, mode="mexicano")),
+        ("1 court 10 orang", 10, dict(courts=1, duration_minutes=120)),
+    ]
+
+    @staticmethod
+    def _roster(n):
+        return make_players(n, genders=["M" if i % 2 else "F" for i in range(n)],
+                            ratings=[3 + (i % 5) * 0.5 for i in range(n)])
+
+    def test_angka_sama_persis_sebelum_disentuh(self):
+        for nama, n, cfg in self.KASUS:
+            with self.subTest(nama):
+                sch = build_schedule(self._roster(n), Config(**cfg))
+                stats, viol, langgar = hitung_ulang(sch)
+                self.assertEqual(
+                    asdict(stats), asdict(sch.stats),
+                    f"{nama}: hitung ulang tidak mereproduksi angka penjadwal")
+                self.assertEqual(len(viol), len(sch.violations))
+                self.assertEqual(
+                    langgar, [],
+                    f"{nama}: jadwal hasil generate dilaporkan melanggar aturan")
+
+    def test_angka_sama_persis_di_babak_bersegmen(self):
+        # Aturan per ronde adalah bagian yang paling gampang salah dipetakan
+        # ulang, dan selang-seling membuat ronde tiap babak tidak berurutan.
+        for selang in (False, True):
+            with self.subTest(interleave=selang):
+                cfg = Config(
+                    courts=2, duration_minutes=120,
+                    segments=[Segment(label="Putra", rounds=3, rule="men"),
+                              Segment(label="Putri", rounds=3, rule="women"),
+                              Segment(label="Mixed", rounds=4, rule="mixed")],
+                    interleave_segments=selang)
+                sch = build_schedule(self._roster(16), cfg)
+                stats, _, langgar = hitung_ulang(sch)
+                self.assertEqual(asdict(stats), asdict(sch.stats))
+                self.assertEqual(langgar, [])
+
+    def test_aturan_babak_ronde_ikut_tersimpan(self):
+        cfg = Config(courts=2, duration_minutes=120,
+                     segments=[Segment(label="Putra", rounds=4, rule="men"),
+                               Segment(label="Mixed", rounds=4, rule="mixed")])
+        sch = build_schedule(self._roster(16), cfg)
+        aturan = {r.rule for r in sch.rounds}
+        self.assertEqual(aturan, {"men", "mixed"},
+                         "aturan babak tidak menempel di rondenya")
+        # Melewati JSON juga: UI menilai pertukaran dari field ini, dan jadwal
+        # yang dibuka dari riwayat datang lewat json.
+        bolak = from_dict(json.loads(json.dumps(to_dict(sch))))
+        self.assertEqual([r.rule for r in bolak.rounds],
+                         [r.rule for r in sch.rounds])
+
+    def _tukar(self, sch, r, keluar, masuk):
+        """Tukar posisi dua orang di satu ronde, seperti yang dilakukan UI."""
+        for m in sch.rounds[r].matches:
+            for tim in ("team_a", "team_b"):
+                isi = list(getattr(m, tim))
+                if keluar in isi:
+                    isi[isi.index(keluar)] = masuk
+                    setattr(m, tim, tuple(isi))
+        ikut = {p for m in sch.rounds[r].matches for p in m.players()}
+        sch.rounds[r].byes = [p.id for p in sch.players if p.id not in ikut]
+
+    def test_tukar_menggeser_jumlah_main(self):
+        sch = build_schedule(self._roster(12),
+                             Config(courts=2, duration_minutes=90))
+        r = next(i for i, x in enumerate(sch.rounds) if x.byes)
+        keluar = sch.rounds[r].matches[0].team_a[0]
+        masuk = sch.rounds[r].byes[0]
+        sebelum = dict(sch.stats.plays_per_player)
+
+        self._tukar(sch, r, keluar, masuk)
+        stats, _, langgar = hitung_ulang(sch)
+
+        self.assertEqual(stats.plays_per_player[keluar], sebelum[keluar] - 1)
+        self.assertEqual(stats.plays_per_player[masuk], sebelum[masuk] + 1)
+        self.assertEqual(sum(stats.plays_per_player.values()),
+                         sum(sebelum.values()),
+                         "total slot main berubah padahal cuma bertukar orang")
+        self.assertEqual(langgar, [], "pertukaran sah dilaporkan melanggar")
+        # Jumlah main + duduk tetap sama dengan jumlah ronde untuk semua orang.
+        for p in sch.players:
+            self.assertEqual(
+                stats.plays_per_player[p.id] + stats.byes_per_player[p.id],
+                len(sch.rounds), f"{p.name} hilang dari salah satu ronde")
+
+    def test_pelanggaran_aturan_babak_dilaporkan(self):
+        cfg = Config(courts=2, duration_minutes=120,
+                     segments=[Segment(label="Putra", rounds=4, rule="men"),
+                               Segment(label="Putri", rounds=4, rule="women")])
+        sch = build_schedule(self._roster(16), cfg)
+        r = next(i for i, x in enumerate(sch.rounds) if x.rule == "men")
+        putri = next(p.id for p in sch.players
+                     if p.gender == "F" and p.id in sch.rounds[r].byes)
+        keluar = sch.rounds[r].matches[0].team_a[0]
+
+        self.assertEqual(hitung_ulang(sch)[2], [], "belum disentuh sudah melanggar")
+        self._tukar(sch, r, keluar, putri)
+        langgar = hitung_ulang(sch)[2]
+
+        self.assertTrue(langgar, "putri masuk babak putra tapi tidak dilaporkan")
+        self.assertTrue(langgar[0].startswith("Kalibrasi manual"),
+                        f"penanda catatan hilang: {langgar[0]}")
+        nama = next(p.name for p in sch.players if p.id == putri)
+        self.assertIn(nama, langgar[0])
+        # Dilaporkan, bukan diblokir: angkanya tetap keluar.
+        self.assertEqual(sum(hitung_ulang(sch)[0].plays_per_player.values()),
+                         sum(len(x.matches) * 4 for x in sch.rounds))
+
+    def test_pelanggaran_banyak_diringkas(self):
+        # Satu perubahan bisa melanggar belasan court sekaligus - mengubah
+        # gender beberapa orang di meet bersegmen, atau mengubah rating di mode
+        # pool rating. Panel Catatan tidak boleh berubah jadi dinding teks yang
+        # mengatakan hal yang sama belasan kali.
+        cfg = Config(courts=2, duration_minutes=120,
+                     segments=[Segment(label="Putra", rounds=6, rule="men"),
+                               Segment(label="Putri", rounds=6, rule="women")])
+        sch = build_schedule(self._roster(16), cfg)
+        self.assertEqual(hitung_ulang(sch)[2], [])
+
+        # Empat putra jadi putri: sisa 4 putra masih lolos validasi babak
+        # putra, tapi hampir semua court babak itu jadi campur.
+        diubah = [p for p in sch.players if p.gender == "M"][:4]
+        for p in diubah:
+            p.gender = "F"
+        langgar = hitung_ulang(sch)[2]
+
+        self.assertGreater(len(langgar), 1)
+        self.assertLessEqual(len(langgar), LANGGAR_MAX + 1)
+        self.assertTrue(all(x.startswith("Kalibrasi manual") for x in langgar))
+        if len(langgar) == LANGGAR_MAX + 1:
+            self.assertIn("tidak ikut dirinci", langgar[-1])
+
+    def test_ronde_tidak_cocok_ditolak_dengan_jelas(self):
+        sch = build_schedule(self._roster(12),
+                             Config(courts=2, duration_minutes=90))
+        sch.rounds.pop()
+        with self.assertRaises(ScheduleError) as ctx:
+            hitung_ulang(sch)
+        self.assertIn("ronde", str(ctx.exception).lower())

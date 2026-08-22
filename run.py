@@ -21,6 +21,7 @@ import sys
 import threading
 import time
 import webbrowser
+from dataclasses import asdict
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -47,6 +48,7 @@ from padel_scheduler.models import (
 )
 from padel_scheduler.presets import PRESETS
 from padel_scheduler.report import (
+    PREF_LABELS,
     format_date_id,
     from_dict,
     to_csv,
@@ -54,7 +56,7 @@ from padel_scheduler.report import (
     to_personal_text,
     to_text,
 )
-from padel_scheduler.scheduler import ScheduleError, round_plan
+from padel_scheduler.scheduler import ScheduleError, hitung_ulang, round_plan
 
 WEB_DIR = Path(__file__).parent / "web"
 MAX_BODY = 8 * 1024 * 1024
@@ -466,6 +468,49 @@ def api_schedule_text(payload: dict) -> dict:
     }
 
 
+def api_schedule_recalc(payload: dict) -> dict:
+    """Hitung ulang statistik jadwal yang baru dikalibrasi tangan oleh host.
+
+    Menukar dua orang di satu ronde menggeser jumlah main, matriks partner &
+    lawan, tunggu terpanjang, giliran terlewat, dan skor kualitas sekaligus.
+    Semuanya dihitung di sini dengan kode yang SAMA PERSIS dengan yang dipakai
+    saat jadwal dibuat - bukan salinannya di browser, yang akan berbeda
+    pelan-pelan tanpa ada yang menyadarinya.
+
+    Susunannya sendiri tidak disentuh: yang dipakai persis jadwal yang dikirim,
+    tidak ada satu pun optimasi yang dijalankan. Teks WhatsApp, jadwal per
+    pemain, dan CSV ikut ditulis ulang karena ketiganya memuat nama per ronde.
+
+    "rule_breaks" berisi aturan keras yang dilanggar susunan sekarang. Saat
+    jadwal lahir daftar itu selalu kosong - gerakan ilegal ditolak mentah-mentah
+    oleh optimizer. Setelah kalibrasi manual ia bisa terisi, dan itu bukan
+    kegagalan: host memang boleh menimpanya, tapi harus melihat apa yang
+    ditimpanya.
+    """
+    sch = _schedule_supplied(payload)
+    if sch is None:
+        raise ScheduleError(
+            "Jadwal yang mau dihitung ulang tidak ikut dikirim, atau bentuknya "
+            "tidak utuh.")
+    stats, violations, langgar = hitung_ulang(sch)
+    sch.stats = stats
+    sch.violations = violations
+    clock = payload.get("start_clock") or None
+    return {
+        "stats": asdict(stats),
+        "violations": [
+            {**asdict(v),
+             "preference_label": PREF_LABELS.get(v.preference, v.preference)}
+            for v in violations
+        ],
+        "rule_breaks": langgar,
+        "text": to_text(sch, start_clock=clock,
+                        title=payload.get("title") or "JADWAL PADEL"),
+        "personal_text": to_personal_text(sch, start_clock=clock),
+        "csv": to_csv(sch),
+    }
+
+
 def api_schedule(payload: dict) -> dict:
     sch = _generate(payload)
     clock = payload.get("start_clock") or None
@@ -588,6 +633,7 @@ ROUTES = {
     "/api/economics": api_economics,
     "/api/schedule": api_schedule,
     "/api/schedule/text": api_schedule_text,
+    "/api/schedule/recalc": api_schedule_recalc,
     "/api/events/save": api_event_save,
     "/api/events/delete": api_event_delete,
     "/api/players/bulk": api_players_bulk,

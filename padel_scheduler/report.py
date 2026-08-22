@@ -397,6 +397,7 @@ def to_dict(schedule: Schedule) -> dict:
             {
                 "index": r.index,
                 "segment": r.segment,
+                "rule": r.rule,
                 "start_min": r.start_min,
                 "end_min": r.end_min,
                 "byes": [{"id": b, "name": names[b]} for b in r.byes],
@@ -505,6 +506,7 @@ def from_dict(data: dict) -> Schedule:
                 start_min=int(r.get("start_min", 0)),
                 end_min=int(r.get("end_min", 0)),
                 segment=r.get("segment", ""),
+                rule=r.get("rule", ""),
                 court_labels=labels,
                 roles=[
                     RoleAssignment(player_id=int(a["player_id"]), role=a["role"],

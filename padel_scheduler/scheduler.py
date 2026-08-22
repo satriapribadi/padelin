@@ -32,6 +32,7 @@ from .models import (
     CPSAT_MODES,
     MATCHUP_LABELS,
     MATCHUPS,
+    SEGMENT_RULE_LABELS,
     TEAM_SHAPES,
     Config,
     Match,
@@ -2082,30 +2083,48 @@ def build_schedule(players: list[Player], config: Config,
     return terbaik
 
 
-def _build_once(players: list[Player], config: Config,
-                progress=None,
-                courts_per_round: list[int] | None = None,
-                pakai_cpsat: bool = False,
-                kuota_mustahil: bool = False,
-                pakai_lns: bool = False,
-                cpsat_dasar: bool = False) -> Schedule:
-    """Satu kali penjadwalan utuh, dari validasi sampai jadwal jadi.
+@dataclass
+class _Persiapan:
+    """Semua turunan deterministik dari (peserta, config), sebelum ada jadwal.
 
-    `pakai_cpsat` memasang solver eksak di ujung rangkaian. Dipisah dari
-    config.mode karena build_schedule menjalankan beberapa percobaan lalu
-    menyalakan solver hanya untuk yang menang - jadi mode-nya sama sepanjang
-    percobaan, sakelarnya yang berbeda.
+    Dipisah dari _build_once karena dibutuhkan DUA kali dengan cara yang
+    berbeda: sekali saat menyusun jadwal, dan sekali lagi saat menghitung ulang
+    statistik jadwal yang sudah dikalibrasi tangan oleh host. Yang kedua tidak
+    menyusun apa pun - ia hanya butuh aturan babak, pemetaan id, dan bobot yang
+    PERSIS sama seperti saat jadwalnya lahir, kalau tidak angkanya tidak bisa
+    dibandingkan dengan angka sebelum kalibrasi.
 
-    `cpsat_dasar` menukar MESINNYA: annealing tidak dijalankan sama sekali dan
-    jadwalnya disusun solver eksak dari konstruksi awal, tanpa hint. Keduanya
-    tidak pernah menyala bersama - yang satu memakai solver untuk memungut sisa
-    perbaikan annealing, yang lain memakai solver sebagai gantinya.
+    Disalin ke tempat kedua? Tidak: dua salinan turunan yang sama akan berbeda
+    pelan-pelan, dan yang pertama kali terlihat berbeda adalah skor kualitas
+    yang melompat tanpa ada yang menyentuh jadwalnya.
     """
-    def say(frac, msg):
-        if progress is not None:
-            progress(frac, msg)
 
-    say(0.01, "Memeriksa setup")
+    segments: list[Segment]
+    total_rounds: int
+    round_minutes: int
+    courts_r: list[int]
+    courts: int
+    court_seragam: bool
+    ids: list[int]
+    remap: dict[int, int]
+    inv: dict[int, int]
+    n: int
+    local_players: list[Player]
+    ratings: list[float]
+    tier_of: dict[int, int] | None
+    locked: dict[int, int]
+    weights: Weights
+    n_men: int
+    n_women: int
+    rules: Rules
+    plan: list
+    round_segment: list[Segment]
+
+
+def _siapkan(players: list[Player], config: Config,
+             courts_per_round: list[int] | None = None) -> _Persiapan:
+    """Turunkan aturan, pemetaan id, dan bobot dari setup. Tidak menjadwal."""
+
     segments = _resolve_segments(config)
     _validate(players, config, segments)
 
@@ -2138,7 +2157,6 @@ def _build_once(players: list[Player], config: Config,
     courts = max(courts_r)
     court_seragam = len(set(courts_r)) == 1
 
-    rng = random.Random(config.seed)
     # Ruang id dibuat rapat 0..n-1 agar count matrix tetap kecil.
     ids = sorted(p.id for p in players)
     remap = {pid: i for i, pid in enumerate(ids)}
@@ -2209,6 +2227,184 @@ def _build_once(players: list[Player], config: Config,
     for seg in round_segment:
         rules.round_rule.append(seg.rule)
         rules.round_eligible.append(set(_eligible_for(seg.rule, local_players)))
+
+    return _Persiapan(
+        segments=segments, total_rounds=total_rounds,
+        round_minutes=round_minutes, courts_r=courts_r, courts=courts,
+        court_seragam=court_seragam, ids=ids, remap=remap, inv=inv, n=n,
+        local_players=local_players, ratings=ratings, tier_of=tier_of,
+        locked=locked, weights=weights, n_men=n_men, n_women=n_women,
+        rules=rules, plan=plan, round_segment=round_segment,
+    )
+
+
+# Label preferensi peserta, dipakai dua tempat: kalimat pelanggaran saat jadwal
+# lahir, dan kalimat yang sama saat jadwal dihitung ulang setelah dikalibrasi.
+# Berapa banyak court yang melanggar dirinci satu per satu di catatan sebelum
+# sisanya diringkas. Delapan cukup untuk melihat polanya tanpa mengubah panel
+# Catatan jadi dinding teks.
+LANGGAR_MAX = 8
+
+PREF_LABEL_ID = {
+    "women_only": "court isi 4 perempuan",
+    "men_only": "court isi 4 laki-laki",
+    "same_gender": "court satu gender",
+    "mixed_team": "partner lawan jenis",
+}
+
+
+def _rekap_peran(schedule: Schedule) -> dict[int, dict[str, int]]:
+    """Berapa kali tiap orang jadi wasit / ballboy, dari penugasan yang ada.
+
+    Bentuknya dibuat sama persis dengan yang dikembalikan assign_roles supaya
+    rekap pemain dan laporan cetak tidak perlu tahu jadwalnya pernah diedit.
+    """
+    out: dict[int, dict[str, int]] = {}
+    for rnd in schedule.rounds:
+        for a in rnd.roles:
+            row = out.setdefault(a.player_id, {"total": 0})
+            row["total"] += 1
+            row[a.role] = row.get(a.role, 0) + 1
+    return out
+
+
+def _state_dari_jadwal(schedule: Schedule, pr: _Persiapan) -> ScheduleState:
+    """Isi ScheduleState dari susunan yang sudah ada, tanpa mencari apa pun."""
+    st = ScheduleState(pr.n, pr.ratings, pr.weights, len(schedule.rounds),
+                       pr.rules)
+    for r, rnd in enumerate(schedule.rounds):
+        quads = [[pr.remap[i] for i in (*m.team_a, *m.team_b)]
+                 for m in rnd.matches]
+        st.place_round(r, quads, [pr.remap[b] for b in rnd.byes])
+    # Biaya menunggu dipelihara inkremental saat annealing bergerak; diisi
+    # sekaligus seperti ini ia harus dihitung dari nol sekali di akhir.
+    st.recompute_wait()
+    return st
+
+
+def hitung_ulang(schedule: Schedule) -> tuple[ScheduleStats,
+                                              list[PreferenceViolation],
+                                              list[str]]:
+    """Hitung ulang statistik, pelanggaran preferensi, dan aturan yang dilanggar.
+
+    Dipakai setelah host mengkalibrasi jadwal dengan tangan. Menukar dua orang
+    di satu ronde tidak mengubah satu angka, melainkan semuanya sekaligus:
+    jumlah main, matriks partner & lawan, tunggu terpanjang, giliran terlewat,
+    duduk beruntun, dan skor kualitas yang merangkum semuanya.
+
+    Dua jalan yang tidak diambil, dan alasannya:
+
+      - menghitungnya di browser berarti menyalin dua ratus baris penilaian
+        yang paling halus di repo ini, lalu menjaga dua salinan tetap sama;
+      - menjadwal ulang berarti membuang susunan yang mungkin sudah diumumkan
+        ke peserta, dan membayar seluruh optimasi untuk satu pertukaran.
+
+    Jadi yang dikerjakan di sini persis yang dikerjakan saat jadwal lahir -
+    _build_stats yang sama, di atas state yang diisi dari ronde yang ada.
+
+    Daftar ketiga berisi aturan keras yang dilanggar susunan sekarang (aturan
+    babak, partner terkunci, pool rating, format match yang diizinkan). Saat
+    jadwal lahir daftar itu selalu kosong karena gerakan ilegal ditolak
+    mentah-mentah; setelah kalibrasi manual ia bisa terisi, dan host berhak
+    tahu apa yang baru saja ia timpa.
+    """
+    pr = _siapkan(schedule.players, schedule.config)
+    n_rounds = len(schedule.rounds)
+    if n_rounds != pr.total_rounds:
+        raise ScheduleError(
+            f"Jadwal ini {n_rounds} ronde sedangkan setupnya {pr.total_rounds} "
+            f"ronde, jadi aturan babaknya tidak bisa dicocokkan. Tekan Generate "
+            f"untuk menyusun ulang."
+        )
+
+    st = _state_dari_jadwal(schedule, pr)
+    stats = _build_stats(st, pr.local_players, n_rounds)
+    stats.plays_per_player = {pr.inv[k]: v
+                              for k, v in stats.plays_per_player.items()}
+    stats.byes_per_player = {pr.inv[k]: v
+                             for k, v in stats.byes_per_player.items()}
+    stats.roles_per_player = _rekap_peran(schedule)
+
+    name_of = {p.id: p.name for p in pr.local_players}
+    violations: list[PreferenceViolation] = []
+    for r in range(n_rounds):
+        for q in st.matches[r]:
+            for pid, pref in pr.rules.pref_violations(q):
+                violations.append(PreferenceViolation(
+                    round_index=r + 1,
+                    player_id=pr.inv[pid],
+                    player_name=name_of[pid],
+                    preference=pref,
+                    reason=(
+                        f"Ronde {r + 1}: {name_of[pid]} minta "
+                        f"{PREF_LABEL_ID.get(pref, pref)}, tapi komposisi "
+                        f"court yang tersedia tidak memungkinkan."
+                    ),
+                ))
+
+    langgar: list[str] = []
+    for r in range(n_rounds):
+        for q in st.matches[r]:
+            if pr.rules.quad_ok(q, r):
+                continue
+            siapa = ", ".join(name_of[p] for p in q)
+            babak = schedule.rounds[r].segment
+            aturan = SEGMENT_RULE_LABELS.get(schedule.rounds[r].rule, "")
+            langgar.append(
+                f"Kalibrasi manual, ronde {r + 1}"
+                f"{f' ({babak})' if babak else ''}: susunan {siapa} melanggar "
+                f"{f'aturan babak {aturan}' if aturan else 'aturan babak'}, "
+                f"pool rating, atau partner terkunci. Jadwalnya tetap dipakai "
+                f"apa adanya - ini yang Anda timpa."
+            )
+    # Satu perubahan bisa melanggar banyak court sekaligus - mengubah rating di
+    # mode pool rating menyusun ulang seluruh pool, dan panel Catatan lalu
+    # terisi tiga belas peringatan yang mengatakan hal yang sama. Yang penting
+    # bagi host adalah TAHU, dan berapa banyak; contohnya cukup beberapa.
+    if len(langgar) > LANGGAR_MAX:
+        sisa = len(langgar) - LANGGAR_MAX
+        langgar = langgar[:LANGGAR_MAX] + [
+            f"Kalibrasi manual: {sisa} court lain juga melanggar aturan yang "
+            f"sama dan tidak ikut dirinci di sini."
+        ]
+    return stats, violations, langgar
+
+
+def _build_once(players: list[Player], config: Config,
+                progress=None,
+                courts_per_round: list[int] | None = None,
+                pakai_cpsat: bool = False,
+                kuota_mustahil: bool = False,
+                pakai_lns: bool = False,
+                cpsat_dasar: bool = False) -> Schedule:
+    """Satu kali penjadwalan utuh, dari validasi sampai jadwal jadi.
+
+    `pakai_cpsat` memasang solver eksak di ujung rangkaian. Dipisah dari
+    config.mode karena build_schedule menjalankan beberapa percobaan lalu
+    menyalakan solver hanya untuk yang menang - jadi mode-nya sama sepanjang
+    percobaan, sakelarnya yang berbeda.
+
+    `cpsat_dasar` menukar MESINNYA: annealing tidak dijalankan sama sekali dan
+    jadwalnya disusun solver eksak dari konstruksi awal, tanpa hint. Keduanya
+    tidak pernah menyala bersama - yang satu memakai solver untuk memungut sisa
+    perbaikan annealing, yang lain memakai solver sebagai gantinya.
+    """
+    def say(frac, msg):
+        if progress is not None:
+            progress(frac, msg)
+
+    say(0.01, "Memeriksa setup")
+    pr = _siapkan(players, config, courts_per_round)
+    segments, total_rounds = pr.segments, pr.total_rounds
+    round_minutes = pr.round_minutes
+    courts_r, courts, court_seragam = pr.courts_r, pr.courts, pr.court_seragam
+    ids, remap, inv, n = pr.ids, pr.remap, pr.inv, pr.n
+    local_players, ratings = pr.local_players, pr.ratings
+    tier_of, locked, weights = pr.tier_of, pr.locked, pr.weights
+    n_men, n_women, rules = pr.n_men, pr.n_women, pr.rules
+    plan, round_segment = pr.plan, pr.round_segment
+
+    rng = random.Random(config.seed)
 
     st = ScheduleState(n, ratings, weights, total_rounds, rules)
 
@@ -2744,6 +2940,7 @@ def _build_once(players: list[Player], config: Config,
                 start_min=start,
                 end_min=start + round_minutes,
                 segment=seg.label,
+                rule=seg.rule,
                 court_labels=labels,
                 roles=[
                     RoleAssignment(player_id=inv[pid], role=role, court=court)
