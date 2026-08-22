@@ -42,7 +42,54 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Tes dijadikan job tersendiri yang MENGGERBANGI rilis, bukan langkah di
+  # dalamnya. Dua alasan: kegagalannya terbaca sebagai "tes gagal" alih-alih
+  # tenggelam di log build 200 MB, dan job ini tidak perlu menunggu apa pun -
+  # ia mulai bersamaan, jadi yang ditambahkan ke rilis cuma selisih waktunya.
+  #
+  # Yang dijaga: jangan sampai kode yang tesnya merah ikut terbit ke setiap
+  # aplikasi terpasang. Rilis di sini langsung terlihat oleh electron-updater,
+  # jadi tidak ada jeda untuk menariknya kembali.
+  tes:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+
+      - run: npm ci
+
+      # Cepat (beberapa detik) dan langsung relevan: yang diuji adalah jalur
+      # pelaporan updater - bahwa pembaruan yang gagal dipasang BERBUNYI, dan
+      # catatannya tidak terhapus saat aplikasi dibuka lagi.
+      - name: Uji pelaporan updater
+        run: npm run test:updater
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # Pin OR-Tools dibaca dari fetch-python.js, bukan ditulis ulang di sini.
+      # Dua sumber kebenaran untuk versi solver berarti suatu saat tes berjalan
+      # di versi yang berbeda dari yang dikirim ke pengguna, dan bedanya tidak
+      # akan berbunyi.
+      - name: Pasang OR-Tools sesuai pin build
+        shell: bash
+        run: |
+          set -euo pipefail
+          PIN=$(node -p "require('fs').readFileSync('electron/fetch-python.js','utf8').match(/ORTOOLS\s*=\s*'([^']+)'/)[1]")
+          echo "pin dari fetch-python.js: $PIN"
+          python -m pip install --quiet --disable-pip-version-check "$PIN"
+
+      - name: Uji penjadwalan
+        run: python -m unittest discover -s tests
+
   rilis:
+    needs: tes
     runs-on: windows-latest
     timeout-minutes: 60
     steps:
@@ -180,3 +227,54 @@ jobs:
             }
           done
           echo "Rilis $TAG lengkap."
+
+      # Aset yang ADA belum berarti aset yang COCOK, dan ketidakcocokan di sini
+      # adalah kegagalan terburuk yang bisa diterbitkan proyek ini: setiap
+      # pengguna gagal memperbarui dengan galat checksum, serentak, dan tidak
+      # bisa ditarik kembali tanpa rilis baru.
+      #
+      # Tidak ada yang memeriksanya sampai sekarang. verify-artifact.js memang
+      # punya pemeriksaan ini, tapi ia dipasang sebagai afterAllArtifactBuild -
+      # berjalan SEBELUM latest.yml ditulis - jadi di jalur rilis ia selalu
+      # melewatkannya sendiri ("latest.yml dilewati - belum ditulis untuk build
+      # ini"). Lubangnya baru ketahuan saat harus diperiksa dengan tangan.
+      #
+      # Yang di-hash adalah byte yang BENAR-BENAR disajikan GitHub, bukan berkas
+      # lokal: unduhan yang terpotong menghasilkan aset yang ukurannya wajar di
+      # daftar API tapi isinya bukan installer yang dibangun.
+      - name: Periksa latest.yml cocok dengan installer yang terbit
+        if: inputs.terbitkan
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v$(node -p "require('./package.json').version")"
+          REPO=$(node -p "require('./package.json').build.publish[0].owner + '/' + require('./package.json').build.publish[0].repo")
+          DASAR="https://github.com/$REPO/releases/download/$TAG"
+
+          curl -sfL -o terbit-latest.yml "$DASAR/latest.yml"
+          NAMA=$(node -p "require('fs').readFileSync('terbit-latest.yml','utf8').match(/^path:\s*(\S+)/m)[1]")
+          echo "manifest menunjuk: $NAMA"
+          curl -sfL -o terbit-installer.exe "$DASAR/$NAMA"
+
+          node -e '
+            const fs = require("fs"), crypto = require("crypto");
+            const yml = fs.readFileSync("terbit-latest.yml", "utf8");
+            const isi = fs.readFileSync("terbit-installer.exe");
+            const shaYml = yml.match(/^sha512:\s*(\S+)/m)[1];
+            const ukuranYml = Number(yml.match(/^\s*size:\s*(\d+)/m)[1]);
+            const sha = crypto.createHash("sha512").update(isi).digest("base64");
+            const baris = (n, a, b) =>
+              console.log(`  ${n.padEnd(22)} ${a === b ? "COCOK" : "TIDAK COCOK"}`);
+            baris("ukuran", isi.length, ukuranYml);
+            baris("sha512", sha, shaYml);
+            if (isi.length !== ukuranYml || sha !== shaYml) {
+              console.error(`\n  latest.yml menyebut ${ukuranYml} byte / ${shaYml}`);
+              console.error(`  installer terbit  ${isi.length} byte / ${sha}`);
+              console.error("\n  Auto-update akan menolak unduhan ini untuk SEMUA pengguna.");
+              process.exit(1);
+            }
+            console.log("\n  Auto-update tidak akan menolak unduhan ini.");
+          '
+          rm -f terbit-latest.yml terbit-installer.exe
