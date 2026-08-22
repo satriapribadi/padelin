@@ -1178,6 +1178,19 @@ function renderRounds() {
   // terlempar ke ujung kiri dan kanan dengan "vs" terdampar di tengah - mata
   // harus menyeberangi ruang kosong untuk membaca satu pertandingan.
   const cols = maxMatches === 1 ? 3 : 2;
+  // Babak yang berselang-seling TIDAK dapat bar selebar grid. Dengan urutan
+  // Mixed -> Sesama gender -> Mixed ..., tiap ronde memulai babak baru, jadi
+  // satu bar jatuh di antara tiap card: gridnya patah di setiap baris, tiap
+  // baris hanya berisi satu card, dan separuh lebar panel jadi kotak kosong -
+  // 13 ronde memakan 13 baris padahal muat 7. Kalau ada satu saja babak yang
+  // cuma sepanjang satu ronde, labelnya pindah ke kepala card.
+  const runs = [];
+  schedule.rounds.forEach((r) => {
+    const s = r.segment || '';
+    if (runs.length && runs[runs.length - 1].seg === s) runs[runs.length - 1].n++;
+    else runs.push({ seg: s, n: 1 });
+  });
+  const pakaiSegbar = runs.every((x) => x.n >= 2);
   const box = el('div', `rounds cols-${cols}`);
   // Lebar kolom court dikunci di sini, bukan dibiarkan melar mengikuti isi:
   // dengan lebar otomatis, "C1" dan "Indoor A" di kartu yang sama menggeser
@@ -1187,15 +1200,18 @@ function renderRounds() {
 
   let seg = null;
   schedule.rounds.forEach((r) => {
-    if (r.segment && r.segment !== seg) {
+    if (pakaiSegbar && r.segment && r.segment !== seg) {
       seg = r.segment;
       box.appendChild(el('div', 'segbar', esc(seg)));
     }
     const card = el('div', 'round');
     const time = schedule.config.warmup_minutes !== undefined
       ? `+${r.start_min}m` : '';
+    const segBadge = !pakaiSegbar && r.segment
+      ? `<span class="seg">${esc(r.segment)}</span>` : '';
     card.appendChild(el('div', 'round-head',
-      `<span class="n">R${r.index}</span><span class="t">${esc(time)}</span>`));
+      `<span class="n">R${r.index}</span>${segBadge}`
+      + `<span class="t">${esc(time)}</span>`));
 
     r.matches.forEach((m) => {
       // Peran disingkat W/B: di card sempit nama lengkap "wasit"/"ballboy"

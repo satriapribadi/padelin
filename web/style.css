@@ -221,7 +221,14 @@ input[type=date],input[type=time]{color-scheme:dark}
   padding:3px 9px;background:#1a222d;border-bottom:1px solid var(--line);
 }
 .round-head .n{font-weight:700;font-size:11.5px}
-.round-head .t{color:var(--dim);font-size:10px;font-variant-numeric:tabular-nums}
+/* Babak berselang-seling tampil sebagai pil di kepala card, bukan .segbar:
+   satu bar per ronde memutus grid tiap baris dan menyisakan kolom kosong. */
+.round-head .seg{
+  font-size:9.5px;font-weight:700;color:var(--ink);background:var(--accent-dim);
+  border-radius:4px;padding:1px 6px;
+}
+.round-head .t{color:var(--dim);font-size:10px;font-variant-numeric:tabular-nums;
+  margin-left:auto}
 
 /* Kolom dikunci supaya "vs" tidak bergoyang antar baris saat panjang nama
    petugas berbeda-beda. Tim A rata kiri, tim B rata kanan. */

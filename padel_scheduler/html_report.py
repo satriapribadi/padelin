@@ -150,7 +150,12 @@ h2{font-size:10px; text-transform:uppercase; letter-spacing:.09em;
   justify-content:space-between; align-items:baseline; gap:8px;
   border-bottom:1px solid var(--line)}
 .round-head .n{font-weight:700; font-size:11px}
-.round-head .t{color:var(--muted); font-size:10px; font-variant-numeric:tabular-nums}
+/* Babak berselang-seling jadi pil di kepala card, bukan .segbar: satu bar per
+   ronde memutus grid di tiap baris dan menyisakan separuh halaman kosong. */
+.round-head .seg{font-size:9px; font-weight:700; color:var(--accent);
+  background:var(--accent-soft); border-radius:4px; padding:1px 6px}
+.round-head .t{color:var(--muted); font-size:10px; font-variant-numeric:tabular-nums;
+  margin-left:auto}
 
 table{width:100%; border-collapse:collapse}
 
@@ -641,9 +646,24 @@ def build_html(
     parts.append(f"<div class='rounds cols-{cols}' "
                  f"style='--courtw:{_lebar_kolom_court(schedule)}px'>")
 
+    # Babak berselang-seling TIDAK dapat bar selebar grid. Dengan urutan
+    # Mixed -> Sesama gender -> Mixed ..., tiap ronde memulai babak baru, jadi
+    # satu bar jatuh di antara tiap card: gridnya patah di setiap baris dan
+    # separuh lebar halaman jadi kotak kosong - 13 ronde memakan 13 baris
+    # padahal muat 7. Kalau ada satu saja babak sepanjang satu ronde,
+    # labelnya pindah ke kepala card.
+    runs: list[list] = []
+    for rnd in schedule.rounds:
+        seg = rnd.segment or ""
+        if runs and runs[-1][0] == seg:
+            runs[-1][1] += 1
+        else:
+            runs.append([seg, 1])
+    pakai_segbar = all(n >= 2 for _, n in runs)
+
     current_segment = None
     for rnd in schedule.rounds:
-        if rnd.segment and rnd.segment != current_segment:
+        if pakai_segbar and rnd.segment and rnd.segment != current_segment:
             current_segment = rnd.segment
             parts.append(f"<div class='segbar'>{_e(rnd.segment)}</div>")
 
@@ -651,8 +671,11 @@ def build_html(
         balls = {r.court: _nm(r.player_id) for r in rnd.roles if r.role == "ballboy"}
 
         parts.append("<div class='round'>")
+        seg_badge = (f"<span class='seg'>{_e(rnd.segment)}</span>"
+                     if not pakai_segbar and rnd.segment else "")
         parts.append(
             f"<div class='round-head'><span class='n'>Ronde {rnd.index}</span>"
+            f"{seg_badge}"
             f"<span class='t'>{_e(_clock(rnd.start_min, start_clock))}</span></div>"
         )
         for m in rnd.matches:
