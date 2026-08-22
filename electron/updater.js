@@ -65,6 +65,30 @@ const LOG = path.join(app.getPath('userData'), 'updater.log');
 const LOG_MAKS = 256 * 1024;
 let logDimulai = false;
 
+/** Penanda "pemasangan sedang dicoba", dibaca lagi pada sesi berikutnya.
+ *
+ * Penjaga waktu di bawah hanya menangkap kegagalan yang membuat aplikasi TETAP
+ * HIDUP. Bentuk yang sesungguhnya terjadi berbeda, dan justru lebih bisu:
+ * Smart App Control menolak installer di tingkat kernel, electron-updater
+ * mencatat penolakannya sebagai INFO ("Cannot run installer: spawn UNKNOWN"),
+ * mundur ke elevate.exe yang diblokir juga, lalu aplikasi keluar dengan
+ * tenang - persis seperti pemasangan yang berhasil. Yang dilihat host: jendela
+ * menutup, terbuka lagi, versinya tidak berubah, tanpa satu pesan pun. Terjadi
+ * tiga kali berturut-turut pada 1.3.1 -> 1.3.2 sebelum penanda ini ada.
+ *
+ * Karena kegagalannya baru bisa dibuktikan SESUDAH aplikasi hidup lagi -
+ * versinya masih yang lama - satu-satunya tempat menyimpan pertanyaannya
+ * adalah berkas. Isinya: versi yang mau dipasang, versi yang sedang berjalan
+ * waktu itu, dan kapan.
+ */
+const PENANDA = path.join(app.getPath('userData'), 'pemasangan-tertunda.json');
+
+// Versi yang sudah terunduh dan menunggu dipasang di sesi ini. Dipakai pengait
+// will-quit: autoInstallOnAppQuit memasang tanpa host menekan apa pun, jadi
+// jalur itu butuh penandanya sendiri.
+let siapDipasang = null;
+let pengaitKeluarTerpasang = false;
+
 /** Buang bagian tertua kalau berkasnya sudah kebesaran. */
 function pangkasLog() {
   try {
@@ -115,6 +139,92 @@ function berkasLog() {
   return LOG;
 }
 
+function tulisPenanda(versi) {
+  try {
+    fs.writeFileSync(PENANDA, JSON.stringify(
+      { versi, dari: app.getVersion(), waktu: new Date().toISOString() }), 'utf8');
+  } catch (err) {
+    catat('WARN ', 'penanda pemasangan gagal ditulis:', String(err));
+  }
+}
+
+function bacaPenanda() {
+  try {
+    return JSON.parse(fs.readFileSync(PENANDA, 'utf8'));
+  } catch {
+    return null;   // tidak ada penanda = tidak ada pemasangan yang tertunda
+  }
+}
+
+function hapusPenanda() {
+  try {
+    fs.unlinkSync(PENANDA);
+  } catch {
+    // Sudah tidak ada; itu memang tujuannya.
+  }
+}
+
+/** Tulis penanda saat aplikasi keluar dengan pembaruan yang menunggu.
+ *
+ * autoInstallOnAppQuit memasang TANPA host menekan apa pun, jadi jalur itu
+ * tidak melewati tombol "Pasang & mulai ulang" dan tidak akan pernah menulis
+ * penandanya sendiri. Justru jalur inilah yang paling sering dipakai: host
+ * memilih "Nanti saat ditutup", lalu menutup aplikasinya seperti biasa.
+ *
+ * will-quit, bukan sekadar menulis di muka: proses yang dibunuh paksa tidak
+ * memicunya, dan penanda yang ditulis tanpa pemasangan yang benar-benar dicoba
+ * akan berbunyi palsu di sesi berikutnya.
+ */
+function pasangPengaitKeluar() {
+  if (pengaitKeluarTerpasang || typeof app.on !== 'function') return;
+  pengaitKeluarTerpasang = true;
+  app.on('will-quit', () => {
+    if (siapDipasang) tulisPenanda(siapDipasang);
+  });
+}
+
+/** Satu teks untuk dua jalur kegagalan - yang ketahuan seketika dan yang baru
+ *  ketahuan sesi berikutnya - supaya host tidak perlu mengenali dua kalimat
+ *  untuk satu masalah yang sama. */
+function dialogGagalPasang(pembuka) {
+  dialog.showMessageBox({
+    type: 'error',
+    title: 'Pembaruan gagal dipasang',
+    message: 'Installer-nya sudah terunduh, tapi Windows tidak mengizinkannya '
+      + 'dijalankan.',
+    detail: `${pembuka}Penyebab paling sering: Smart App Control memblokir `
+      + 'installer yang belum bertandatangan. Berbeda dari SmartScreen, ia '
+      + 'tidak menawarkan "Run anyway".\n\nPeriksa di Windows Security -> App '
+      + '& browser control -> Smart App Control. Padelin yang sedang berjalan '
+      + 'tetap aman dipakai; hanya pembaruannya yang tertahan.\n\nRincian '
+      + `tercatat di:\n${berkasLog()}`,
+  });
+}
+
+/** Kabarkan pemasangan yang diminta tapi tidak pernah terjadi.
+ *
+ * Dipanggil sekali saat aplikasi hidup lagi. Buktinya sederhana dan tidak bisa
+ * dibantah: penandanya ada, dan versi yang berjalan masih sama dengan versi
+ * yang tercatat di penanda itu.
+ *
+ * Penandanya dihapus apa pun hasilnya. Kalau blokirnya memang belum hilang,
+ * pemeriksaan berikutnya menemukan installer yang sama, menulis penanda baru,
+ * dan host diberi tahu lagi - satu kali per percobaan, bukan satu kali seumur
+ * hidup, dan bukan pula tiap kali aplikasi dibuka.
+ */
+function laporkanPemasanganTertunda() {
+  const tanda = bacaPenanda();
+  if (!tanda) return;
+  hapusPenanda();
+  if (tanda.dari !== app.getVersion()) {
+    catat('INFO ', `pembaruan ${tanda.dari} -> ${app.getVersion()} terpasang`);
+    return;
+  }
+  catat('ERROR', `pemasangan ${tanda.versi} tidak terjadi: versi masih `
+    + `${tanda.dari} sesudah percobaan ${tanda.waktu}`);
+  dialogGagalPasang(`Padelin masih di versi ${tanda.dari}.\n\n`);
+}
+
 /** Pemasangan yang diminta host tapi tidak terjadi.
  *
  * Dipanggil dari dua arah - pengecualian saat memanggil quitAndInstall, dan
@@ -131,17 +241,12 @@ function gagalMemasang(err) {
   memintaPasang = false;
   app.isQuitting = false;       // batal keluar; host masih memakai aplikasinya
   catat('ERROR', 'pemasangan gagal:', String(err && err.stack ? err.stack : err));
-  dialog.showMessageBox({
-    type: 'error',
-    title: 'Pembaruan gagal dipasang',
-    message: 'Installer-nya sudah terunduh, tapi Windows tidak mengizinkannya '
-      + 'dijalankan.',
-    detail: 'Penyebab paling sering: Smart App Control memblokir installer yang '
-      + 'belum bertandatangan. Berbeda dari SmartScreen, ia tidak menawarkan '
-      + '"Run anyway".\n\nPeriksa di Windows Security -> App & browser control '
-      + '-> Smart App Control. Padelin yang sedang berjalan tetap aman dipakai; '
-      + `hanya pembaruannya yang tertahan.\n\nRincian tercatat di:\n${berkasLog()}`,
-  });
+  // Aplikasinya masih hidup dan host sudah diberi tahu sekarang juga, jadi
+  // penandanya dibuang - tanpa itu sesi berikutnya melaporkan kegagalan yang
+  // sama untuk kedua kalinya.
+  hapusPenanda();
+  siapDipasang = null;
+  dialogGagalPasang('');
 }
 
 function muatUpdater() {
@@ -243,6 +348,10 @@ function periksaPembaruan({ diam = true } = {}) {
 
   au.on('update-downloaded', async (info) => {
     sedangPeriksa = false;
+    // Sejak titik ini pemasangan PASTI dicoba - kalau bukan lewat tombol di
+    // bawah, lewat autoInstallOnAppQuit saat aplikasi ditutup.
+    siapDipasang = info.version;
+    pasangPengaitKeluar();
     const { response } = await dialog.showMessageBox({
       type: 'question',
       buttons: ['Pasang & mulai ulang', 'Nanti saat ditutup'],
@@ -260,6 +369,7 @@ function periksaPembaruan({ diam = true } = {}) {
       memintaPasang = true;
       app.isQuitting = true;
       catat('INFO ', `memasang ${info.version} (senyap, jalankan lagi setelah pasang)`);
+      tulisPenanda(info.version);
       // (senyap, jalankan lagi setelah pasang).
       //
       // Bawaannya quitAndInstall() TIDAK senyap, jadi wizard installer muncul
@@ -299,4 +409,4 @@ function periksaPembaruan({ diam = true } = {}) {
   });
 }
 
-module.exports = { periksaPembaruan };
+module.exports = { periksaPembaruan, laporkanPemasanganTertunda };

@@ -15,7 +15,7 @@
 
 const { app, BrowserWindow, Menu, dialog, shell } = require('electron');
 const { spawn } = require('child_process');
-const { periksaPembaruan } = require('./updater');
+const { periksaPembaruan, laporkanPemasanganTertunda } = require('./updater');
 // Di-require di baris atas dengan sengaja: cetak.js mendaftarkan skema
 // pratinjaunya saat dimuat, dan itu harus terjadi sebelum app siap.
 const cetak = require('./cetak');
@@ -416,7 +416,13 @@ if (!app.requestSingleInstanceLock()) {
     // Periksa pembaruan setelah jendela tampil, dan diam-diam: host membuka
     // aplikasi untuk menyusun jadwal, bukan untuk mengurus pembaruan. Kalau ada
     // yang baru, ia diunduh di latar dan dipasang saat aplikasi ditutup.
-    setTimeout(() => periksaPembaruan({ diam: true }), 4000);
+    setTimeout(() => {
+      // Lapor DULU, periksa kemudian: kalau pemasangan sesi lalu tidak pernah
+      // terjadi, host harus mendengarnya sebelum pemeriksaan baru mengunduh
+      // installer yang sama dan menawarkannya lagi seolah tidak ada apa-apa.
+      laporkanPemasanganTertunda();
+      periksaPembaruan({ diam: true });
+    }, 4000);
 
     app.on('activate', () => {
       if (BrowserWindow.getAllWindows().length === 0) createWindow();

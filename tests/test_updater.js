@@ -38,8 +38,12 @@ function periksa(nama, fn) {
 }
 
 /** Pasang electron & electron-updater tiruan, lalu muat ulang updater.js. */
-function pasangPanggung({ userData, quitAndInstall, versi = '1.2.2' }) {
+function pasangPanggung({ userData, quitAndInstall, versi = '1.2.2', jawaban = 0 }) {
   const dialogs = [];
+  // Pendengar app.on disimpan supaya tes bisa memicu 'will-quit' - jalur
+  // autoInstallOnAppQuit tidak lewat tombol mana pun, jadi tanpa ini ia tidak
+  // bisa diuji sama sekali.
+  const pendengar = {};
   const au = new EventEmitter();
   au.autoDownload = false;
   au.autoInstallOnAppQuit = false;
@@ -51,6 +55,7 @@ function pasangPanggung({ userData, quitAndInstall, versi = '1.2.2' }) {
     isQuitting: false,
     getVersion: () => versi,
     getPath: () => userData,
+    on: (nama, fn) => { (pendengar[nama] = pendengar[nama] || []).push(fn); },
   };
 
   const electron = {
@@ -59,7 +64,7 @@ function pasangPanggung({ userData, quitAndInstall, versi = '1.2.2' }) {
       // Tombol 0 = "Pasang & mulai ulang": inilah yang sedang diuji.
       showMessageBox: (opsi) => {
         dialogs.push(opsi);
-        return Promise.resolve({ response: 0 });
+        return Promise.resolve({ response: jawaban });
       },
       showErrorBox: (title, content) => dialogs.push({ title, detail: content }),
     },
@@ -85,7 +90,8 @@ function pasangPanggung({ userData, quitAndInstall, versi = '1.2.2' }) {
   delete require.cache[require.resolve(UPDATER)];
   // eslint-disable-next-line global-require, import/no-dynamic-require
   const mod = require(UPDATER);
-  return { mod, au, app, dialogs };
+  const picu = (nama) => (pendengar[nama] || []).forEach((fn) => fn());
+  return { mod, au, app, dialogs, picu };
 }
 
 function dirBaru() {
@@ -97,7 +103,12 @@ function isiLog(dir) {
   return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : '';
 }
 
-/** Jalankan sampai host menekan "Pasang & mulai ulang". */
+function penanda(dir) {
+  const f = path.join(dir, 'pemasangan-tertunda.json');
+  return fs.existsSync(f) ? JSON.parse(fs.readFileSync(f, 'utf8')) : null;
+}
+
+/** Jalankan sampai host menjawab dialog "Pembaruan siap". */
 async function sampaiMemasang(panggung) {
   panggung.mod.periksaPembaruan({ diam: true });
   await Promise.resolve();
@@ -225,6 +236,115 @@ async function utama() {
     });
     periksa('Ukurannya kembali di bawah batas', () => {
       assert.ok(fs.statSync(f).size < 256 * 1024, `${fs.statSync(f).size} byte`);
+    });
+  }
+
+  // --- 7. Keluar normal tapi tidak ada yang terpasang -------------------
+  // Bentuk kegagalan yang sesungguhnya terjadi pada 1.3.1 -> 1.3.2: Smart App
+  // Control menolak installer di tingkat kernel, electron-updater menelan
+  // penolakannya sebagai INFO, dan aplikasi keluar dengan tenang. Penjaga
+  // waktu tidak berbunyi - aplikasinya memang keluar - jadi satu-satunya bukti
+  // baru muncul di sesi berikutnya: versinya masih yang lama.
+  {
+    const dir = dirBaru();
+
+    // Sesi 1: host memilih "Nanti saat ditutup", lalu menutup aplikasinya.
+    const s1 = pasangPanggung({ userData: dir, versi: '1.3.1', jawaban: 1,
+      quitAndInstall: () => { throw new Error('tidak boleh dipanggil'); } });
+    await sampaiMemasang(s1);
+    periksa('"Nanti saat ditutup" tidak memasang saat itu juga', () => {
+      assert.strictEqual(penanda(dir), null, 'penanda ditulis terlalu dini');
+    });
+    s1.picu('will-quit');
+    periksa('Keluar dengan pembaruan menunggu meninggalkan penanda', () => {
+      const t = penanda(dir);
+      assert.ok(t, 'tidak ada penanda');
+      assert.strictEqual(t.versi, '1.3.0');
+      assert.strictEqual(t.dari, '1.3.1');
+    });
+
+    // Sesi 2: aplikasi hidup lagi, versinya TIDAK berubah.
+    const s2 = pasangPanggung({ userData: dir, versi: '1.3.1',
+      quitAndInstall: () => {} });
+    s2.mod.laporkanPemasanganTertunda();
+    periksa('Sesi berikutnya melaporkan pemasangan yang tidak pernah terjadi', () => {
+      const d = s2.dialogs.filter((x) => x.title === 'Pembaruan gagal dipasang');
+      assert.strictEqual(d.length, 1,
+        `dialog: ${JSON.stringify(s2.dialogs.map((x) => x.title))}`);
+      assert.ok(/masih di versi 1\.3\.1/.test(d[0].detail), d[0].detail);
+      assert.ok(/Smart App Control/.test(d[0].detail), d[0].detail);
+    });
+    periksa('Kegagalan senyap itu ikut tercatat di berkas', () => {
+      assert.ok(/ERROR.*pemasangan 1\.3\.0 tidak terjadi/.test(isiLog(dir)),
+        isiLog(dir));
+    });
+    periksa('Penandanya dibuang, jadi tidak berbunyi tiap membuka aplikasi', () => {
+      assert.strictEqual(penanda(dir), null);
+      const s3 = pasangPanggung({ userData: dir, versi: '1.3.1',
+        quitAndInstall: () => {} });
+      s3.mod.laporkanPemasanganTertunda();
+      assert.strictEqual(s3.dialogs.length, 0,
+        `dialog: ${JSON.stringify(s3.dialogs.map((x) => x.title))}`);
+    });
+  }
+
+  // --- 8. Pemasangan yang BERHASIL tidak boleh berbunyi -----------------
+  // Sisi sebaliknya dari tes 7, dan yang paling mudah rusak: penanda yang sama
+  // ada di kedua kasus, yang membedakan cuma versi yang berjalan.
+  {
+    const dir = dirBaru();
+    const s1 = pasangPanggung({ userData: dir, versi: '1.3.1',
+      quitAndInstall: () => {} });
+    await sampaiMemasang(s1);
+    periksa('Menekan "Pasang & mulai ulang" menulis penanda lebih dulu', () => {
+      const t = penanda(dir);
+      assert.ok(t && t.versi === '1.3.0' && t.dari === '1.3.1', JSON.stringify(t));
+    });
+
+    const s2 = pasangPanggung({ userData: dir, versi: '1.3.0',
+      quitAndInstall: () => {} });
+    s2.mod.laporkanPemasanganTertunda();
+    periksa('Versi yang berubah dibaca sebagai berhasil, bukan gagal', () => {
+      assert.strictEqual(s2.dialogs.length, 0,
+        `dialog: ${JSON.stringify(s2.dialogs.map((x) => x.title))}`);
+      assert.ok(/1\.3\.1 -> 1\.3\.0 terpasang/.test(isiLog(dir)), isiLog(dir));
+      assert.strictEqual(penanda(dir), null);
+    });
+  }
+
+  // --- 9. Tanpa penanda, sesi biasa tetap sunyi -------------------------
+  {
+    const dir = dirBaru();
+    const p = pasangPanggung({ userData: dir, quitAndInstall: () => {} });
+    p.mod.laporkanPemasanganTertunda();
+    periksa('Buka aplikasi tanpa pembaruan tertunda tidak memunculkan apa pun', () => {
+      assert.strictEqual(p.dialogs.length, 0,
+        `dialog: ${JSON.stringify(p.dialogs.map((x) => x.title))}`);
+    });
+  }
+
+  // --- 10. Gagal yang sudah dilaporkan seketika tidak diulang -----------
+  // Dua alarm untuk satu kegagalan sama buruknya dengan nol alarm: host tidak
+  // bisa lagi membedakan "gagal lagi" dari "gema yang kemarin".
+  {
+    const dir = dirBaru();
+    const s1 = pasangPanggung({
+      userData: dir,
+      versi: '1.3.1',
+      quitAndInstall: () => { throw new Error('diblokir kebijakan'); },
+    });
+    await sampaiMemasang(s1);
+    periksa('Gagal seketika membuang penandanya sendiri', () => {
+      const d = s1.dialogs.filter((x) => x.title === 'Pembaruan gagal dipasang');
+      assert.strictEqual(d.length, 1);
+      assert.strictEqual(penanda(dir), null);
+    });
+    const s2 = pasangPanggung({ userData: dir, versi: '1.3.1',
+      quitAndInstall: () => {} });
+    s2.mod.laporkanPemasanganTertunda();
+    periksa('Sesi berikutnya tidak mengulang alarm yang sama', () => {
+      assert.strictEqual(s2.dialogs.length, 0,
+        `dialog: ${JSON.stringify(s2.dialogs.map((x) => x.title))}`);
     });
   }
 
