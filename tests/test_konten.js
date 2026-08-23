@@ -409,8 +409,23 @@ async function utama() {
 
     // Paket konten harus sudah dirakit; kalau belum, rakit di sini supaya tes
     // ini tidak menuntut urutan perintah tertentu dari yang menjalankannya.
+    //
+    // Yang diperiksa VERSINYA, bukan cuma keberadaan berkasnya. Manifes yang
+    // tertinggal dari rilis sebelumnya tetap ada di dist-desktop setelah
+    // package.json dinaikkan, dan unggah-konten.js mencari zip bernomor versi
+    // yang baru - jadi penjaga "kalau belum ada" meloloskan manifes basi, lalu
+    // empat tes di bawah gagal karena berkas yang dicari memang tidak pernah
+    // dirakit. Di CI tidak pernah terasa: checkout-nya selalu bersih.
     const manifes = path.join(AKAR, 'dist-desktop', 'konten.json');
-    if (!fs.existsSync(manifes)) {
+    const versi = JSON.parse(
+      fs.readFileSync(path.join(AKAR, 'package.json'), 'utf8')).version;
+    const basi = () => {
+      if (!fs.existsSync(manifes)) return true;
+      try {
+        return JSON.parse(fs.readFileSync(manifes, 'utf8')).versi !== versi;
+      } catch { return true; }
+    };
+    if (basi()) {
       spawnSync(process.execPath, [path.join(AKAR, 'tools', 'paket-konten.js')],
         { cwd: AKAR, stdio: 'pipe' });
     }
@@ -424,7 +439,6 @@ async function utama() {
     });
     await new Promise((r) => srv.close(r));
 
-    const versi = JSON.parse(fs.readFileSync(path.join(AKAR, 'package.json'), 'utf8')).version;
     periksa('Unggah konten berhasil dan menyebut kedua berkasnya', () => {
       assert.strictEqual(jalan.kode, 0, `keluar ${jalan.kode}: ${jalan.keluaran}`);
       assert.ok(jalan.keluaran.includes(`konten-${versi}.zip terunggah`), jalan.keluaran);
