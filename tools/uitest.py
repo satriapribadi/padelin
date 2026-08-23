@@ -868,6 +868,204 @@ def main() -> int:
                     f"99 dijepit ke 7, bukan-angka ditolak")
         check("Ganti rating peserta di rekap", ganti_rating)
 
+        # --- 3a6. ganti nama mengambil L/P & rating dari master ------------
+        # Substitusi peserta sebenarnya tiga perubahan sekaligus: nama, gender,
+        # kekuatan. Host yang cuma mengganti namanya meninggalkan jadwal yang
+        # memperlakukan pengganti sebagai orang yang digantikan - dan dua field
+        # yang tertinggal itu dibaca aturan babak, permintaan court, dan pool
+        # rating. Yang diuji: kalau namanya ada di master klub, keduanya ikut
+        # tanpa diketik.
+        def nama_dari_master():
+            # Peserta master yang BELUM ada di jadwal, dengan L/P dan rating
+            # yang berbeda dari orang yang akan digantikan - kalau sama, tidak
+            # ada yang bisa dibuktikan ikut berubah.
+            umpan = {"nama": f"Master Uji {stamp}", "rating": 6.5, "gender": "F"}
+            # club_id diambil dari halaman, bukan dikirim null: loadMaster()
+            # menyaring per klub di SERVER, jadi peserta tanpa klub tidak akan
+            # pernah ikut terkirim balik dan sarannya tidak mungkin muncul.
+            # Klubnya diambil dari /api/master, bukan dari kotak di halaman:
+            # server memakai klub BAWAAN kalau club_id kosong, jadi peserta
+            # tanpa klub tidak pernah ikut terkirim balik dan sarannya mustahil
+            # muncul. Yang dipakai harus klub yang sama dengan yang dibaca UI.
+            b.js("""(async () => {
+              const m = await (await fetch('/api/master')).json();
+              window.__mu = await (await fetch('/api/players/save', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(Object.assign(""" + json.dumps({
+                  "name": umpan["nama"], "rating": umpan["rating"],
+                  "gender": umpan["gender"]}) + """,
+                  {club_id: m.club_id})),
+              })).json();
+            })(); true""")
+            b.wait_for("window.__mu && window.__mu.id", timeout=15,
+                       label="peserta master uji tersimpan")
+            mid = b.js("window.__mu.id")
+
+            # Master dimuat ulang lalu jadwal digambar ulang, seperti yang
+            # terjadi kalau host menambah pemain lalu kembali ke tab Jadwal.
+            b.js("document.querySelector('.tabs button[data-view=\"master\"]')"
+                 ".click(); true")
+            time.sleep(1.2)
+            b.js("document.querySelector('.tabs button[data-view=\"jadwal\"]')"
+                 ".click(); true")
+            time.sleep(0.5)
+
+            # Saran disegarkan saat kotak nama disentuh, bukan saat tab dibuka -
+            # jadi fokus dulu, seperti host yang hendak mengetik.
+            b.js("document.querySelector('#recap input[data-rename]')"
+                 ".dispatchEvent(new Event('focusin', {bubbles:true})); true")
+            saran = b.js("[...document.querySelectorAll('#master-nama option')]"
+                         ".map((o) => o.value)")
+            assert umpan["nama"] in (saran or []), (
+                f"peserta master tidak muncul di {len(saran or [])} saran; "
+                f"contoh: {(saran or [])[:4]}")
+            # Yang sudah main di jadwal ini tidak boleh ikut disarankan.
+            dipakai = b.js("[...document.querySelectorAll("
+                           "'#recap input[data-rename]')].map((i) => i.value)")
+            tumpang = [n for n in (saran or []) if n in dipakai]
+            assert not tumpang, f"peserta yang sudah main ikut disarankan: {tumpang}"
+
+            # Korban: peserta yang L/P dan ratingnya berbeda dari umpan.
+            korban = b.js("""(() => {
+              const tr = [...document.querySelectorAll('#recap table.data tbody tr')];
+              for (const r of tr) {
+                const g = r.querySelector('select[data-gender]');
+                const rt = r.querySelector('input[data-rating]');
+                if (g && g.value !== 'F' && parseFloat(rt.value) !== 6.5) {
+                  return {id: +g.dataset.gender, nama: r.querySelector('input').value,
+                          gender: g.value, rating: rt.value};
+                }
+              }
+              return null;
+            })()""")
+            assert korban, "tidak ada peserta yang L/P & ratingnya berbeda"
+            pid = korban["id"]
+
+            b.js("(() => { const i = document.querySelector("
+                 + json.dumps(f'#recap input[data-rename="{pid}"]')
+                 + "); i.value = " + json.dumps(umpan["nama"]) + ";"
+                 " i.dispatchEvent(new Event('change', {bubbles:true}));"
+                 " })(); true")
+            b.wait_for(f"""(() => {{
+              const g = document.querySelector('#recap select[data-gender="{pid}"]');
+              const r = document.querySelector('#recap input[data-rating="{pid}"]');
+              return g && r && g.value === 'F' && parseFloat(r.value) === 6.5;
+            }})()""", timeout=25, label="L/P & rating ikut dari master")
+
+            # Tab Setup ikut, kalau tidak Generate berikutnya menghidupkan lagi
+            # angka orang yang sudah digantikan.
+            di_setup = b.js("""(() => {
+              const baris = [...document.querySelectorAll('#ptable tbody tr')]
+                .find((r) => r.querySelector('.nm').value === """
+                            + json.dumps(umpan["nama"]) + """);
+              if (!baris) return null;
+              return {g: baris.querySelector('[data-f="gender"]').value,
+                      r: baris.querySelector('[data-f="rating"]').value};
+            })()""")
+            assert di_setup and di_setup["g"] == "F" \
+                and float(di_setup["r"]) == 6.5, \
+                f"tab Setup tidak ikut: {di_setup}"
+
+            # Nama yang TIDAK ada di master tidak membawa apa pun - L/P dan
+            # rating yang barusan diambil harus tetap, bukan ikut terhapus.
+            b.js("(() => { const i = document.querySelector("
+                 + json.dumps(f'#recap input[data-rename="{pid}"]')
+                 + "); i.value = " + json.dumps(f"Bukan Master {stamp}") + ";"
+                 " i.dispatchEvent(new Event('change', {bubbles:true}));"
+                 " })(); true")
+            time.sleep(1.0)
+            tetap = b.js(f"""(() => {{
+              const g = document.querySelector('#recap select[data-gender="{pid}"]');
+              const r = document.querySelector('#recap input[data-rating="{pid}"]');
+              return g.value + '/' + r.value;
+            }})()""")
+            assert tetap.startswith("F/") and float(tetap.split("/")[1]) == 6.5, \
+                f"nama di luar master ikut mengubah L/P atau rating: {tetap}"
+
+            b.js(f"fetch('/api/players/delete', {{method:'POST',"
+                 f" headers:{{'Content-Type':'application/json'}},"
+                 f" body: JSON.stringify({{id: {mid}}})}}); true")
+            return (f"'{korban['nama']}' ({korban['gender']}/{korban['rating']}) "
+                    f"-> master: F/6.5 ikut ke rekap & tab Setup; nama di luar "
+                    f"master tidak membawa apa pun")
+        check("Ganti nama mengambil L/P & rating dari master", nama_dari_master)
+
+        # --- 3a7. quick-add peserta rekap ke master pemain -----------------
+        # Pengganti yang datang di tengah acara justru yang paling sering belum
+        # jadi anggota klub. Tanpa tombol ini host harus pindah ke tab Master,
+        # mengetik ulang nama + L/P + rating yang baru saja ia isi di rekap,
+        # lalu kembali. Yang diuji: satu klik menyimpannya dengan angka dari
+        # barisnya sendiri, tombolnya lenyap, dan namanya berbalik jadi saran.
+        def quickadd_master():
+            nama = f"Tamu Uji {stamp}"
+            target = b.js("""(() => {
+              const inp = document.querySelector('#recap input[data-rename]');
+              return inp ? +inp.dataset.rename : null;
+            })()""")
+            assert target is not None, "rekap tidak punya kotak nama"
+
+            def isi(sel, nilai, ev="change"):
+                b.js("(() => { const i = document.querySelector("
+                     + json.dumps(sel) + "); i.value = " + json.dumps(nilai)
+                     + f"; i.dispatchEvent(new Event('{ev}', {{bubbles:true}}));"
+                     " })(); true")
+
+            # Nama di luar master, dengan L/P dan rating yang khas supaya bisa
+            # dibuktikan angka itulah yang tersimpan - bukan bawaan 3.0.
+            isi(f'#recap input[data-rename="{target}"]', nama)
+            b.wait_for(f"""document.querySelector(
+              '#recap input[data-rename="{target}"]').value === {json.dumps(nama)}""",
+                       timeout=20, label="nama pengganti terpasang")
+            isi(f'#recap select[data-gender="{target}"]', "F")
+            b.wait_for(f"""document.querySelector(
+              '#recap select[data-gender="{target}"]').value === 'F'""",
+                       timeout=20, label="L/P terpasang")
+            isi(f'#recap input[data-rating="{target}"]', "5.5")
+            b.wait_for(f"""parseFloat(document.querySelector(
+              '#recap input[data-rating="{target}"]').value) === 5.5""",
+                       timeout=20, label="rating terpasang")
+
+            tombol = f'#recap .rk-add-btn[data-simpan-master="{target}"]'
+            b.wait_for(f"document.querySelector({json.dumps(tombol)})", timeout=10,
+                       label="tawaran simpan ke master muncul")
+            label = b.js(f"document.querySelector({json.dumps(tombol)}).textContent")
+            assert nama in label, f"tombolnya tidak menyebut namanya: {label}"
+
+            b.js(f"document.querySelector({json.dumps(tombol)}).click(); true")
+            # Tombolnya lenyap sendiri begitu orangnya terdaftar - itu sekaligus
+            # bukti master sudah dimuat ulang, bukan cuma request terkirim.
+            b.wait_for(f"!document.querySelector({json.dumps(tombol)})", timeout=25,
+                       label="tawaran lenyap setelah tersimpan")
+
+            # Yang tersimpan harus angka dari barisnya, bukan bawaan.
+            tersimpan = b.js("""(async () => {
+              const m = await (await fetch('/api/master')).json();
+              return (m.players || []).find(
+                (p) => p.name === """ + json.dumps(nama) + """) || null;
+            })()""")
+            assert tersimpan, "peserta tidak ada di master setelah disimpan"
+            assert tersimpan["gender"] == "F", \
+                f"L/P tidak ikut tersimpan: {tersimpan['gender']}"
+            assert float(tersimpan["rating"]) == 5.5, \
+                f"rating tidak ikut tersimpan: {tersimpan['rating']}"
+
+            # Sekarang ia anggota klub, jadi ia TIDAK boleh disarankan lagi -
+            # ia sudah main di jadwal ini, dan memilihnya cuma nama kembar.
+            b.js("document.querySelector('#recap input[data-rename]')"
+                 ".dispatchEvent(new Event('focusin', {bubbles:true})); true")
+            saran = b.js("[...document.querySelectorAll('#master-nama option')]"
+                         ".map((o) => o.value)")
+            assert nama not in (saran or []), \
+                "peserta yang sedang main ikut disarankan setelah terdaftar"
+
+            b.js(f"""fetch('/api/players/delete', {{method: 'POST',
+              headers: {{'Content-Type': 'application/json'}},
+              body: JSON.stringify({{id: {tersimpan['id']}}})}}); true""")
+            return (f"'{nama}' F/5.5 tersimpan dari rekap dengan satu klik, "
+                    f"tombolnya lenyap, dan tidak disarankan lagi")
+        check("Quick-add peserta rekap ke master pemain", quickadd_master)
+
         # --- 3a3. kalibrasi manual: tukar orang di dalam satu ronde -------
         # Yang diuji bukan namanya pindah di kartu ronde - itu bagian yang
         # gampang. Yang diuji adalah seluruh TURUNANNYA ikut bergeser: jumlah

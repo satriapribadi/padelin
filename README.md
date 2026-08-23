@@ -404,6 +404,43 @@ dan di mode pool rating, pool tiap orang yang memang DITURUNKAN dari
 ratingnya. Yang kedua berarti satu angka yang diubah bisa membuat court yang
 tadinya satu pool jadi campur, dan itu ikut dilaporkan.
 
+**Dan ketiganya tidak perlu diketik satu-satu.** Kotak nama di rekap
+menyarankan anggota klub dari master pemain; pilih salah satu dan **L/P serta
+ratingnya ikut terisi sendiri**. Substitusi peserta sebenarnya tiga perubahan
+sekaligus, dan yang dua terakhir justru yang paling gampang tertinggal karena
+tidak terlihat salah — jadi kalau orangnya sudah terdaftar di klub, angkanya
+tidak perlu diingat.
+
+Yang sudah main di jadwal ini tidak ikut disarankan: memilih mereka hanya
+berujung pada penolakan nama kembar, dan saran yang selalu ditolak lebih buruk
+daripada saran yang tidak ada. Nilai master diambil apa adanya, termasuk gender
+yang kosong — menahan yang kosong supaya "tidak merusak" justru menyembunyikan
+yang paling berbahaya, karena peserta tanpa gender di babak putra tetap
+melanggar dan itu harus terlihat. Nama yang tidak ada di master tidak membawa
+apa pun, dan toast-nya mengatakan begitu apa adanya.
+
+**Dan kalau penggantinya belum jadi anggota klub, ia bisa didaftarkan dari
+situ juga.** Di bawah tabel muncul baris `Belum ada di master pemain:` dengan
+satu tombol per nama; sekali klik ia tersimpan ke klub **dengan L/P dan rating
+yang tertulis di barisnya**, jadi tidak ada yang perlu diketik dua kali. Kalau
+yang belum terdaftar lebih dari satu, ada `Simpan semua`; lebih dari delapan
+dirinci sampai delapan lalu sisanya diringkas. Tombolnya lenyap sendiri begitu
+orangnya terdaftar — itu sekaligus tanda master sudah dimuat ulang, bukan cuma
+permintaan terkirim.
+
+Tepinya putus-putus, dan itu bukan hiasan: tombol itu satu-satunya kendali di
+panel ini yang **menulis** ke master pemain. Mengganti nama, L/P, dan rating di
+tabel di atasnya tidak menyentuhnya sama sekali — mengganti nama di satu acara
+bukan berarti nama orangnya di klub ikut berubah — dan bedanya harus terlihat
+sebelum diklik, bukan sesudah.
+
+Sarannya diisi ulang tiap kotak nama disentuh, bukan sekali saat jadwal
+digambar. Itu bukan kehati-hatian berlebihan: pengganti yang muncul di tengah
+acara sering belum terdaftar, jadi host mendaftarkannya di tab Master lalu
+kembali ke Jadwal — dan pindah tab tidak menggambar ulang apa pun. Tanpa
+penyegaran itu, orang yang baru saja ia daftarkan adalah satu-satunya nama yang
+tidak muncul.
+
 Ketiganya — nama, L/P, rating — memicu hitung ulang yang sama dengan kalibrasi
 manual di bawah, jadi aturan yang jadi terlanggar karenanya muncul di panel
 Catatan, bukan diam. Kalau satu perubahan melanggar banyak court sekaligus,
@@ -732,7 +769,7 @@ Data acara ada di `%APPDATA%\Padelin` saat dipasang lewat installer, dan
 
 ```bash
 python -m unittest discover -s tests    # 257 tes unit
-python tools/uitest.py                  # 36 uji interaksi di browser sungguhan
+python tools/uitest.py                  # 38 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 python tools/cetaktest.py               # 15 uji jalur cetak & pratinjau (Electron)
 python tools/apptest.py                 # 18 uji aplikasi desktop sungguhan

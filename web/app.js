@@ -1120,12 +1120,12 @@ function renderSchedule() {
   // Kolom L/P ikut ditampilkan supaya warna nama di susunan pertandingan punya
   // padanan berupa HURUF di halaman yang sama - warna saja tidak cukup, dan
   // mengirim orang ke tab Peserta hanya untuk memastikan itu memutus alurnya.
-  let html = '<div class="rk-hint">Nama'
-    + (showGender ? ', L/P,' : '') + ' dan rating bisa diklik untuk diubah - '
-    + 'dipakai kalau seseorang batal datang dan digantikan orang lain. '
-    + 'Perubahannya ikut ke susunan, matriks, teks WhatsApp, CSV, dan laporan '
-    + 'cetak; tekan Simpan lagi supaya tersimpan. Master pemain tidak berubah.'
-    + '</div>'
+  let html = datalistMaster()
+    + '<div class="rk-hint">Klik nama'
+    + (showGender ? ', L/P,' : '') + ' atau rating untuk menggantinya - dipakai '
+    + 'kalau seseorang batal datang dan digantikan orang lain. Pilih nama dari '
+    + 'master pemain dan L/P serta ratingnya ikut terisi; tekan Simpan lagi '
+    + 'supaya tersimpan.</div>'
     // Tabelnya menggulir di dalam wadahnya sendiri. Kartu rekap duduk di kolom
     // kiri yang lebarnya dibatasi 420px, dan dengan kolom wasit + ballboy
     // menyala isinya tidak muat - tanpa wadah ini tabelnya meluber keluar
@@ -1154,6 +1154,7 @@ function renderSchedule() {
       + `<td class="num">${Math.max(0, idle)}</td></tr>`;
   });
   $('recap').innerHTML = html + '</tbody></table></div>'
+    + tawaranSimpanMaster()
     + roleTimeline(schedule, showRoles);
   pasangEditorNama();
   pasangEditorGender();
@@ -1778,6 +1779,168 @@ function renderKalibrasi() {
 // Ganti nama peserta
 // ---------------------------------------------------------------------------
 
+// Berapa banyak nama yang dirinci sebagai tombol sebelum sisanya diringkas.
+// Delapan cukup untuk satu-dua pengganti yang datang di tengah acara - yang
+// lebih banyak dari itu artinya SELURUH roster belum terdaftar, dan itu
+// pekerjaan tombol "Simpan semua", bukan dua puluh enam tombol.
+const RK_ADD_MAX = 8;
+
+/** Peserta jadwal yang namanya belum ada di master klub ini. */
+function belumDiMaster() {
+  const ada = new Set(clubPlayers().map((m) => (m.name || '').trim().toLowerCase()));
+  return (schedule.players || []).filter(
+    (p) => (p.name || '').trim() && !ada.has(p.name.trim().toLowerCase()));
+}
+
+/**
+ * Tawaran menyimpan peserta yang belum terdaftar ke master klub.
+ *
+ * Ada di sini karena pengganti yang muncul di tengah acara justru yang paling
+ * sering BELUM jadi anggota klub - dan tanpa ini host harus pindah ke tab
+ * Master, mengetik ulang nama, L/P, dan rating yang baru saja ia isi di rekap,
+ * lalu kembali. Yang disimpan adalah angka yang tertulis di barisnya, jadi
+ * tidak ada yang perlu diketik dua kali.
+ *
+ * Tombolnya bertepi putus-putus: ia satu-satunya kendali di panel ini yang
+ * menulis ke master pemain, dan itu harus terlihat berbeda dari mengganti nama
+ * yang tidak menyentuhnya sama sekali.
+ */
+function tawaranSimpanMaster() {
+  const sisa = belumDiMaster();
+  if (!sisa.length) return '';
+  const tampil = sisa.slice(0, RK_ADD_MAX);
+  const sisanya = sisa.length - tampil.length;
+  return '<div class="rk-add"><span>Belum ada di master pemain:</span>'
+    + tampil.map((p) => '<button type="button" class="rk-add-btn"'
+      + ` data-simpan-master="${p.id}" title="Simpan ke master klub dengan L/P`
+      + ` dan rating yang tertulis di barisnya">+ ${esc(p.name)}</button>`).join('')
+    + (sisanya ? `<span>dan ${sisanya} lagi</span>` : '')
+    + (sisa.length > 1
+      ? '<button type="button" class="rk-add-btn semua" data-simpan-master="*">'
+        + `Simpan semua (${sisa.length})</button>`
+      : '')
+    + '</div>';
+}
+
+// Satu penangan untuk seluruh tawaran. Wadah #recap tidak pernah diganti -
+// hanya isinya - jadi ia tetap berlaku setelah digambar ulang.
+$('recap').addEventListener('click', async (e) => {
+  const tombol = e.target.closest('button[data-simpan-master]');
+  if (!tombol || tombol.disabled || !schedule) return;
+  const semua = tombol.dataset.simpanMaster === '*';
+  const orang = semua
+    ? belumDiMaster()
+    : (schedule.players || []).filter(
+      (x) => x.id === +tombol.dataset.simpanMaster);
+  if (!orang.length) return;
+
+  // Dimatikan selagi menyimpan: klik kedua pada tombol yang sama akan
+  // mengirim permintaan kembar untuk orang yang sama.
+  tombol.disabled = true;
+  try {
+    await api('/api/players/bulk', {
+      club_id: currentClubId(),
+      players: orang.map((p) => ({
+        name: p.name, rating: p.rating, gender: p.gender,
+      })),
+    });
+    await loadMaster();
+    // Digambar ulang supaya tombolnya lenyap sendiri: yang sudah terdaftar
+    // tidak lagi masuk daftar, dan namanya justru mulai muncul sebagai saran.
+    renderSchedule();
+    toast(orang.length === 1
+      ? `${orang[0].name} disimpan ke master pemain`
+      : `${orang.length} peserta disimpan ke master pemain`);
+  } catch (err) {
+    tombol.disabled = false;
+    toast(`Gagal menyimpan ke master: ${err.message}`);
+  }
+});
+
+/** Peserta master klub ini yang BELUM ada di jadwal, sebagai saran nama.
+ *
+ * Satu datalist dipakai bersama seluruh baris rekap, bukan satu combobox per
+ * baris: roster 26 orang berarti 26 widget yang masing-masing punya wadah dan
+ * listbox sendiri, padahal yang disarankan sama untuk semuanya.
+ *
+ * Yang sudah main di jadwal ini dikeluarkan dari saran. Memilih mereka hanya
+ * berujung pada penolakan nama kembar, dan saran yang selalu ditolak lebih
+ * buruk daripada saran yang tidak ada.
+ */
+function datalistMaster() {
+  // Wadahnya selalu dibuat, walau isinya belum ada. Ia diisi ulang setiap
+  // kotak nama disentuh, dan wadah yang tidak pernah lahir tidak bisa diisi.
+  return '<datalist id="master-nama"></datalist>';
+}
+
+/**
+ * Isi ulang saran nama dari master pemain.
+ *
+ * Dipanggil ulang setiap kotak nama mendapat fokus, bukan cuma sekali saat
+ * jadwal digambar. Alasannya persis kasus yang membuat fitur ini ada:
+ * pengganti yang muncul di tengah acara sering BELUM terdaftar di klub, jadi
+ * host mendaftarkannya di tab Master lalu kembali ke Jadwal - dan pindah tab
+ * tidak menggambar ulang apa pun. Tanpa penyegaran di sini, orang yang baru
+ * saja ia daftarkan adalah satu-satunya nama yang tidak muncul.
+ */
+function segarkanDatalistMaster() {
+  const dl = document.getElementById('master-nama');
+  if (!dl || !schedule) return;
+  // Yang sudah main di jadwal ini dikeluarkan: memilih mereka hanya berujung
+  // pada penolakan nama kembar, dan saran yang selalu ditolak lebih buruk
+  // daripada saran yang tidak ada.
+  const dipakai = new Set((schedule.players || [])
+    .map((p) => (p.name || '').trim().toLowerCase()));
+  dl.innerHTML = clubPlayers()
+    .filter((m) => !dipakai.has((m.name || '').trim().toLowerCase()))
+    .map((m) => `<option value="${esc(m.name)}"></option>`).join('');
+}
+
+/** Nama di master klub ini yang sama persis, tanpa membedakan huruf besar-kecil. */
+function cariDiMaster(nama) {
+  const k = (nama || '').trim().toLowerCase();
+  if (!k) return null;
+  return clubPlayers().find((m) => (m.name || '').trim().toLowerCase() === k) || null;
+}
+
+/**
+ * Ambil L/P dan rating dari master pemain, kalau namanya memang ada di sana.
+ *
+ * Ini yang membuat ganti nama benar-benar berarti "ganti orang". Substitusi
+ * peserta sebenarnya tiga perubahan sekaligus - nama, gender, kekuatan - dan
+ * host yang cuma mengganti namanya meninggalkan jadwal yang memperlakukan
+ * pengganti sebagai orang yang digantikan: aturan babak putra/putri/mixed,
+ * permintaan court, dan pool rating semuanya membaca dua field yang tertinggal
+ * itu. Kalau orangnya sudah terdaftar di klub, angkanya tidak perlu diketik
+ * ulang - dan tidak perlu diingat.
+ *
+ * Nilai master diambil APA ADANYA, termasuk gender yang kosong. Menahan yang
+ * kosong supaya "tidak merusak" justru menyembunyikan yang paling berbahaya:
+ * peserta tanpa gender di babak putra tetap melanggar, dan itu harus terlihat -
+ * hitung ulang di server yang melaporkannya.
+ *
+ * Mengembalikan daftar apa saja yang ikut berubah, untuk disebut di toast.
+ */
+function ambilDariMaster(p, diSetup) {
+  const dari = cariDiMaster(p.name);
+  if (!dari) return [];
+  const kata = (g) => (g === 'M' ? 'L' : g === 'F' ? 'P' : '-');
+  const ikut = [];
+
+  const gBaru = dari.gender || null;
+  if (gBaru !== (p.gender || null)) {
+    p.gender = gBaru;
+    ikut.push(`L/P ${kata(gBaru)}`);
+  }
+  const rBaru = Number.isFinite(+dari.rating) ? +dari.rating : p.rating;
+  if (rBaru !== p.rating) {
+    p.rating = rBaru;
+    ikut.push(`rating ${rBaru}`);
+  }
+  if (diSetup) { diSetup.gender = p.gender; diSetup.rating = p.rating; }
+  return ikut;
+}
+
 /** Sel nama di tabel rekap, sebagai kotak isian.
  *
  * Namanya diganti DI SINI, bukan di tab Peserta, karena di sinilah salah
@@ -1792,12 +1955,21 @@ function renderKalibrasi() {
 function namaEditor(p) {
   const cls = p.gender === 'M' ? 'g-m' : p.gender === 'F' ? 'g-f' : '';
   return `<input class="nm-edit ${cls}" type="text" spellcheck="false"`
-    + ` data-rename="${p.id}" value="${esc(p.name)}"`
-    + ` aria-label="Nama peserta" title="Klik untuk mengganti nama">`;
+    + ` data-rename="${p.id}" value="${esc(p.name)}" list="master-nama"`
+    + ' autocomplete="off" aria-label="Nama peserta"'
+    + ' title="Ketik nama, atau pilih dari master pemain - L/P dan rating ikut">';
 }
+
+// Saran master disegarkan saat kotak nama disentuh. Wadah #recap tidak pernah
+// diganti - hanya isinya - jadi satu penangan di sini cukup untuk seluruh
+// baris, sekarang maupun setelah digambar ulang.
+$('recap').addEventListener('focusin', (e) => {
+  if (e.target.matches('input[data-rename]')) segarkanDatalistMaster();
+});
 
 /** Sambungkan kotak nama di rekap ke penggantinya. */
 function pasangEditorNama() {
+  segarkanDatalistMaster();
   $('recap').querySelectorAll('input[data-rename]').forEach((inp) => {
     const id = +inp.dataset.rename;
     const semula = inp.value;
@@ -2040,21 +2212,33 @@ function gantiNamaPemain(id, mentah) {
     (n) => (CATATAN_BERNAMA.some((k) => n.includes(k)) ? tukarNama(n, lama, baru) : n));
 
   const diSetup = players.find((x) => x.id === id);
-  if (diSetup) { diSetup.name = baru; renderPlayers(); }
+  if (diSetup) diSetup.name = baru;
 
+  // Kalau nama barunya terdaftar di master klub, L/P dan ratingnya ikut -
+  // stempel setup dihitung SESUDAH ini supaya ia mencakup ketiganya sekaligus.
+  const ikut = ambilDariMaster(p, diSetup);
+  if (diSetup) renderPlayers();
   if (!basiSebelumnya) scheduleStamp = schedulingStamp();
+
+  if (ikut.length) {
+    // L/P atau rating ikut berubah, jadi angkanya bukan cuma labelnya:
+    // aturan babak dan pool rating dinilai ulang di server, dan yang jadi
+    // terlanggar dilaporkan di panel Catatan.
+    hitungUlangJadwal(`"${lama}" jadi "${baru}", ${ikut.join(' & ')} ikut dari `
+      + 'master pemain');
+    return true;
+  }
 
   renderSchedule();
   refreshScheduleTexts();
-  // Ganti nama di rekap sebenarnya lebih sering dipakai untuk SUBSTITUSI
-  // peserta daripada untuk salah ketik. Kalau meet-nya memakai gender, yang
-  // paling gampang tertinggal adalah L/P-nya - dan yang ikut salah bukan cuma
-  // warna namanya, tapi aturan babak dan permintaan court. Diingatkan di sini,
-  // saat orangnya masih menatap baris yang sama.
+  // Nama yang TIDAK ada di master tidak membawa apa pun, dan yang paling
+  // gampang tertinggal adalah L/P-nya - yang ikut salah bukan cuma warna
+  // namanya, tapi aturan babak dan permintaan court. Diingatkan di sini, saat
+  // orangnya masih menatap baris yang sama.
   const pakaiGender = schedule.players.some((x) => x.gender)
     || (schedule.rounds || []).some((r) => r.rule && r.rule !== 'open');
   toast(pakaiGender
-    ? `"${lama}" jadi "${baru}" - cek L/P kalau ini orang lain`
+    ? `"${lama}" jadi "${baru}" - tidak ada di master, cek L/P & ratingnya`
     : `"${lama}" jadi "${baru}"`);
   return true;
 }
