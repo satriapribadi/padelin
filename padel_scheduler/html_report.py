@@ -223,7 +223,18 @@ table{width:100%; border-collapse:collapse}
 
 .recap-wrap{display:grid; gap:8px; align-items:start}
 .recap-wrap.split{grid-template-columns:1fr 1fr}
-.recap{border:1px solid var(--line); border-radius:7px; overflow:hidden}
+/* border-collapse:separate, bukan collapse warisan dari aturan `table` di
+   atas. Dengan border yang dikolaps, garis tepi tabel duduk MENUMPANG di batas
+   kotak - separuhnya di luar - sementara overflow:hidden memotong tepat di
+   batas itu. Yang tersisa cuma setengah piksel, dan mana yang selamat
+   tergantung pembulatan subpiksel: di cetakan A4 tabel rekap kiri kehilangan
+   garis kiri dan kedua tabel kehilangan garis bawah, sedangkan tabel kanan
+   utuh. Dengan border terpisah, garisnya jatuh di luar kotak klip dan
+   border-radius baru benar-benar berlaku - Chromium mengabaikan radius pada
+   tabel yang border-nya dikolaps, jadi sudut membulat di sini selama ini
+   memang tidak pernah tergambar. */
+.recap{border:1px solid var(--line); border-radius:7px; overflow:hidden;
+  border-collapse:separate; border-spacing:0}
 .recap th{background:var(--band); text-align:left; padding:4px 9px;
   font-size:8.5px; text-transform:uppercase; letter-spacing:.06em;
   color:var(--muted); border-bottom:1px solid var(--line)}
