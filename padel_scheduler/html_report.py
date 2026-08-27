@@ -221,7 +221,10 @@ table{width:100%; border-collapse:collapse}
 .gp.m{color:var(--male); background:var(--male-soft)}
 .gp.f{color:var(--female); background:var(--female-soft)}
 
-.recap-wrap{display:grid; gap:8px; align-items:start}
+/* margin-bottom disamakan dengan .tl dan .mx: tanpa itu garis bawah tabel
+   rekap menempel persis di legenda M/W/B/R di bawahnya. Dulu tidak kelihatan
+   karena garis bawahnya memang tidak pernah tergambar. */
+.recap-wrap{display:grid; gap:8px; align-items:start; margin-bottom:10px}
 .recap-wrap.split{grid-template-columns:1fr 1fr}
 /* border-collapse:separate, bukan collapse warisan dari aturan `table` di
    atas. Dengan border yang dikolaps, garis tepi tabel duduk MENUMPANG di batas
@@ -327,7 +330,8 @@ table{width:100%; border-collapse:collapse}
 .madeby svg{width:14px; height:14px; color:var(--muted)}
 .foot{margin-top:16px; padding-top:8px; border-top:1px solid var(--line);
   color:var(--muted); font-size:9px; display:flex; justify-content:space-between;
-  gap:12px; align-items:baseline}
+  gap:12px; align-items:baseline;
+  break-inside:avoid; page-break-inside:avoid}
 /* Parameter reproduksi. Yang paling panjang dan paling boleh menyusut dari
    ketiga bagian footer, jadi hanya ia yang diberi izin membungkus - judul dan
    merek tetap satu baris. */
@@ -367,6 +371,13 @@ table{width:100%; border-collapse:collapse}
   .recap td{padding:1.5px 8px; font-size:9.5px; line-height:1.35}
   .recap th{padding:2px 8px}
   .note{padding:4px 9px; font-size:9px; margin-bottom:4px}
+  /* Footer ikut dirapatkan seperti blok lain di blok ini - sebelumnya ia
+     satu-satunya yang tertinggal di jarak layar. Bukan soal selera: tingginya
+     16+8+1+13 = 38px ~ 10,2mm, sementara sisa ruang di halaman terakhir yang
+     penuh kerap ~9mm. Selisih 2,6mm inilah yang menentukan footer muat di
+     halaman itu atau memicu satu lembar kertas tambahan yang selain footer
+     kosong. */
+  .foot{margin-top:9px; padding-top:5px}
   thead{display:table-header-group}
   tr{break-inside:avoid; page-break-inside:avoid}
 }
