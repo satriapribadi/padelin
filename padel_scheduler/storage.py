@@ -192,8 +192,27 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
 
 def ensure_default_club(conn: sqlite3.Connection) -> int:
-    """Klub bawaan, supaya host bisa langsung pakai tanpa setup dulu."""
-    row = conn.execute("SELECT id FROM clubs ORDER BY id LIMIT 1").fetchone()
+    """Klub bawaan, supaya host bisa langsung pakai tanpa setup dulu.
+
+    Hanya klub AKTIF yang boleh jadi bawaan. Dulu tidak: `ORDER BY id LIMIT 1`
+    mengambil baris pertama apa adanya, dan menghapus klub di sini adalah soft
+    delete - barisnya tetap ada dengan active = 0. Begitu klub pertama dihapus,
+    akibatnya berantai dan tidak satu pun berupa error:
+
+      - /api/master melaporkan default_club_id sebuah klub yang TIDAK ADA di
+        daftar klub (list_clubs menyaring active = 1),
+      - combobox klub di Setup karena itu tinggal kosong,
+      - currentClubId() di UI jatuh ke klub hantu itu, sehingga rekap menilai
+        peserta terhadap master pemain klub yang sudah dihapus lalu mengumumkan
+        SELURUH peserta "belum ada di master pemain",
+      - sementara tabel di tab Master, yang tanpa club_id memang tidak
+        menyaring per klub, menampilkan pemain itu semua.
+
+    Dua panel membaca klub yang berbeda dan tidak ada satu pun yang mengeluh.
+    """
+    row = conn.execute(
+        "SELECT id FROM clubs WHERE active = 1 ORDER BY id LIMIT 1"
+    ).fetchone()
     if row:
         return int(row["id"])
     cur = conn.execute(

@@ -3006,6 +3006,12 @@ $('events').addEventListener('click', async (e) => {
   if (open) {
     const d = await api('/api/events/get?id=' + open);
     applyRequest(d.event.request);
+    // Acara membawa klubnya sendiri. Daftar Riwayat memang disaring per klub
+    // yang sedang terpilih, jadi biasanya klubnya sama - kecuali kalau
+    // combobox klub dikosongkan, karena tanpa club_id daftarnya memuat acara
+    // SEMUA klub. Dimuat ulang SEBELUM renderSchedule di bawah, supaya rekap
+    // menilai "belum ada di master" terhadap klub acara ini.
+    await pastikanMasterKlub();
     pasangJadwal(d.event.schedule);
     currentEventId = +open;
     // Setup baru saja diisi dari acara ini, jadi jadwal yang dimuat memang
@@ -3109,7 +3115,13 @@ function applyRequest(req) {
 // ---------------------------------------------------------------------------
 // Master data: klub, venue, pemain
 // ---------------------------------------------------------------------------
-let master = { clubs: [], venues: [], players: [], default_club_id: null };
+// `club_id` di sini adalah klub yang isi master ini DISARING UNTUK, bukan klub
+// yang sedang dipilih di Setup. Keduanya harus sama; begitu berbeda, isi master
+// ini milik klub lain dan setiap penyaringan per klub di bawah mengembalikan
+// kosong - tanpa satu pun error.
+let master = {
+  clubs: [], venues: [], players: [], club_id: null, default_club_id: null,
+};
 const combos = {};
 // Status paging tiap tabel master.
 const pager = {
@@ -3149,6 +3161,26 @@ async function loadMaster() {
   $('vn_club').innerHTML = master.clubs
     .map((c) => `<option value="${c.id}">${esc(c.name)}</option>`).join('');
   Object.values(combos).forEach((c) => c.refresh());
+}
+
+/**
+ * Pastikan isi `master` memang milik klub yang sedang dipilih; muat ulang kalau
+ * bukan. Return true kalau memuat ulang, supaya pemanggilnya tahu perlu
+ * menggambar ulang apa pun yang bergantung padanya.
+ *
+ * Klub bisa berganti dari dua arah: host memilihnya di combobox Setup, atau
+ * sebuah acara dibuka dari Riwayat dan membawa klubnya sendiri. Dulu tidak ada
+ * satu pun dari keduanya yang memuat ulang master, dan akibatnya tidak muncul
+ * sebagai error: `clubPlayers()` menyaring pemain klub LAMA dengan id klub
+ * BARU, hasilnya kosong, lalu rekap mengumumkan seluruh peserta "belum ada di
+ * master pemain" - padahal tab Master, yang punya panggilannya sendiri per
+ * halaman, menampilkan mereka semua. Dua panel membaca sumber berbeda dan
+ * hanya satu yang basi.
+ */
+async function pastikanMasterKlub() {
+  if (master.club_id === currentClubId()) return false;
+  await loadMaster();
+  return true;
 }
 
 // -- pemilih peserta --------------------------------------------------------
@@ -3248,7 +3280,19 @@ function setupCombos() {
     getItems: () => master.clubs,
     meta: (c) => c.city || '',
     emptyText: 'Belum ada klub tersimpan.',
-    onSelect: () => { loadMasterTables(); loadClubSummary(); },
+    // Berganti klub berarti berganti isi master. Tabelnya punya panggilan
+    // sendiri; yang di memori harus ikut, kalau tidak pemain & venue klub
+    // lama disaring dengan id klub baru dan lenyap semua.
+    onSelect: async () => {
+      loadMasterTables(); loadClubSummary();
+      await loadMaster();
+      if (schedule) renderSchedule();
+    },
+    // Combobox dikosongkan: klub jatuh kembali ke klub bawaan, dan itu pun
+    // pergantian klub.
+    onClear: async () => {
+      if (await pastikanMasterKlub() && schedule) renderSchedule();
+    },
     quickAdd: {
       title: 'Klub baru',
       fields: [{ key: 'city', label: 'Kota', placeholder: 'opsional' }],
