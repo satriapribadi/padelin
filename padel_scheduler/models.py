@@ -5,8 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal
 
-Mode = Literal["americano", "tiered", "mexicano", "team", "americano_cpsat",
-               "americano_solver"]
+Mode = Literal["americano", "americano_rating", "tiered", "mexicano", "team",
+               "americano_cpsat", "americano_solver"]
 
 # Semua mode yang didukung generator.
 #
@@ -15,8 +15,19 @@ Mode = Literal["americano", "tiered", "mexicano", "team", "americano_cpsat",
 # penyempurna di ujung, atau mesin dasarnya sendiri. Keduanya sengaja dibuat
 # sebagai mode tersendiri, bukan sakelar di dalam americano, supaya jadwal yang
 # sudah pernah dibuat host tetap keluar persis sama seperti sebelumnya.
-MODES: tuple[str, ...] = ("americano", "tiered", "mexicano", "team",
-                          "americano_cpsat", "americano_solver")
+MODES: tuple[str, ...] = ("americano", "americano_rating", "tiered", "mexicano",
+                          "team", "americano_cpsat", "americano_solver")
+
+# Mode yang menyeimbangkan rating TANPA membayarnya dengan apa pun: seluruh
+# pencarian dijalankan dengan bobot Americano apa adanya, lalu satu tahap di
+# ujung memungut keseimbangan rating dengan keunikan & giliran dipasang sebagai
+# batas keras. Lihat anneal_rating() di optimizer.py.
+#
+# Dipisah dari "mexicano" karena keduanya menjawab pertanyaan yang berbeda. Di
+# mexicano rating adalah TUJUAN (bobot 150, dan bobot lawan diturunkan untuk
+# memberi ruang), jadi jadwalnya memang menukar variasi lawan dengan tim yang
+# seimbang. Di sini rating tidak pernah boleh membeli satu pun pengulangan.
+RATING_BALANCE_MODES: tuple[str, ...] = ("americano_rating",)
 
 # Mode yang menjalankan solver eksak DI UJUNG rangkaian: seluruh mesin biasa
 # jalan lebih dulu sampai selesai, dan hasilnya dipakai sebagai titik awal

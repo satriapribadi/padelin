@@ -2,9 +2,10 @@
 
 > Jadwal meet, beres.
 
-Web app lokal untuk menyusun jadwal meet padel: Americano, pool rating, Mexicano,
-pasangan tetap, dan format bersegmen (putra / putri / mixed) — lengkap dengan
-pembagian tugas wasit & ballboy, analisa biaya, laporan siap cetak, dan database.
+Web app lokal untuk menyusun jadwal meet padel: Americano, Americano + tim
+sepadan, pool rating, Mexicano, pasangan tetap, dan format bersegmen
+(putra / putri / mixed) — lengkap dengan pembagian tugas wasit & ballboy,
+analisa biaya, laporan siap cetak, dan database.
 
 **Nol dependency wajib.** Cukup Python 3.10+, tanpa `pip install` apa pun.
 
@@ -96,6 +97,9 @@ untuk +0,4 poin — sementara setup yang sudah di batasnya berongkos nol.
 
 **Format**
 - Americano, pool berdasarkan rating, Mexicano (tim diseimbangkan), pasangan tetap
+- **Americano + tim sepadan (rating)** — kaidah Americano apa adanya, lalu tim
+  di tiap court disepadankan ratingnya tanpa mengorbankan satu angka pun.
+  Lihat di bawah
 - **Americano + solver eksak (CP-SAT)** — aturan yang sama persis dengan
   Americano, mesin pencarian yang berbeda. Lihat di bawah
 - **Solver eksak sebagai mesin dasar (CP-SAT)** — jadwalnya disusun solver dari
@@ -112,6 +116,90 @@ untuk +0,4 poin — sementara setup yang sudah di batasnya berongkos nol.
 - Preferensi per peserta: partner tetap, atau minta court khusus 4 perempuan /
   4 laki-laki. Boleh sebagian — peserta lain tetap rotasi bebas
 - 4–26+ pemain, meet satu gender penuh juga didukung
+
+**Americano + tim sepadan (rating)**
+Keluhan yang paling sering muncul di meet dengan rating campur bukan "partner
+saya lemah", tapi "lawan saya jauh lebih kuat". Mode ini menjawabnya tanpa
+menyentuh satu pun aturan Americano.
+
+Yang berbeda cuma satu, dan letaknya di paling ujung. Seluruh rangkaian
+Americano berjalan apa adanya lebih dulu — konstruksi, annealing, pemerataan
+main, perapian giliran — lalu satu tahap tambahan menukar-nukar susunan tim
+supaya kedua tim di satu court lebih sepadan ratingnya.
+
+**Yang disepadankan selisih KEKUATAN TIM, bukan level lawan.** Bedanya bukan
+pilihan desain melainkan akibat langsung dari kaidahnya: "semua ketemu semua"
+MEWAJIBKAN yang terkuat sesekali bertemu yang terlemah, dan tidak ada jadwal
+Americano yang bisa menghindarinya. Yang masih bisa diatur adalah menaruh
+keduanya di tim yang sama dengan penyeimbang yang pas — 6,5 + 1,5 lawan
+4,0 + 4,0 itu pertandingan yang seimbang, walau sebaran ratingnya lebar. Kalau
+yang Anda mau lawan yang setara LEVEL, yang benar adalah *pool berdasarkan
+rating*.
+
+**Yang dijamin: tidak ada satu angka pun yang memburuk.** Di tahap ini keunikan
+berhenti jadi harga yang bisa ditawar dan menjadi pagar. Gerakannya juga tidak
+pernah mengubah jumlah main siapa pun. Yang dipagari:
+
+| Pagar | Artinya untuk host |
+|---|---|
+| pasang partner & lawan yang berulang | tidak boleh bertambah |
+| biaya keunikan konveks | tidak boleh naik, jadi pengulangan yang ada tidak bisa diperdalam (2x jadi 3x) |
+| pasang yang pernah ketemu | tidak boleh berkurang |
+| jumlah main, istirahat, duduk-beruntun, tunggu terpanjang, serobotan giliran | tidak boleh memburuk |
+
+Kalau tidak ada satu pun pertukaran yang lolos pagar itu, jadwalnya keluar sama
+persis seperti Americano — dan itu memang terjadi di setup yang pengulangannya
+sudah nol. Yang tidak dilakukan: melonggarkan pagarnya supaya angka rating
+terlihat lebih bagus.
+
+**Yang dibeli.** Diukur utuh dari ujung ke ujung (`tools/banding_rating.py`, 6
+setup × 3 seed, 8–26 orang, rating 1,5–6,5, effort 30.000):
+
+| | Americano | + tim sepadan | Mexicano |
+|---|---|---|---|
+| selisih kekuatan tim | 2,19 | **2,04** | 1,30 |
+| yang terburuk | 5,58 | **5,49** | 5,03 |
+| pasang lawan berulang | 8,33 | **8,17** | 11,56 |
+| skor kualitas | 95,72 | **95,75** | 94,46 |
+
+Dua baris terakhir di kolom mode ini bukan salah tulis: pagarnya melarang
+kemunduran, bukan perbaikan — di dua kasus pasang lawan berulang ikut turun
+(16 → 14 dan 24 → 23). Selisih kekuatan tim membaik di 12 dari 18 kasus; **enam kasus tidak
+bergerak sama sekali**, dan itu memang setup yang pengulangannya sudah nol
+sehingga tidak ada pertukaran yang lolos pagar.
+
+Mexicano di 18 kasus yang sama mencapai selisih yang jauh lebih rendah — 1,30 —
+tapi membayarnya dengan 39% lebih banyak pasang lawan berulang. Dua mode itu
+menjawab pertanyaan yang berbeda; yang penting host memilih dengan tahu
+harganya.
+
+Angka itu tidak disembunyikan di kode: tiap jadwal mode ini membawa satu baris
+di panel *Catatan* yang menyebut selisih kekuatan tim sebelum dan sesudah — dan
+mengatakan apa adanya kalau jawabannya "tidak ada satu pun pertukaran yang bisa
+dilakukan".
+
+**Kenapa bukan bobot rating di annealing, seperti Mexicano.** Itu dicoba lebih
+dulu, dan diukur. Sebagai suku biaya, rating selalu bisa MEMBELI pengulangan —
+yang dinilai optimizer adalah totalnya, jadi perbaikan kecil di belasan match
+sekaligus membayar satu pasangan yang berhadapan dua kali. Pada 5 seed dengan
+bobot sekecil pemutus seri sekalipun: 16 orang / 3 court pasang lawan berulang
+47 → 52 untuk selisih rating yang malah tidak membaik (12,01 → 12,14), dan 20
+orang / 4 court 16 → 20 untuk 12,57 → 11,09. Untuk mode yang menjanjikan
+"kaidah Americano tetap dipatuhi", itu harga yang tidak boleh dibayar.
+
+**Bobotnya disetel ke rentang rating roster Anda, bukan dipatok.** Skala rating
+di app ini bebas — 1–7 ala padel rating, 1–5, atau Elo 1200–1800 — dan mode ini
+mengeluarkan jadwal yang SAMA PERSIS untuk roster yang sama di skala apa pun
+(ada tesnya). Bandingkan dengan Mexicano, yang bobot ratingnya angka mutlak: di
+roster berskala Elo suku ratingnya jadi ratusan kali lebih besar daripada
+seluruh denda keunikan, dan jadwalnya rusak — diukur pada 16 orang / 3 court
+skala Elo, Mexicano memberi 15–20 pasang PARTNER berulang dan kualitas 71–75,
+sementara Americano dan mode ini sama-sama nol dan 98,8.
+
+**Kalau semua peserta berating sama** (dan itu bawaannya kalau kolom Rating
+tidak diisi), tidak ada yang bisa disepadankan dan jadwalnya identik dengan
+Americano. Kalimat di bawah pilihan Mode mengatakannya sebelum Anda menekan
+Generate, bukan sesudah.
 
 **Americano + solver eksak (CP-SAT)**
 Mode ini tidak mengganti apa pun soal aturan jadwal — yang berganti cuma mesin
@@ -655,7 +743,8 @@ web/
 tools/
   uitest.py                 uji interaksi UI lewat DevTools Protocol
   banding_cpsat.py          adu annealing lawan solver eksak pada setup yang sama
-tests/                      224 tes unit
+  banding_rating.py         adu Americano, tim sepadan, dan Mexicano
+tests/                      277 tes unit
 ```
 
 ## Aplikasi desktop (Electron)
@@ -832,8 +921,8 @@ Data acara ada di `%APPDATA%\Padelin` saat dipasang lewat installer, dan
 ## Tes
 
 ```bash
-python -m unittest discover -s tests    # 257 tes unit
-python tools/uitest.py                  # 38 uji interaksi di browser sungguhan
+python -m unittest discover -s tests    # 277 tes unit
+python tools/uitest.py                  # 41 uji interaksi di browser sungguhan
 python tools/uitest.py --roster daftar.txt   # pakai peserta sungguhan
 python tools/cetaktest.py               # 15 uji jalur cetak & pratinjau (Electron)
 python tools/apptest.py                 # 18 uji aplikasi desktop sungguhan

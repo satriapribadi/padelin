@@ -1,5 +1,5 @@
-"""Generator jadwal meet padel: Americano, tiered, Mexicano, team, dan
-format bersegmen (putra / putri / mixed).
+"""Generator jadwal meet padel: Americano, Americano + tim sepadan, tiered,
+Mexicano, team, dan format bersegmen (putra / putri / mixed).
 
 Pemakaian singkat:
 

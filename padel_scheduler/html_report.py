@@ -31,6 +31,7 @@ APP_MARK = (
 
 MODE_LABELS = {
     "americano": "Americano",
+    "americano_rating": "Americano + tim sepadan (rating)",
     "tiered": "Pool berdasarkan rating",
     "mexicano": "Mexicano (seimbang rating)",
     "team": "Pasangan tetap",

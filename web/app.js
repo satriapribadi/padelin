@@ -217,6 +217,10 @@ function renderCounts() {
     `<span>Total <b>${players.length}</b></span><span>Putra <b>${men}</b></span>` +
     `<span>Putri <b>${women}</b></span><span>Partner tetap <b>${locked}</b></span>` +
     (sebagian ? `<span>Ikut sebagian <b>${sebagian}</b></span>` : '');
+  // Kalimat mode ikut di sini, bukan cuma di penukar mode: isinya bergantung
+  // pada rating yang sedang diketik host, dan peringatan "rating semua sama"
+  // yang cuma muncul kalau modenya diganti akan lewat tanpa terbaca.
+  renderModePeran();
 }
 
 // Rentang ronde: nomor ronde 1-based, kosong = tidak dibatasi. Disimpan null
@@ -874,10 +878,48 @@ function renderSolverPeran() {
   }
 }
 
+/**
+ * Jelaskan apa yang dikerjakan - dan apa yang TIDAK - oleh mode yang dipilih.
+ *
+ * Cuma untuk mode yang mudah disalahpahami; mode yang namanya sudah
+ * menjelaskan dirinya dibiarkan tanpa kalimat, supaya kalimat yang ada tidak
+ * jadi hiasan yang berhenti dibaca.
+ *
+ * Peringatan "rating semua sama" ada di sini, bukan di catatan setelah
+ * Generate, karena pada titik itu host sudah menunggu optimasi selesai untuk
+ * mendapat jadwal yang sama persis dengan Americano biasa - dan sebabnya
+ * (kolom Rating belum diisi) tidak kelihatan di jadwalnya sama sekali.
+ */
+function renderModePeran() {
+  const box = $('mode-peran');
+  if (!box) return;
+  if ($('mode').value !== 'americano_rating') {
+    box.textContent = '';
+    box.style.display = 'none';
+    return;
+  }
+  box.style.display = '';
+  const nilai = players.map((p) => +p.rating).filter((x) => isFinite(x));
+  const rata = nilai.length
+    && Math.max(...nilai) - Math.min(...nilai) < 0.001;
+  box.textContent = rata
+    ? 'Semua peserta masih berating sama, jadi mode ini akan keluar sama '
+      + 'persis seperti Americano biasa. Isi kolom Rating di tabel peserta '
+      + 'dulu - yang dipakai cuma urutan & selisihnya, jadi skala apa pun boleh.'
+    : 'Aturan Americano tidak berubah: pengulangan partner & lawan, jumlah '
+      + 'main, dan giliran dijaga tidak memburuk sedikit pun. Yang '
+      + 'disepadankan selisih KEKUATAN TIM di satu court - bukan level lawan, '
+      + 'karena "semua ketemu semua" memang memaksa yang terkuat sesekali '
+      + 'bertemu yang terlemah. Kalau tidak ada pertukaran yang aman, '
+      + 'jadwalnya sama dengan Americano. Mau lawan setara level? Pakai Pool '
+      + 'berdasarkan rating.';
+}
+
 $('mode').addEventListener('change', () => {
   $('tier-row').style.display = $('mode').value === 'tiered' ? '' : 'none';
   $('cpsat-block').style.display = pakaiSolver($('mode').value) ? '' : 'none';
   renderSolverPeran();
+  renderModePeran();
   renderCpsatRonde();
 });
 
@@ -3078,6 +3120,7 @@ function applyRequest(req) {
   $('tier-row').style.display = req.mode === 'tiered' ? '' : 'none';
   $('cpsat-block').style.display = pakaiSolver(req.mode) ? '' : 'none';
   renderSolverPeran();
+  renderModePeran();
   renderCpsatRonde();
   // Acara lama tidak punya field ini; dipulihkan ke bawaan, bukan dibiarkan
   // mewarisi angka dari acara yang dibuka sebelumnya.

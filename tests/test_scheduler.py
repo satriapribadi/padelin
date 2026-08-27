@@ -2923,6 +2923,163 @@ class TestPartnerBerjendela(unittest.TestCase):
         self.assertNotIn("dikunci hanya di sebagian ronde", " ".join(sch.notes))
 
 
+class TestModeTimSepadan(unittest.TestCase):
+    """Mode 'americano_rating': tim disepadankan tanpa membayar apa pun.
+
+    Yang diuji bukan "seberapa sepadan" - itu bergantung roster dan seberapa
+    banyak ruang yang disisakan pagar keunikan - melainkan janji yang membuat
+    mode ini ada: seluruh angka Americano keluar SAMA PERSIS, dan selisih
+    kekuatan tim tidak pernah lebih buruk.
+    """
+
+    # Rating yang benar-benar bervariasi. Kalau semuanya sama, tahap
+    # penyeimbang tidak punya apa pun untuk dikerjakan dan tesnya jadi hijau
+    # tanpa menguji apa-apa.
+    RATING = [1.5, 2.0, 2.5, 3.0, 3.5, 4.0, 4.5, 5.0, 5.5, 6.0, 6.5, 3.5,
+              2.0, 5.0, 4.0, 6.0, 2.5, 4.5, 3.0, 5.5, 1.5, 6.5, 4.0, 3.5,
+              5.0, 2.0]
+
+    def pemain(self, n, skala=1.0, geser=0.0):
+        return make_players(
+            n, ratings=[self.RATING[i] * skala + geser for i in range(n)])
+
+    @staticmethod
+    def susunan(sch):
+        """Susunan tim tiap ronde - yang dibandingkan saat dua jadwal harus sama."""
+        return [[(m.team_a, m.team_b) for m in r.matches] for r in sch.rounds]
+
+    def cfg(self, courts, mode, seed=42, durasi=150):
+        return Config(courts=courts, duration_minutes=durasi, round_minutes=12,
+                      warmup_minutes=0, mode=mode, seed=seed, effort=8000,
+                      attempts=1)
+
+    def test_jadwalnya_sah(self):
+        sch = build_schedule(self.pemain(14),
+                            self.cfg(3, "americano_rating"))
+        assert_structurally_valid(self, sch)
+
+    def test_angka_americano_tidak_pernah_memburuk(self):
+        """Janji utama mode ini, dan yang paling mudah rusak diam-diam.
+
+        Tahap penyeimbang cuma menukar susunan tim - di dalam satu ronde,
+        atau antar ronde dengan jumlah main kedua orang dijaga tetap - dan
+        keunikan dipasang sebagai pagar. Jadi:
+
+          - jumlah main & jatah istirahat tiap orang keluar SAMA PERSIS seperti
+            Americano pada seed yang sama, karena tidak satu pun gerakannya
+            mengubah berapa kali seseorang turun;
+          - angka keunikan, giliran, dan skor kualitas tidak boleh MEMBURUK.
+            Boleh membaik: menggeser pasangan yang berulang bisa sekaligus
+            mengurangi pasangan yang belum pernah ketemu, dan itu terjadi -
+            pada 26 orang / 4 court seed 7, "belum pernah ketemu" 90 -> 83.
+
+        Kalau salah satunya memburuk, pagarnya bocor.
+        """
+        # (nama field, arah yang boleh) - "turun" berarti makin kecil makin baik.
+        tidak_memburuk = (
+            ("partner_repeat_pairs", "turun"),
+            ("opponent_repeat_pairs", "turun"),
+            ("partner_repeat_max", "turun"),
+            ("opponent_repeat_max", "turun"),
+            ("never_met_pairs", "turun"),
+            ("back_to_back_byes", "turun"),
+            ("turn_skips", "turun"),
+            ("longest_wait", "turun"),
+            ("quality_score", "naik"),
+        )
+        for n, courts in ((12, 2), (16, 3), (26, 4)):
+            for seed in (42, 7):
+                a = build_schedule(self.pemain(n),
+                                   self.cfg(courts, "americano", seed))
+                b = build_schedule(self.pemain(n),
+                                   self.cfg(courts, "americano_rating", seed))
+                pesan = f"{n} orang / {courts} court seed {seed}"
+                self.assertEqual(a.stats.plays_per_player,
+                                 b.stats.plays_per_player,
+                                 f"{pesan}: jumlah main berubah")
+                self.assertEqual(a.stats.byes_per_player,
+                                 b.stats.byes_per_player,
+                                 f"{pesan}: jatah istirahat berubah")
+                for nama, arah in tidak_memburuk:
+                    acuan, hasil = getattr(a.stats, nama), getattr(b.stats, nama)
+                    if arah == "turun":
+                        self.assertLessEqual(
+                            hasil, acuan,
+                            f"{pesan}: {nama} memburuk {acuan} -> {hasil}, "
+                            f"jadi pagar di anneal_rating bocor")
+                    else:
+                        self.assertGreaterEqual(
+                            hasil, acuan,
+                            f"{pesan}: {nama} memburuk {acuan} -> {hasil}, "
+                            f"jadi pagar di anneal_rating bocor")
+
+    def test_selisih_kekuatan_tim_membaik(self):
+        """Kalau tidak membaik, tidak ada gunanya mode ini ada.
+
+        Dijumlah lintas setup & seed, bukan diperiksa satu per satu: setup yang
+        pengulangannya sudah nol tidak menyisakan satu pun pertukaran yang aman,
+        dan di sana jadwalnya memang sama dengan Americano - itu bukan kegagalan.
+        """
+        total = {"americano": 0.0, "americano_rating": 0.0}
+        for n, courts in ((12, 2), (16, 3), (26, 4)):
+            for seed in (42, 7):
+                for mode in total:
+                    sch = build_schedule(self.pemain(n),
+                                         self.cfg(courts, mode, seed))
+                    total[mode] += sch.stats.avg_rating_gap
+        self.assertLess(
+            total["americano_rating"], total["americano"],
+            f"selisih kekuatan tim tidak membaik: {total}",
+        )
+
+    def test_catatan_menyebut_hasilnya(self):
+        """Host harus tahu apa yang didapat - termasuk kalau jawabannya "nol".
+
+        Tahap penyeimbang tidak mengubah satu pun angka yang ditampilkan di
+        kartu statistik, jadi catatan inilah satu-satunya tempat host bisa
+        melihat bahwa modenya benar-benar bekerja - dan seberapa jauh.
+        """
+        for n, courts in ((16, 3), (26, 4)):
+            sch = build_schedule(self.pemain(n),
+                                 self.cfg(courts, "americano_rating"))
+            catatan = [c for c in sch.notes if c.startswith("Tim sepadan")]
+            self.assertEqual(len(catatan), 1,
+                             f"{n} orang: catatan mode hilang: {sch.notes}")
+            self.assertIn("selisih kekuatan tim", catatan[0].lower())
+
+    def test_rating_seragam_sama_dengan_americano(self):
+        """Host yang tidak mengisi rating harus dapat jadwal Americano.
+
+        Semua peserta berating sama berarti tidak ada yang bisa disepadankan.
+        Yang dijaga di sini bukan cuma "tidak error" (rentang nol dipakai
+        sebagai pembagi kalau tidak dijaga), tapi juga bahwa jadwalnya tidak
+        bergeser diam-diam gara-gara tahap tambahan yang berjalan tanpa arah.
+        """
+        seragam = make_players(12)          # rating bawaan 3.0 untuk semua
+        a = build_schedule(seragam, self.cfg(2, "americano"))
+        b = build_schedule(seragam, self.cfg(2, "americano_rating"))
+        self.assertEqual(self.susunan(a), self.susunan(b))
+
+    def test_skala_rating_tidak_mengubah_jadwal(self):
+        """Skala rating bebas (1-7, 1-5, atau Elo), artinya harus sama.
+
+        Bobot tahap penyeimbang disetel terhadap rentang rating roster, jadi
+        roster yang sama dengan skala berbeda WAJIB keluar dengan jadwal yang
+        sama persis. Tanpa penyetelan itu, roster berskala Elo membuat suku
+        rating seribu kali lebih besar daripada seluruh denda keunikan - dan
+        mode ini berhenti mematuhi kaidah Americano tanpa ada yang tahu.
+        """
+        acuan = self.susunan(build_schedule(self.pemain(16),
+                                       self.cfg(3, "americano_rating")))
+        for nama, skala, geser in (("dikali 2", 2.0, 0.0),
+                                   ("digeser +10", 1.0, 10.0),
+                                   ("skala Elo", 100.0, 1000.0)):
+            lain = self.susunan(build_schedule(self.pemain(16, skala, geser),
+                                          self.cfg(3, "americano_rating")))
+            self.assertEqual(acuan, lain,
+                             f"rating {nama} mengubah jadwalnya")
+
+
 @unittest.skipUnless(cpsat.tersedia(), "OR-Tools tidak terpasang")
 class TestCpsatMode(unittest.TestCase):
     """Mode 'americano_cpsat'.

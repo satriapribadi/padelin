@@ -84,6 +84,7 @@
         <div><label>Mode</label>
           <select id="mode">
             <option value="americano">Americano (semua ketemu semua)</option>
+            <option value="americano_rating">Americano + tim sepadan (rating)</option>
             <option value="tiered">Pool berdasarkan rating</option>
             <option value="mexicano">Mexicano (tim diseimbangkan)</option>
             <option value="team">Semua pasangan tetap</option>
@@ -94,6 +95,11 @@
           </select>
         </div>
       </div>
+      <!-- Diisi per mode oleh renderModePeran() di app.js, dan kosong untuk
+           mode yang namanya sudah menjelaskan dirinya. Yang butuh kalimat di
+           sini adalah mode yang mudah disalahpahami: host harus tahu apa yang
+           akan dan tidak akan dilakukannya SEBELUM menekan Generate. -->
+      <div id="mode-peran" class="seg-total"></div>
       <div id="cpsat-block" style="display:none">
         <div class="row">
           <div><label>Batas waktu solver (detik)</label>

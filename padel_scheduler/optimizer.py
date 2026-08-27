@@ -117,6 +117,23 @@ class Weights:
     # tahap pertama tidak pernah menawar.
     long_wait: float = 60.0
     rating: float = 0.0
+    # Kalau > 0, denda selisih tim jadi KUADRATIK terhadap selisih yang sudah
+    # dibagi angka ini (dipasang sebagai selisih terbesar yang mungkin), bukan
+    # linear. 0 = linear, dan itu bawaannya - mexicano & team memakai yang
+    # linear, dan solver eksak di cpsat.py juga memodelkan yang linear.
+    #
+    # Bentuknya menentukan match mana yang diperbaiki lebih dulu. Yang linear
+    # menilai satu match timpang 6,0 sama dengan tiga match timpang 2,0, jadi
+    # optimizer boleh merapikan tiga match yang sudah cukup seimbang dan
+    # meninggalkan satu yang menjurang - dan yang menjurang itulah yang
+    # dirasakan peserta.
+    #
+    # Diukur pada 18 kasus, keduanya setara pada selisih RATA-RATA (turun 0,192
+    # dengan yang kuadratik lawan 0,197 dengan yang linear - selisih yang jauh
+    # di dalam derau). Yang kuadratik dipakai di tahap penyeimbang karena
+    # bedanya muncul di match TERBURUK: pada anggaran iterasi yang lebih kecil,
+    # selisih terburuk 6,67 (linear) lawan 6,25 (kuadratik).
+    rating_scale: float = 0.0
     spread: float = 0.0
     spread_threshold: float = 1.5
     # Match yang terulang PERSIS (empat orang sama, tim sama). Kadang tak
@@ -142,7 +159,12 @@ class Weights:
         if mode == "team":
             # Partner terkunci; yang dioptimasi hanya lawan & istirahat.
             return Weights(partner=0.0, opponent=300.0, rating=20.0)
-        # americano & tiered (di dalam pool) -> murni keunikan.
+        # americano, tiered (di dalam pool), dan americano_rating -> murni
+        # keunikan. Mode penyeimbang rating memang TIDAK memakai bobot rating di
+        # sini: seluruh pencariannya dijalankan dengan bobot Americano apa
+        # adanya, lalu keseimbangan rating dipungut di tahap tersendiri di ujung
+        # (anneal_rating) yang tidak boleh memperburuk apa pun. Alasannya
+        # terukur - lihat catatan panjang di anneal_rating().
         return Weights()
 
 
@@ -395,7 +417,11 @@ class ScheduleState:
         r = self.ratings
         a, b, c, d = quad
         gap = abs((r[a] + r[b]) - (r[c] + r[d]))
-        cost = w.rating * gap
+        if w.rating_scale > 0.0:
+            x = gap / w.rating_scale
+            cost = w.rating * x * x
+        else:
+            cost = w.rating * gap
         if w.spread:
             vals = (r[a], r[b], r[c], r[d])
             spread = max(vals) - min(vals)
@@ -1419,6 +1445,265 @@ def anneal_giliran(st: ScheduleState, iterations: int, rng: random.Random,
     if best < current - 1e-9:
         st.restore(best_snap)
     st.w.long_wait = bobot_lama
+    st.recompute_wait()
+
+
+def _delta_pertemuan(st: ScheduleState, touched: tuple[int, ...],
+                     quads_lama: list[list[list[int]]]) -> int:
+    """Perubahan jumlah pasang yang PERNAH ketemu, akibat satu gerakan.
+
+    Positif berarti ada pasangan yang tadinya belum pernah ketemu jadi pernah;
+    negatif berarti sebaliknya - dan yang negatif itulah yang harus dicegah.
+    Dipakai anneal_rating sebagai pagar ketiga.
+
+    Kenapa dihitung setempat dan tidak dipelihara di ScheduleState seperti
+    rep_pc/rep_oc: _touch_match adalah jalur terpanas di seluruh penjadwalan
+    (puluhan juta panggilan per jadwal), dan angka ini cuma dibutuhkan satu
+    tahap di satu mode. Di sini ongkosnya paling banyak 12 pasangan per
+    gerakan, dan cuma mode itu yang membayarnya.
+
+    "Pernah ketemu" berarti pernah sebagai partner ATAU sebagai lawan - definisi
+    yang sama dengan never_met_pairs di statistik yang dibaca host, karena
+    justru angka itulah yang dijaga.
+
+    Seluruh ronde yang tersentuh dihitung SEKALIGUS, bukan satu-satu. Gerakan
+    antar ronde bisa mencabut satu pertemuan di ronde yang satu dan
+    menumbuhkannya lagi di ronde yang lain; diperiksa per ronde, keadaan
+    "sebelum" yang direka jadi salah untuk pasangan yang muncul di keduanya.
+    """
+    delta: dict[int, int] = {}
+    for t, lama in zip(touched, quads_lama):
+        for quads, tanda in ((st.matches[t], 1), (lama, -1)):
+            for q in quads:
+                a, b, c, d = q
+                for i, j in ((a, b), (c, d), (a, c), (a, d), (b, c), (b, d)):
+                    idx = st._k(i, j)
+                    delta[idx] = delta.get(idx, 0) + tanda
+    out = 0
+    for idx, d in delta.items():
+        if not d:
+            continue
+        kini = st.pc[idx] + st.oc[idx]
+        out += (1 if kini > 0 else 0) - (1 if kini - d > 0 else 0)
+    return out
+
+
+# Anggaran biaya rating satu match untuk tahap penyeimbang (anneal_rating):
+# biaya match paling timpang yang mungkin, yaitu dua peserta teratas melawan dua
+# yang terbawah. Biaya match lain mengikuti secara kuadratik terhadap angka ini.
+#
+# Besarnya boleh sebesar ini - jauh di atas denda partner berulang - justru
+# karena di tahap itu keunikan bukan lagi harga yang bisa ditawar melainkan
+# BATAS: biaya keunikan dikeluarkan dari penilaian dan dipasang sebagai pagar
+# yang tidak boleh dilewati. Yang masih bersaing dengannya cuma preferensi
+# peserta (3.000 per pelanggaran, jadi tetap menang) dan jarak match yang
+# terulang persis (200 untuk ronde bersebelahan, jadi kalah).
+#
+# Yang kalah itu memang digadaikan, dan sengaja: rating BISA membeli satu match
+# yang terulang persis di ronde berdekatan. Yang dibeli cuma JARAKNYA -
+# munculnya pengulangan itu sendiri sudah dipagari rep_oc dan cost_pair.
+#
+# Angkanya diukur, bukan ditebak. Pembandingnya 90 - angka terbesar yang masih
+# menjamin rating TIDAK bisa mengalahkan denda jarak itu, karena satu gerakan
+# menyentuh paling banyak dua match dan 2 x 90 < 200. Pada 6 setup x 2 seed
+# (roster 1,5-6,5, effort 30.000), dari acuan Americano 2,29:
+#
+#   anggaran 400   selisih 2,13   membaik di 9 dari 12 kasus
+#   anggaran  90   selisih 2,18   membaik di 7 dari 12 kasus
+#
+# Yang 400 juga satu-satunya yang ikut menurunkan lawan berulang (8,17 -> 7,92
+# rata-rata; pada 12 orang / 2 court seed 2 selisihnya 1,58 lawan 2,04 DAN
+# lawan berulang 16 -> 14). Yang 90 menang di satu kasus, 24 orang seed 1.
+#
+# Sebabnya bukan rating jadi lebih rakus - pagarnya yang menentukan apa yang
+# boleh, dan pagarnya tidak ikut bergerak. Yang bergerak SUHU: suhu awal
+# annealing di tahap ini diturunkan dari cost_rating, jadi anggaran yang kecil
+# membuat suhunya mentok di batas bawah 50 dan pencariannya berubah jadi jalan
+# acak alih-alih optimasi.
+TAHAP_RATING = 400.0
+
+
+def anneal_rating(st: ScheduleState, iterations: int, rng: random.Random,
+                  rentang: float, antar_ronde: bool = False,
+                  progress=None) -> None:
+    """Tahap penyeimbang rating: keunikan & giliran dikunci, rating dicari.
+
+    Dipakai mode "americano_rating". Yang dikejar adalah SELISIH KEKUATAN dua
+    tim di satu court - "lawan saya tidak jauh lebih kuat" - bukan menyeragamkan
+    rating keempat orang di lapangan. Yang kedua bertentangan langsung dengan
+    kaidah "semua ketemu semua" dan memang tidak bisa dijanjikan di satu kolam;
+    untuk itu ada mode pool rating. Yang pertama bisa, dan justru di situ
+    tuasnya: saat yang terkuat memang harus bertemu yang terlemah, mereka bisa
+    ditaruh di tim yang sama dengan penyeimbang yang pas.
+
+    Kenapa tahap tersendiri, dan bukan bobot rating di annealing utama seperti
+    mexicano - ini diukur, dan dua-duanya dicoba lebih dulu:
+
+      Sebagai suku biaya, rating selalu bisa MEMBELI pengulangan: yang dinilai
+      optimizer adalah totalnya, jadi perbaikan kecil di belasan match sekaligus
+      bisa membayar satu pasangan yang berhadapan dua kali. Diukur pada 5 seed,
+      effort 8.000, dengan bobot sekecil pemutus seri sekalipun: 16 orang / 3
+      court pasang lawan berulang 47 -> 52 untuk selisih rating yang malah tidak
+      membaik (12,01 -> 12,14); 20 orang / 4 court 16 -> 20 untuk 12,57 -> 11,09.
+      Untuk mode yang menjanjikan "kaidah Americano tetap dipatuhi", itu harga
+      yang tidak boleh dibayar.
+
+    Di sini keunikan berhenti jadi harga dan menjadi BATAS, empat sekaligus:
+
+      rep_pc / rep_oc  jumlah PASANG yang berulang tidak boleh bertambah;
+      cost_pair        biaya keunikan konveks - angka yang jadi tujuan seluruh
+                       tahap sebelumnya - tidak boleh naik sedikit pun, jadi
+                       pengulangan yang sudah ada tidak bisa diperdalam
+                       (berhadapan 2x jadi 3x tidak mengubah jumlah pasang, tapi
+                       jelas lebih buruk bagi yang mengalaminya);
+      pertemuan        jumlah pasang yang PERNAH ketemu tidak boleh berkurang;
+      bye/b2b/tunggu   biaya istirahat, duduk-beruntun, dan menunggu tidak
+                       boleh naik - nol pengaruh untuk gerakan dalam ronde,
+                       tapi berarti begitu `antar_ronde` dinyalakan.
+
+    Pagar ketiga itu bukan hiasan, dan tidak tersirat oleh dua yang pertama -
+    ia ditambahkan setelah tesnya gagal. Menggeser pengulangan dari satu
+    pasangan ke pasangan lain bisa menjaga jumlah pasang berulang DAN biaya
+    konveksnya sekaligus, tapi menambah pasangan yang tidak pernah bertemu
+    sama sekali: pada 26 orang / 4 court, "belum pernah ketemu" naik 89 -> 92
+    dengan dua pagar pertama saja.
+
+    Karena keunikan sudah dijaga pagar, biaya keunikan justru DIKELUARKAN dari
+    penilaian tahap ini (`nilai()` di bawah): dua susunan yang biaya keunikannya
+    sama-sama sah tidak perlu diperbandingkan lagi, dan menyisakannya di sana
+    cuma membuat pencarian membeku - diukur pada 12 orang / 2 court, dari 4.000
+    gerakan cuma 436 yang sah dan tidak satu pun yang menurunkan total.
+
+    Gerakan bawaannya dibatasi yang tidak mengubah SIAPA YANG TURUN di ronde
+    mana: menyusun ulang tim di dalam satu match, dan menukar dua orang yang
+    sama-sama sedang main. Jadi jumlah main, daftar istirahat, duduk-beruntun,
+    dan giliran - seluruh hasil kerja tahap sebelumnya - tidak bisa berubah,
+    bahkan secara kebetulan. Yang tersisa untuk dioptimasi cuma satu: siapa
+    berpasangan dan berhadapan dengan siapa, di antara empat orang yang sudah
+    pasti turun.
+
+    `antar_ronde` menambah satu gerakan lagi: menukar seorang yang main dengan
+    seorang yang duduk DI RONDE LAIN, jumlah main kedua orang tetap. Ruang
+    geraknya jauh lebih besar, dan itu terbayar - diukur pada 5 setup x 3 seed:
+    selisih 2,161 (Americano) -> 2,059 dengan gerakan dalam ronde saja ->
+    1,990 dengan tambahan ini. Ongkosnya: ia menggeser siapa yang duduk di
+    ronde mana, jadi duduk-beruntun dan tunggu terpanjang ikut bergerak. Biaya
+    keduanya dipagari di sini, tapi ANGKA giliran yang dibaca host bukan biaya
+    itu (biaya menunggu menghitung seluruh rentetan, sementara yang dilaporkan
+    adalah yang terpanjang), jadi pemanggil yang menyalakan sakelar ini wajib
+    memeriksanya sendiri sesudahnya - lihat pemakaiannya di scheduler.py.
+
+    Yang dibeli, diukur utuh dari ujung ke ujung lewat tools/banding_rating.py
+    pada 6 setup x 3 seed (8-26 orang, rating 1,5-6,5), effort 30.000:
+
+      selisih kekuatan tim   2,19 -> 2,04 rata-rata, membaik di 12 dari 18 kasus
+      yang terburuk          5,58 -> 5,49
+      pasang lawan berulang  8,33 -> 8,17   (bukan salah tulis: pagarnya
+      skor kualitas         95,72 -> 95,75   mengizinkan perbaikan, cuma tidak
+                                             mengizinkan kemunduran - dua kasus
+                                             ikut membaik, 16 -> 14 dan 24 -> 23
+                                             pasang lawan berulang)
+
+    Enam dari 18 kasus tidak bergerak sama sekali, dan itu dilaporkan apa adanya
+    alih-alih disamarkan dengan melonggarkan pagar: setup yang pengulangannya
+    sudah nol tidak menyisakan satu pun pertukaran yang sah.
+
+    Bandingkan dengan mexicano di 18 kasus yang sama, yang menjadikan rating
+    tujuan: selisih 1,30 - jauh lebih rendah daripada yang bisa dicapai di sini
+    - tapi pasang lawan berulang 8,33 -> 11,56 dan mutu 95,7 -> 94,5. Dua mode
+    itu menjawab pertanyaan yang berbeda, dan host memilih dengan tahu harganya.
+
+    `rentang` = rating tertinggi - terendah di antara peserta. Bobotnya disetel
+    terhadap angka itu, bukan dipatok, karena skala rating di app ini bebas
+    (lihat Player.rating): roster berskala Elo 1000-2000 dan roster berskala 1-7
+    harus keluar dengan jadwal yang sama.
+    """
+    ronde = [r for r in range(st.n_rounds) if st.matches[r]]
+    if not ronde or iterations < 1 or rentang <= 1e-9:
+        return
+
+    w = st.w
+    simpan = (w.rating, w.rating_scale, w.spread)
+    w.rating = TAHAP_RATING
+    # Selisih total dua tim paling besar 2x rentang: tim terkuat berisi dua
+    # peserta teratas, lawannya dua yang terbawah.
+    w.rating_scale = 2.0 * rentang
+    w.spread = 0.0
+    # Bobot rating berubah, jadi biaya yang dipelihara inkremental harus
+    # dihitung ulang dari nol - dan itu yang dilakukan restore(snapshot()).
+    # Biaya menunggu tidak ikut benar dari restore (ia mengisi ronde dari depan
+    # ke belakang, jadi rentetan yang menjulur ke ronde berikutnya belum ada),
+    # jadi diminta ulang seperti di _state_dari_jadwal.
+    st.restore(st.snapshot())
+    st.recompute_wait()
+
+    batas_pc, batas_oc = st.rep_pc, st.rep_oc
+    batas_pair = st.cost_pair
+    # Istirahat & menunggu: nol pengaruh untuk gerakan dalam ronde, tapi wajib
+    # dipagari begitu gerakan antar ronde dinyalakan.
+    batas_bye, batas_b2b, batas_wait = st.cost_bye, st.cost_b2b, st.cost_wait
+
+    # Biaya keunikan dikeluarkan dari penilaian; ia sudah jadi pagar di atas.
+    def nilai() -> float:
+        return st.cost() - st.cost_pair
+
+    current = nilai()
+    best = current
+    best_snap = st.snapshot()
+    t0 = max(50.0, st.cost_rating * 0.05 + 50.0)
+    t_end = 0.05
+    tick = max(1, iterations // 10)
+
+    for it in range(iterations):
+        if progress is not None and it % tick == 0:
+            progress(it / iterations,
+                     f"Menyeimbangkan rating {it * 100 // iterations}%")
+        temp = t0 * math.pow(t_end / t0, it / iterations)
+        before = current
+
+        r = rng.choice(ronde)
+        r2 = None
+        if antar_ronde and len(ronde) > 1 and rng.random() < 0.4:
+            r2 = rng.choice([x for x in ronde if x != r])
+        touched = (r, r2) if r2 is not None else (r,)
+        saved = [([q[:] for q in st.matches[t]], set(st.byes[t]))
+                 for t in touched]
+        if r2 is not None:
+            if not _tukar_antar_ronde(st, r, r2, rng):
+                continue
+        else:
+            ms = st.matches[r]
+            if len(ms) >= 2 and rng.random() < 0.5:
+                i, j = rng.sample(range(len(ms)), 2)
+                _try_cross(st, r, i, rng.randrange(4), j, rng.randrange(4))
+            else:
+                _try_reorder(st, r, rng.randrange(len(ms)), rng.randrange(2) + 1)
+
+        boleh = (st.rep_pc <= batas_pc and st.rep_oc <= batas_oc
+                 and st.cost_pair <= batas_pair + 1e-9
+                 and st.cost_bye <= batas_bye + 1e-9
+                 and st.cost_b2b <= batas_b2b + 1e-9
+                 and st.cost_wait <= batas_wait + 1e-9
+                 and _delta_pertemuan(st, touched,
+                                      [x[0] for x in saved]) >= 0
+                 and all(st.round_legal(t) for t in touched))
+        if boleh:
+            current = nilai()
+            delta = current - before
+            boleh = delta <= 0 or rng.random() < math.exp(-delta / max(temp, 1e-9))
+
+        if boleh:
+            if current < best - 1e-9:
+                best = current
+                best_snap = st.snapshot()
+        else:
+            st.rollback(touched, saved)
+            current = nilai()
+
+    if best < current - 1e-9:
+        st.restore(best_snap)
+    (w.rating, w.rating_scale, w.spread) = simpan
+    st.restore(st.snapshot())
     st.recompute_wait()
 
 

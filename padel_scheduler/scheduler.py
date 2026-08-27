@@ -32,6 +32,7 @@ from .models import (
     CPSAT_MODES,
     MATCHUP_LABELS,
     MATCHUPS,
+    RATING_BALANCE_MODES,
     SEGMENT_RULE_LABELS,
     TEAM_SHAPES,
     Config,
@@ -53,6 +54,7 @@ from .optimizer import (
     ScheduleState,
     Weights,
     anneal,
+    anneal_rating,
     play_counts,
     anneal_giliran,
     polish_pairs,
@@ -1796,6 +1798,44 @@ def _zero_repeats_possible(players: list[Player], config: Config,
     return True
 
 
+def _selisih_tim(st: ScheduleState) -> float:
+    """Rata-rata selisih total rating antar tim, satu angka untuk seluruh jadwal.
+
+    Sama dengan ScheduleStats.avg_rating_gap, tapi dihitung langsung dari state -
+    dipakai tahap penyeimbang rating, yang perlu angka ini SEBELUM statistik
+    lengkap dirakit.
+    """
+    gaps = [abs((st.ratings[a] + st.ratings[b]) - (st.ratings[c] + st.ratings[d]))
+            for r in range(st.n_rounds) for a, b, c, d in st.matches[r]]
+    return sum(gaps) / len(gaps) if gaps else 0.0
+
+
+def _catatan_sepadan(sesudah: float, sebelum: float) -> str:
+    """Satu kalimat tentang apa yang benar-benar dicapai tahap penyeimbang.
+
+    "Tidak berubah" itu jawaban yang sah dan sering terjadi - setup yang
+    pengulangannya sudah nol tidak menyisakan satu pun pertukaran yang lolos
+    pagar. Tanpa kalimat ini host memilih mode, menunggu, lalu mendapat jadwal
+    yang sama dengan Americano tanpa satu pun petunjuk bahwa itu memang batasnya
+    dan bukan mode yang tidak jalan.
+    """
+    if sesudah >= sebelum - 0.005:
+        return (
+            "Tim sepadan: tidak ada satu pun pertukaran yang bisa dilakukan "
+            "tanpa menambah pengulangan atau merusak giliran, jadi susunannya "
+            "sama dengan Americano biasa. Selisih kekuatan tim rata-rata "
+            f"{sebelum:.2f} - itu memang yang tersisa setelah kaidah 'semua "
+            "ketemu semua' dipenuhi. Kalau mau lebih rendah lagi, harganya "
+            "variasi lawan: pakai mode Mexicano."
+        )
+    turun = (sebelum - sesudah) / sebelum * 100 if sebelum else 0.0
+    return (
+        f"Tim sepadan: selisih kekuatan tim rata-rata {sebelum:.2f} turun jadi "
+        f"{sesudah:.2f} (-{turun:.0f}%), tanpa mengubah satu pun angka "
+        "pengulangan, jumlah main, maupun giliran."
+    )
+
+
 def _catatan_cpsat(lapor, rep_pc: int, rep_oc: int) -> str:
     """Satu kalimat tentang apa yang benar-benar dicapai solver.
 
@@ -1964,8 +2004,18 @@ def _lebih_baik(a: Schedule, b: Schedule) -> bool:
     melainkan akibat langsung dari urutan di fungsi ini.
     """
     x, y = a.stats, b.stats
-    return ((x.partner_repeat_pairs, x.opponent_repeat_pairs, -x.quality_score)
-            < (y.partner_repeat_pairs, y.opponent_repeat_pairs, -y.quality_score))
+    kunci_a = (x.partner_repeat_pairs, x.opponent_repeat_pairs, -x.quality_score)
+    kunci_b = (y.partner_repeat_pairs, y.opponent_repeat_pairs, -y.quality_score)
+    if a.config.mode in RATING_BALANCE_MODES:
+        # Pemutus TERAKHIR untuk mode tim sepadan: di antara percobaan yang
+        # keunikan dan kualitasnya sudah sama, ambil yang selisih kekuatan
+        # timnya paling kecil. Ditaruh paling belakang, jadi ia tidak pernah
+        # bisa membuang percobaan yang keunikannya lebih baik - dan seri di
+        # ketiga kunci pertama itu sering terjadi, karena skor kualitas
+        # dibulatkan ke satu desimal.
+        kunci_a += (x.avg_rating_gap,)
+        kunci_b += (y.avg_rating_gap,)
+    return kunci_a < kunci_b
 
 
 def build_schedule(players: list[Player], config: Config,
@@ -2184,6 +2234,9 @@ class _Persiapan:
     n: int
     local_players: list[Player]
     ratings: list[float]
+    # Rating tertinggi - terendah di antara peserta. Dipakai mode penyeimbang
+    # rating untuk menyetel bobotnya terhadap skala rating yang dipakai host.
+    rentang_rating: float
     tier_of: dict[int, int] | None
     locked: dict[int, int]
     weights: Weights
@@ -2273,6 +2326,13 @@ def _siapkan(players: list[Player], config: Config,
                 )
             locked[p.id] = p.partner_id
 
+    # Rentang rating peserta: dipakai tahap penyeimbang rating untuk menyetel
+    # bobotnya terhadap skala yang dipakai host (lihat anneal_rating). Dihitung
+    # dari peserta yang benar-benar terdaftar, bukan dari skala yang diandaikan -
+    # roster yang seluruhnya berating 4-5 tidak boleh dinilai dengan ukuran
+    # roster yang membentang 1-7.
+    nilai_rating = [p.rating for p in local_players]
+    rentang_rating = (max(nilai_rating) - min(nilai_rating)) if nilai_rating else 0.0
     weights = Weights.for_mode(config.mode)
 
     # Denda "pernah ketemu 2x" hanya masuk akal kalau nol pengulangan memang
@@ -2359,7 +2419,8 @@ def _siapkan(players: list[Player], config: Config,
         segments=segments, total_rounds=total_rounds,
         round_minutes=round_minutes, courts_r=courts_r, courts=courts,
         court_seragam=court_seragam, ids=ids, remap=remap, inv=inv, n=n,
-        local_players=local_players, ratings=ratings, tier_of=tier_of,
+        local_players=local_players, ratings=ratings,
+        rentang_rating=rentang_rating, tier_of=tier_of,
         locked=locked, weights=weights, n_men=n_men, n_women=n_women,
         rules=rules, plan=plan, round_segment=round_segment, hadir_r=hadir_r,
     )
@@ -2527,6 +2588,7 @@ def _build_once(players: list[Player], config: Config,
     courts_r, courts, court_seragam = pr.courts_r, pr.courts, pr.court_seragam
     ids, remap, inv, n = pr.ids, pr.remap, pr.inv, pr.n
     local_players, ratings = pr.local_players, pr.ratings
+    rentang_rating = pr.rentang_rating
     tier_of, locked, weights = pr.tier_of, pr.locked, pr.weights
     n_men, n_women, rules = pr.n_men, pr.n_women, pr.rules
     plan, round_segment = pr.plan, pr.round_segment
@@ -3078,6 +3140,72 @@ def _build_once(players: list[Player], config: Config,
         )
         notes.extend(lapor.catatan)
         notes.append(_catatan_cpsat(lapor, st.rep_pc, st.rep_oc))
+
+    # --- Penyeimbang rating (mode americano_rating saja) -----------------
+    # Dijalankan PALING AKHIR, dan itu bukan urutan yang kebetulan. Tahap ini
+    # memakai hasil kerja semua tahap di atas - jumlah pasang berulang, biaya
+    # keunikan konveksnya, dan giliran main - sebagai pagar yang tidak boleh
+    # dilewati. Ditaruh lebih awal, pagar itu masih akan digeser lagi oleh tahap
+    # sesudahnya; ditaruh sebelum solver eksak, solver akan menyusun ulang match
+    # tanpa tahu rating sama sekali dan hasil tahap ini hilang.
+    #
+    # Karena gerakannya tidak mengubah siapa yang turun di ronde mana, tahap ini
+    # tidak bisa memperburuk apa pun yang sudah dicapai - lihat anneal_rating().
+    if config.mode in RATING_BALANCE_MODES:
+        say(0.96, "Menyeimbangkan rating tanpa mengubah keunikan & giliran")
+        anggaran_rating = max(1000, config.effort // 2)
+        selisih_awal = _selisih_tim(st)
+
+        def tolok_giliran() -> tuple[int, int, int]:
+            """Angka giliran yang dibaca host, dihitung dari jadwal saat ini.
+
+            Dipakai untuk memeriksa putaran kedua tahap penyeimbang. Rumusnya
+            tidak disalin: yang dipanggil _telaah_giliran yang sama dengan yang
+            mengisi statistik, supaya yang diperiksa benar-benar angka yang
+            akan dilihat host - termasuk aturan "peserta yang tidak berhak
+            turun di babak itu bukan sedang menunggu".
+            """
+            plays_kini = {pid: 0 for pid in ids_lokal}
+            for r in range(total_rounds):
+                for q in st.matches[r]:
+                    for pid in q:
+                        plays_kini[pid] += 1
+            g = _telaah_giliran(st, ids_lokal, total_rounds, plays_kini)
+            b2b = sum(len(g.duduk_berhak[r] & g.duduk_berhak[r + 1])
+                      for r in range(total_rounds - 1))
+            return (g.turn_skips, g.longest_wait, b2b)
+
+        # Putaran pertama: gerakan DALAM ronde saja. Ia tidak menyentuh siapa
+        # yang duduk di ronde mana, jadi tidak ada satu pun angka giliran yang
+        # bisa bergerak - hasilnya aman tanpa perlu diperiksa.
+        anneal_rating(
+            st, anggaran_rating, rng, rentang_rating,
+            progress=(lambda f, m: say(0.96 + f * 0.01, m)) if progress else None,
+        )
+
+        # Putaran kedua: tambah gerakan ANTAR ronde. Ruangnya jauh lebih besar
+        # (diukur: selisih rating 2,06 -> 1,99 rata-rata 15 kasus), tapi ia
+        # menggeser siapa yang duduk di ronde mana. Biaya duduk-beruntun dan
+        # menunggu sudah dipagari di dalam tahap, tapi angka yang DIBACA host
+        # bukan biaya itu: biaya menghitung seluruh rentetan menunggu,
+        # sementara yang dilaporkan tunggu TERPANJANG - dan dua rentetan bisa
+        # ditukar tanpa mengubah jumlahnya sambil memanjangkan yang terpanjang.
+        # Serobotan giliran tidak ada di fungsi biaya sama sekali.
+        #
+        # Jadi diperiksa apa adanya di sini, sekali di ujung, dan hasil putaran
+        # kedua dibuang seluruhnya kalau ternyata memburuk. Yang tersisa kalau
+        # begitu adalah hasil putaran pertama, yang sudah aman sejak awal.
+        aman = st.snapshot()
+        sebelum = tolok_giliran()
+        anneal_rating(
+            st, anggaran_rating, rng, rentang_rating, antar_ronde=True,
+            progress=(lambda f, m: say(0.97 + f * 0.01, m)) if progress else None,
+        )
+        sesudah = tolok_giliran()
+        if any(b > a for a, b in zip(sebelum, sesudah)):
+            st.restore(aman)
+            st.recompute_wait()
+        notes.append(_catatan_sepadan(_selisih_tim(st), selisih_awal))
 
     # --- Rakit hasil -----------------------------------------------------
     pref_labels = {

@@ -1739,6 +1739,40 @@ def main() -> int:
                     "solver, sakelar bisa-diulang terkirim, Americano bersih")
         check("Mode CP-SAT: sakelar & batas waktu", cpsat_toggle)
 
+        # --- 12c-bis. mode tim sepadan: kalimat penjelasnya -----------------
+        # Modenya tidak punya kotak pengaturan sendiri, jadi satu-satunya yang
+        # dilihat host sebelum menekan Generate adalah kalimat ini - dan
+        # kalimat itu yang memberi tahu bahwa yang disepadankan KEKUATAN TIM,
+        # bukan level lawan. Tanpa dia, mode ini terbaca seperti "pool rating"
+        # dan host memilih yang salah.
+        def mode_sepadan():
+            hasil = json.loads(b.js("""JSON.stringify((() => {
+              const sel = document.getElementById('mode');
+              const box = document.getElementById('mode-peran');
+              const pilih = (v) => {
+                sel.value = v;
+                sel.dispatchEvent(new Event('change', {bubbles: true}));
+                return {teks: box.textContent, tampil: box.style.display};
+              };
+              const ada = !!sel.querySelector('option[value="americano_rating"]');
+              const sepadan = pilih('americano_rating');
+              const biasa = pilih('americano');
+              return {ada: ada, sepadan: sepadan, biasa: biasa};
+            })())"""))
+            assert hasil["ada"], "opsi mode tim sepadan tidak ada di daftar"
+            teks = hasil["sepadan"]["teks"]
+            # Dua kalimat yang mungkin - "rating semua sama" atau penjelasan
+            # penuh - dan dua-duanya menyebut Americano. Yang diuji: ADA
+            # kalimatnya, dan ia bicara soal Americano.
+            assert "Americano" in teks and len(teks) > 80, (
+                f"kalimat mode tim sepadan kosong atau terlalu pendek: {teks!r}")
+            assert hasil["biasa"]["teks"] == "", (
+                "kalimat mode masih tertinggal setelah pindah ke Americano")
+            assert hasil["biasa"]["tampil"] == "none", (
+                "kotak kalimat mode tidak ikut sembunyi di Americano")
+            return f"kalimat {len(teks)} huruf muncul, hilang di Americano"
+        check("Mode tim sepadan: kalimat penjelas", mode_sepadan)
+
         # --- 12d. tombol Buka laporan membawa jadwal yang tampil ----------
         # Dulu yang dikirim cuma setup, jadi server menyusun ulang seluruh
         # jadwal sebelum mengirim satu byte pun - sementara jendela laporan
