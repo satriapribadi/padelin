@@ -1232,6 +1232,50 @@ def _group_into_matches(
     return quads
 
 
+def _pasangkan_sisa(sisa: list[int], rule: str,
+                    tier_of: dict[int, int] | None,
+                    gender: dict[int, str | None]) -> list[tuple[int, int]]:
+    """Pasangkan peserta yang rekan rotasinya sedang tidak hadir.
+
+    Baris pasangan calon dibentuk sekali untuk seluruh segmen, dari SEMUA
+    peserta segmen itu. Begitu sebagian peserta baru datang di ronde 5 atau
+    pulang di ronde 9, sebagian pasangan di baris itu kehilangan satu anggota -
+    dan membuang pasangannya begitu saja berarti membuang anggota yang HADIR
+    juga. Pada roster yang sebagian besar belum datang, yang tersisa bisa nol
+    pasangan, dan jadwalnya ditolak padahal peserta yang hadir cukup untuk dua
+    court.
+
+    Jadi yang ditinggalkan dipasangkan ulang di sini - tetap menghormati aturan
+    babak dan pool rating, supaya ronde yang lahir tidak melanggar aturan yang
+    tidak bisa diperbaiki annealing lagi. Rotasi partner yang dijamin
+    1-faktorisasi memang tidak berlaku untuk pasangan darurat ini; itu ongkos
+    yang tidak bisa dihindari, dan annealing yang merapikannya setelahnya.
+    """
+    out: list[tuple[int, int]] = []
+
+    def _tambah(a: int, b: int) -> None:
+        out.append((a, b) if a < b else (b, a))
+
+    if rule == "mixed":
+        # Mirip _candidate_rounds: di babak mixed, pool rating tidak dipakai.
+        pria = [p for p in sisa if gender.get(p) == "M"]
+        wanita = [p for p in sisa if gender.get(p) == "F"]
+        for a, b in zip(pria, wanita):
+            _tambah(a, b)
+        return out
+
+    grup: dict[tuple, list[int]] = {}
+    for p in sisa:
+        g = gender.get(p) if rule == "same_gender" else None
+        if rule == "same_gender" and g is None:
+            continue
+        grup.setdefault((g, tier_of[p] if tier_of else None), []).append(p)
+    for anggota in grup.values():
+        for a, b in zip(anggota[::2], anggota[1::2]):
+            _tambah(a, b)
+    return out
+
+
 def _build_round(
     row: list[tuple[int, int]],
     st: ScheduleState,
@@ -1467,13 +1511,37 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     # jatah partner. Yang diukur metrik ini adalah rotasi yang MELESET, jadi
     # pasangan terkunci dikeluarkan dari hitungan - bukan disembunyikan:
     # pasangannya tetap tercetak di jadwal dan di daftar peserta.
+    #
+    # Kunci yang cuma berlaku SEBAGIAN acara tidak boleh diperlakukan begitu.
+    # Pasangan yang wajib bersama 3 ronde lalu dirotasi bebas 10 ronde sisanya
+    # memang menyumbang 2 pengulangan yang disengaja - tapi pengulangan
+    # ke-6 di ronde-ronde sisanya adalah rotasi yang meleset, dan itu harus
+    # tetap terhitung. Jadi mereka dipisah: yang terkunci penuh dikeluarkan
+    # seperti dulu, yang berjendela dihitung dengan ambang sebanyak ronde
+    # wajibnya.
     locked_pairs: set[tuple[int, int]] = set()
+    jendela_pair: dict[tuple[int, int], tuple[int, int]] = {}
     by_id = {p.id: p for p in players}
     for p in players:
         mate = p.partner_id
         if mate is not None and by_id.get(mate) is not None \
                 and by_id[mate].partner_id == p.id:
-            locked_pairs.add((min(p.id, mate), max(p.id, mate)))
+            kunci = (min(p.id, mate), max(p.id, mate))
+            if p.id in st.rules.locked_window:
+                jendela_pair[kunci] = st.rules.locked_window[p.id]
+            else:
+                locked_pairs.add(kunci)
+
+    # Berapa ronde tiap pasangan berjendela BENAR-BENAR wajib bersama. Bukan
+    # sekadar panjang jendelanya: babak yang tidak sanggup menampung kuncinya
+    # dan ronde yang salah satunya tidak hadir tidak menuntut apa pun.
+    wajib_bersama: dict[tuple[int, int], int] = {}
+    for kunci in jendela_pair:
+        a, b = kunci
+        wajib_bersama[kunci] = sum(
+            1 for r in range(n_rounds)
+            if st.rules.eligible_at(r, a) and st.rules.active_mate(a, r) == b
+        )
 
     partner_repeat_pairs = partner_repeat_max = 0
     oppo_repeat_pairs = oppo_repeat_max = 0
@@ -1481,7 +1549,8 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
     for i, j in combinations(ids, 2):
         k = st._k(i, j)
         pcv, ocv = st.pc[k], st.oc[k]
-        if pcv > 1 and (i, j) not in locked_pairs:
+        if pcv > max(1, wajib_bersama.get((i, j), 0)) \
+                and (i, j) not in locked_pairs:
             partner_repeat_pairs += 1
             partner_repeat_max = max(partner_repeat_max, pcv)
         if ocv > 1:
@@ -1527,6 +1596,10 @@ def _build_stats(st: ScheduleState, players: list[Player], n_rounds: int) -> Sch
         max(0, plays[p] - max(1, partner_pool - 1))
         for p in (free_ids if locked_pairs else ids)
     ) / 2
+    # Pengulangan yang DIPERINTAHKAN host lewat kunci berjendela masuk ke batas
+    # bawah, bukan ke denda: jadwal tidak punya cara menghindarinya, dan
+    # mendendanya berarti menghukum jadwal karena menuruti setup.
+    min_partner_excess += sum(max(0, w - 1) for w in wajib_bersama.values())
     min_oppo_excess = sum(max(0, 2 * plays[p] - (len(ids) - 1)) for p in ids) / 2
     actual_partner_excess = sum(
         max(0, st.pc[st._k(i, j)] - 1) for i, j in combinations(ids, 2)
@@ -2119,6 +2192,11 @@ class _Persiapan:
     rules: Rules
     plan: list
     round_segment: list[Segment]
+    # Siapa yang HADIR di tiap ronde (id lokal). Beda dari rules.round_eligible:
+    # yang itu sudah dipotong aturan babak juga, sedangkan yang ini murni soal
+    # datang & pulang. Dipakai untuk memutuskan siapa yang layak disebut
+    # "istirahat" - orang yang belum datang bukan sedang istirahat.
+    hadir_r: list[set[int]]
 
 
 def _siapkan(players: list[Player], config: Config,
@@ -2166,7 +2244,10 @@ def _siapkan(players: list[Player], config: Config,
     local_players = [
         Player(id=remap[p.id], name=p.name, rating=p.rating, gender=p.gender,
                partner_id=remap[p.partner_id] if p.partner_id is not None else None,
-               court_preference=p.court_preference)
+               court_preference=p.court_preference,
+               from_round=p.from_round, until_round=p.until_round,
+               partner_from_round=p.partner_from_round,
+               partner_until_round=p.partner_until_round)
         for p in sorted(players, key=lambda x: x.id)
     ]
     ratings = [0.0] * n
@@ -2210,9 +2291,24 @@ def _siapkan(players: list[Player], config: Config,
     if not _zero_repeats_possible(players, config, courts_r):
         weights.opponent_cap = 0.0
 
+    # Rentang ronde tempat kunci partner berlaku, 0-based inklusif. Kedua sisi
+    # pasangan harus memakai rentang yang SAMA - kalau host mengisinya berbeda
+    # (mis. lewat payload yang dirakit skrip), yang dipakai irisannya: ronde
+    # yang cuma diminta salah satu pihak bukan kesepakatan, dan menegakkannya
+    # berarti mengunci orang yang tidak memintanya.
+    jendela_kunci: dict[int, tuple[int, int]] = {}
+    for pid, mate in locked.items():
+        p, m = local_players[pid], local_players[mate]
+        awal = max((x.partner_from_round or 1) for x in (p, m)) - 1
+        akhirs = [x.partner_until_round for x in (p, m) if x.partner_until_round]
+        akhir = (min(akhirs) - 1) if akhirs else total_rounds - 1
+        if awal > 0 or akhir < total_rounds - 1:
+            jendela_kunci[pid] = (awal, akhir)
+
     rules = Rules(
         gender={p.id: p.gender for p in local_players},
         locked_partner=locked,
+        locked_window=jendela_kunci,
         tier_of=dict(tier_of) if tier_of else {},
         court_pref={p.id: p.court_preference for p in local_players
                     if p.court_preference},
@@ -2224,9 +2320,40 @@ def _siapkan(players: list[Player], config: Config,
     plan = round_plan(segments, config.interleave_segments)
     round_segment: list[Segment] = [seg for seg, _ in plan]
 
+    # Siapa yang hadir di tiap ronde. Peserta biasa hadir di semuanya, jadi
+    # meet tanpa fitur ini menghasilkan daftar yang persis sama dengan
+    # sebelumnya - seluruh peserta di tiap ronde.
+    hadir_r = [{p.id for p in local_players if p.hadir_di(r + 1)}
+               for r in range(total_rounds)]
+
     for seg in round_segment:
         rules.round_rule.append(seg.rule)
         rules.round_eligible.append(set(_eligible_for(seg.rule, local_players)))
+    # Kehadiran dipotongkan SETELAH aturan babak: dua-duanya harus berlaku, dan
+    # yang datang belakangan tetap tidak boleh turun di babak yang bukan
+    # genusnya.
+    for r in range(total_rounds):
+        rules.round_eligible[r] &= hadir_r[r]
+    # Kehadiran murni ikut disimpan di Rules, terpisah dari kelayakan: yang
+    # membacanya adalah daftar istirahat, dan solver eksak merakit daftar itu
+    # sendiri di modulnya. Diisi hanya kalau memang ada yang tidak ikut penuh,
+    # supaya meet biasa tidak membawa 15 salinan set berisi seluruh peserta.
+    if any(len(h) < n for h in hadir_r):
+        rules.round_present = [set(h) for h in hadir_r]
+
+    # Ronde yang tidak punya cukup orang untuk SATU court pun ditolak di sini,
+    # bukan dibiarkan meledak di tengah konstruksi dengan pesan yang menuduh
+    # pool rating. Yang salah hampir selalu rentang kehadirannya, dan hostnya
+    # perlu tahu ronde mana.
+    kurang = [r + 1 for r in range(total_rounds) if len(hadir_r[r]) < 4]
+    if kurang:
+        rinci = ", ".join(str(x) for x in kurang[:8])
+        lagi = f" (dan {len(kurang) - 8} ronde lain)" if len(kurang) > 8 else ""
+        raise ScheduleError(
+            f"Ronde {rinci}{lagi} cuma punya kurang dari 4 peserta yang hadir, "
+            f"jadi tidak ada satu court pun yang bisa diisi. Perbaiki rentang "
+            f"kehadiran peserta, atau perpendek acaranya."
+        )
 
     return _Persiapan(
         segments=segments, total_rounds=total_rounds,
@@ -2234,7 +2361,7 @@ def _siapkan(players: list[Player], config: Config,
         court_seragam=court_seragam, ids=ids, remap=remap, inv=inv, n=n,
         local_players=local_players, ratings=ratings, tier_of=tier_of,
         locked=locked, weights=weights, n_men=n_men, n_women=n_women,
-        rules=rules, plan=plan, round_segment=round_segment,
+        rules=rules, plan=plan, round_segment=round_segment, hadir_r=hadir_r,
     )
 
 
@@ -2403,6 +2530,7 @@ def _build_once(players: list[Player], config: Config,
     tier_of, locked, weights = pr.tier_of, pr.locked, pr.weights
     n_men, n_women, rules = pr.n_men, pr.n_women, pr.rules
     plan, round_segment = pr.plan, pr.round_segment
+    hadir_r = pr.hadir_r
 
     rng = random.Random(config.seed)
 
@@ -2534,6 +2662,22 @@ def _build_once(players: list[Player], config: Config,
         # `i` adalah nomor ronde di dalam segmennya, bukan nomor ronde acara -
         # jadi rotasi pasangannya tetap benar walau rondenya diselang-seling.
         row = list(cands[i % len(cands)])
+        # Pasangan calon dibentuk sekali per SEGMEN, sedangkan kehadiran
+        # berubah per RONDE - jadi barisnya dirakit ulang di sini. Pasangan yang
+        # kedua anggotanya hadir dipakai apa adanya; anggota yang rekannya belum
+        # datang (atau sudah pulang) TIDAK ikut terbuang, melainkan dipasangkan
+        # ulang di antara sesamanya - lihat _pasangkan_sisa.
+        if len(hadir_r[r_global]) < n:
+            ada = hadir_r[r_global]
+            utuh, sisa = [], []
+            for a, b in row:
+                if a in ada and b in ada:
+                    utuh.append((a, b))
+                else:
+                    sisa.extend(x for x in (a, b) if x in ada)
+            row = utuh + _pasangkan_sisa(
+                sisa, seg.rule, tier_of,
+                {p.id: p.gender for p in local_players})
         if len(row) < 2:
             raise ScheduleError(
                 f"Segmen '{seg.label or 'Main'}' tidak punya cukup pemain "
@@ -2556,7 +2700,12 @@ def _build_once(players: list[Player], config: Config,
             )
 
         playing = {p for q in quads for p in q}
-        byes = sorted(set(range(n)) - playing)
+        # Yang belum datang / sudah pulang TIDAK dihitung istirahat. Bedanya
+        # bukan kosmetik: daftar istirahat inilah yang jadi kolam wasit &
+        # ballboy, yang didenda optimizer sebagai duduk-beruntun, dan yang
+        # tercetak di kartu ronde. Menyebut nama orang yang belum sampai venue
+        # sebagai "istirahat" salah di ketiganya sekaligus.
+        byes = sorted(hadir_r[r_global] - playing)
         st.place_round(r_global, quads, byes)
 
     # Court yang berkurang di tengah acara adalah fakta paling menentukan tentang
@@ -2584,6 +2733,60 @@ def _build_once(players: list[Player], config: Config,
             + ". Jadi tunggu terpanjang di bagian yang court-nya lebih sedikit "
             "memang lebih besar, dan itu batas kapasitas, bukan hasil "
             "penjadwalan. Jatah main tetap diratakan untuk seluruh acara."
+        )
+
+    # Peserta yang tidak ikut sepanjang acara. Fakta yang paling menentukan
+    # bentuk jadwal ini setelah jumlah court, dan tidak terbaca dari angka mana
+    # pun di ringkasan: yang terlihat host cuma beberapa orang dengan jumlah
+    # main lebih sedikit - persis seperti rotasi yang gagal.
+    # Dihitung dari ronde yang benar-benar terlewat, bukan dari "ada isinya
+    # atau tidak": "sampai ronde 15" pada acara 15 ronde bukan kehadiran
+    # sebagian, dan catatan yang menyebutnya membuat host mencari masalah yang
+    # tidak ada.
+    sebagian = [p for p in local_players
+                if any(not p.hadir_di(r + 1) for r in range(total_rounds))]
+    if sebagian:
+        datang = [p for p in sebagian if p.from_round]
+        pulang = [p for p in sebagian if p.until_round
+                  and p.until_round < total_rounds]
+        bit = []
+        if datang:
+            bit.append("baru ikut belakangan - " + ", ".join(
+                f"{p.name} dari ronde {p.from_round}"
+                for p in sorted(datang, key=lambda x: (x.from_round, x.name))))
+        if pulang:
+            bit.append("berhenti lebih awal - " + ", ".join(
+                f"{p.name} sampai ronde {p.until_round}"
+                for p in sorted(pulang, key=lambda x: (x.until_round, x.name))))
+        hadir_min = min(len(h) for h in hadir_r)
+        hadir_max = max(len(h) for h in hadir_r)
+        notes.append(
+            f"{len(sebagian)} dari {n} peserta tidak ikut sepanjang acara "
+            f"({'; '.join(bit)}). Yang hadir tiap ronde berayun "
+            f"{hadir_min}-{hadir_max} orang, jadi jumlah main mereka memang "
+            f"lebih sedikit dan itu bukan hasil rotasi. Ronde yang belum "
+            f"mereka ikuti tidak dihitung sebagai istirahat, jadi rekapnya "
+            f"tetap bisa dijumlah."
+        )
+
+    # Kunci partner yang cuma berlaku sebagian acara. Sama alasannya: tanpa
+    # kalimat ini host melihat pasangan yang ia kunci berpisah di ronde 6 dan
+    # mengira kuncinya tidak jalan.
+    berjendela = sorted(
+        {tuple(sorted((pid, locked[pid]))) for pid in locked
+         if pid in rules.locked_window}
+    )
+    if berjendela:
+        rinci = "; ".join(
+            f"{local_players[a].name} & {local_players[b].name} ronde "
+            f"{rules.locked_window[a][0] + 1}-{rules.locked_window[a][1] + 1}"
+            for a, b in berjendela
+        )
+        notes.append(
+            f"{len(berjendela)} pasangan dikunci hanya di sebagian ronde "
+            f"({rinci}). Di luar rentang itu mereka dirotasi biasa - boleh saja "
+            f"bertemu lagi kalau rotasinya mengarah ke sana, tapi tidak "
+            f"diwajibkan."
         )
 
     for seg in segments:
@@ -2965,7 +3168,11 @@ def _build_once(players: list[Player], config: Config,
 
     cap = analyze(
         n_players=n,
-        courts=config.courts,
+        # Court terbanyak yang pernah dipakai, bukan court di ronde pertama:
+        # sejak jumlahnya boleh BERTAMBAH di tengah acara, config.courts cuma
+        # angka awal, dan memakainya di sini membuat analisa melapor kapasitas
+        # yang lebih kecil daripada yang benar-benar berjalan.
+        courts=config.peak_courts,
         duration_minutes=config.duration_minutes,
         round_minutes=round_minutes,
         warmup_minutes=config.warmup_minutes,
@@ -2979,6 +3186,12 @@ def _build_once(players: list[Player], config: Config,
         # Dihitung dari jadwal yang sudah jadi, bukan dari ronde x court: itu satu-
         # satunya angka yang benar kalau court-nya berkurang di tengah acara.
         matches_per_round=[len(st.matches[r]) for r in range(total_rounds)],
+        # Yang duduk = yang hadir dikurangi yang turun. Tanpa ini, peserta yang
+        # belum datang ikut terhitung sebagai orang yang sedang duduk, dan
+        # catatan "terlalu banyak yang istirahat" muncul untuk acara yang
+        # sebenarnya pas.
+        players_per_round=([len(h) for h in hadir_r]
+                           if any(len(h) < n for h in hadir_r) else None),
     )
     for issue in cap.sorted_issues():
         if issue.severity in ("error", "warning"):
@@ -3048,14 +3261,16 @@ def _build_once(players: list[Player], config: Config,
 
     # Aturan court yang BENAR-BENAR dipakai, diturunkan dari plan-nya - jadi ia
     # betul baik saat datang dari Config maupun dari daftar eksplisit sebuah
-    # skrip. Plan yang bukan "berkurang sekali lalu tetap" tidak bisa diwakili
+    # skrip. Plan yang bukan "berubah sekali lalu tetap" tidak bisa diwakili
     # satu aturan, dan di situ field-nya dibiarkan kosong: laporan tetap membaca
     # court per ronde dari jadwalnya, jadi yang hilang cuma ringkasan biayanya,
     # bukan jadwalnya.
+    #
+    # Arahnya tidak diperiksa: court boleh berkurang di tengah acara maupun
+    # bertambah, dan dua-duanya diwakili sepasang angka yang sama.
     titik = [r for r in range(1, total_rounds) if courts_r[r] != courts_r[r - 1]]
     aturan_court: tuple[int | None, int | None] = (None, None)
     if (len(titik) == 1 and courts_r[0] == config.courts
-            and courts_r[titik[0]] < courts_r[0]
             and len(set(courts_r[titik[0]:])) == 1):
         aturan_court = (courts_r[titik[0]], titik[0] + 1)
 
@@ -3189,9 +3404,12 @@ def _build_once(players: list[Player], config: Config,
             # tanpa itu angkanya tidak bisa dicek sendiri di jadwal. Dihitung
             # dengan aturan yang sama seperti stats.turn_skips, termasuk
             # menghormati siapa yang berhak turun di ronde itu.
-            elig_giliran = [set(_eligible_for(s.rule, final_players))
-                            for s, _ in round_plan(segments,
-                                                   config.interleave_segments)]
+            # Dari kelayakan yang SUDAH dipakai penjadwal, bukan dihitung
+            # ulang dari aturan babak: sejak peserta boleh datang telat atau
+            # pulang cepat, aturan babak saja tidak lagi menjawab siapa yang
+            # berhak turun di ronde itu.
+            elig_giliran = [{inv[x] for x in elig}
+                            for elig in rules.round_eligible]
             sudah_g = {pid: 0 for pid in stats.plays_per_player}
             lewat_n: dict[int, int] = {}
             dilewati_n: dict[int, int] = {}
@@ -3314,10 +3532,7 @@ def _build_once(players: list[Player], config: Config,
             f"ronde {' & '.join(str(x) for x in v)}"
             for v in list(repeated.values())[:4]
         )
-        pool = min(
-            (len(set(_eligible_for(seg.rule, local_players))) for seg in segments),
-            default=n,
-        )
+        pool = min((len(elig) for elig in rules.round_eligible), default=n)
         combos = math.comb(pool, 4) * 3 if pool >= 4 else 0
         # Jarak terdekat antar dua kemunculan yang sama. Optimizer sengaja
         # memaksimalkannya, jadi sebut angkanya: "terulang lagi 9 ronde
@@ -3347,6 +3562,13 @@ def _build_once(players: list[Player], config: Config,
                 # Rekan yang memang tidak turun di babak ini tidak perlu
                 # disebut - itu sudah jelas dari aturan babaknya sendiri.
                 if eligible is not None and locked[pid] not in eligible:
+                    continue
+                # Ronde di luar jendela kunci juga bukan "pelonggaran": di situ
+                # host memang tidak memintanya. Menyebutnya sebagai kunci yang
+                # gagal akan membuat setiap pemakaian jendela melahirkan
+                # peringatan untuk sesuatu yang justru diminta.
+                jendela = rules.locked_window.get(pid)
+                if jendela is not None and not (jendela[0] <= r <= jendela[1]):
                     continue
                 if rules.active_mate(pid, r) is None:
                     label = rnd.segment or "babak ini"

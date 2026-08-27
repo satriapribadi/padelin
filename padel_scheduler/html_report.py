@@ -245,6 +245,9 @@ table{width:100%; border-collapse:collapse}
 .recap tr:last-child td{border-bottom:none}
 .recap td.num,.recap th.num{text-align:center}
 .recap td.num{font-variant-numeric:tabular-nums}
+/* Rentang ronde di kolom "Hadir": angkanya yang dibaca, rentangnya keterangan.
+   Ditulis di baris yang sama supaya tabel rekap tidak tumbuh tingginya. */
+.recap .sub{color:var(--muted); font-weight:400; font-size:9px}
 .recap tbody tr:nth-child(even){background:#fcfdfe}
 
 /* Susunan per ronde: satu baris per orang, satu kolom per ronde. Sama seperti
@@ -280,6 +283,9 @@ table{width:100%; border-collapse:collapse}
   display:flex; gap:14px; flex-wrap:wrap}
 .tl-key b{display:inline-block; padding:0 4px; border-radius:3px;
   font-weight:700; margin-right:4px}
+/* Sel kosong di grafik = peserta belum datang / sudah pulang. Warnanya sama
+   dengan .tl td.none supaya keterangan dan selnya benar-benar terlihat sama. */
+.tl-key b.none{color:#aeb6c2}
 
 /* Matriks pertemuan. Lebarnya tumbuh kuadrat terhadap jumlah peserta, jadi
    selnya dibuat sekecil mungkin yang masih terbaca dan kolomnya diberi NOMOR,
@@ -496,21 +502,27 @@ def build_html(
     meta_bits = [b for b in (format_date_id(event_date), venue) if b]
     meta_bits.append(f"{len(schedule.players)} peserta")
     # Court yang benar-benar dipakai tiap ronde, bukan yang tercatat di config.
-    # Acara yang melepas court kedua di tengah jalan harus terbaca di kepala
-    # laporan; kalau tidak, pembaca melihat ronde-ronde belakang cuma punya satu
-    # match dan mengira ada yang hilang dari cetakannya.
+    # Acara yang mengubah jumlah court di tengah jalan harus terbaca di kepala
+    # laporan; kalau tidak, pembaca melihat ronde-ronde belakang punya jumlah
+    # match yang lain dan mengira ada yang hilang dari cetakannya.
+    #
+    # Titik pergantiannya dibaca dari SETUP, bukan ditebak dari jumlah match:
+    # sejak peserta boleh datang telat, jumlah match bisa berubah tanpa court-nya
+    # berubah sama sekali, dan kalimat "1 court dari ronde 5" untuk acara yang
+    # court-nya tidak pernah dikurangi dibantah langsung oleh tagihan venue.
+    # Angkanya tetap dari match yang benar-benar berjalan - 10 peserta di 4 court
+    # cuma mengisi 2. Aturannya sama untuk court yang berkurang maupun bertambah.
     court_ronde = [len(r.matches) for r in schedule.rounds]
-    if court_ronde and len(set(court_ronde)) > 1:
-        # Ronde tempat court pertama kali berkurang - hanya disebut kalau
-        # urutannya memang menurun terus. Pola naik-turun tidak punya satu
-        # "ronde berkurang" yang benar, jadi yang ditulis cuma rentangnya.
-        turun = next((r for r in range(1, len(court_ronde))
-                      if court_ronde[r] < court_ronde[r - 1]), None)
-        menurun = all(b <= a for a, b in zip(court_ronde, court_ronde[1:]))
-        meta_bits.append(
-            f"{max(court_ronde)} court, {min(court_ronde)} dari ronde {turun + 1}"
-            if menurun and turun is not None
-            else f"{min(court_ronde)}-{max(court_ronde)} court")
+    ubah = cfg.courts_from_round if cfg.courts_after is not None else None
+    if court_ronde and ubah is not None and 1 < ubah <= len(court_ronde):
+        sebelum = max(court_ronde[:ubah - 1])
+        sesudah = max(court_ronde[ubah - 1:])
+        meta_bits.append(f"{sebelum} court, {sesudah} dari ronde {ubah}"
+                         if sebelum != sesudah else f"{sebelum} court")
+    elif court_ronde and len(set(court_ronde)) > 1:
+        meta_bits.append(f"{min(court_ronde)}-{max(court_ronde)} court")
+    elif court_ronde:
+        meta_bits.append(f"{court_ronde[0]} court")
     else:
         meta_bits.append(f"{cfg.courts} court")
     meta_bits.append(f"{cfg.duration_minutes} menit")
@@ -757,7 +769,15 @@ def build_html(
     # Kolom dibuat aditif: main + wasit + ballboy + istirahat = jumlah ronde.
     # "Duduk" yang lama menghitung ronde bertugas juga, jadi angkanya tidak bisa
     # dijumlah dan peserta yang membacanya bingung.
-    headers = [("Nama", False), ("Rating", True), ("L/P", True), ("Main", True)]
+    # Kolom "Hadir" cuma muncul kalau ada yang memang tidak ikut sepanjang
+    # acara. Tanpa itu kolomnya berisi angka yang sama untuk semua orang, dan
+    # kolom seperti itu memakan lebar tanpa menjawab apa pun.
+    total_ronde = len(schedule.rounds)
+    sebagian = [p for p in roster if p.kehadiran_label(total_ronde)]
+    headers = [("Nama", False), ("Rating", True), ("L/P", True)]
+    if sebagian:
+        headers.append(("Hadir", True))
+    headers.append(("Main", True))
     if show_roles:
         headers += [("W", True), ("B", True)]
     headers.append(("Istirahat", True))
@@ -781,8 +801,19 @@ def build_html(
                 f"<td>{_nm(p.id)}</td>",
                 f"<td class='num'>{p.rating:g}</td>",
                 f"<td class='num'>{gp}</td>",
-                f"<td class='num'>{st.plays_per_player.get(p.id, 0)}</td>",
             ]
+            if sebagian:
+                # Ronde yang ia ikuti, bukan cuma rentangnya: kolom ini yang
+                # membuat baris tetap bisa dijumlah - main + tugas + istirahat
+                # = hadir, bukan = jumlah ronde acara.
+                ikut = sum(1 for r in schedule.rounds if p.hadir_di(r.index))
+                rentang = p.kehadiran_label(total_ronde)
+                cells.append(
+                    f"<td class='num'>{ikut}"
+                    + (f"<span class='sub'> {_e(rentang)}</span>" if rentang else "")
+                    + "</td>")
+            cells.append(
+                f"<td class='num'>{st.plays_per_player.get(p.id, 0)}</td>")
             if show_roles:
                 cells += [
                     f"<td class='num'>{roles.get('wasit', 0)}</td>",
@@ -819,10 +850,15 @@ def build_html(
         if show_roles:
             keys += [("w", "Wasit"), ("b", "Ballboy")]
         keys.append(("r", "Istirahat"))
+        # Sel titik selalu ada di grafik ini, tapi artinya baru perlu dijelaskan
+        # begitu ada peserta yang tidak ikut sepanjang acara: sebelum itu ia
+        # tidak pernah muncul, karena semua orang selalu salah satu dari M/W/B/R.
+        if sebagian:
+            keys.append(("none", "Belum / tidak hadir"))
         parts.append(
             "<div class='tl-key'>"
-            + "".join(f"<span><b class='{k}'>{label[k]}</b>{_e(t)}</span>"
-                      for k, t in keys)
+            + "".join(f"<span><b class='{k}'>{label.get(k, '&middot;')}</b>"
+                      f"{_e(t)}</span>" for k, t in keys)
             + "</div>"
         )
 

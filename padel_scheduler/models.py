@@ -116,6 +116,86 @@ class Player:
     # bisa dipenuhi, jadwal tetap jadi dan pelanggarannya dilaporkan.
     #   None | "women_only" | "men_only" | "same_gender" | "mixed_team"
     court_preference: str | None = None
+    # Kehadiran sebagian: ronde pertama & terakhir peserta ini ikut, 1-based dan
+    # inklusif. None berarti tidak dibatasi - hadir sejak ronde 1, sampai ronde
+    # terakhir. Dua-duanya kosong = peserta biasa, dan itu bawaannya.
+    #
+    # Disimpan per PESERTA, bukan sebagai aturan seperti court yang berkurang,
+    # karena yang berubah bukan sekadar jumlahnya: penjadwal harus tahu SIAPA
+    # yang belum datang. "Ronde 5 diisi 12 orang" tidak bisa dijadwalkan; "Rina
+    # baru ikut dari ronde 5" bisa.
+    from_round: int | None = None
+    until_round: int | None = None
+    # Rentang ronde tempat partner_id di atas WAJIB ditegakkan, 1-based dan
+    # inklusif. Kosong = sepanjang acara, sama seperti sebelumnya.
+    #
+    # Ada gunanya dibatasi: host memakai partner tetap untuk babak mixed di
+    # awal acara ("pasangan turnamen"), lalu ingin ronde sisanya dirotasi bebas
+    # supaya semua orang tetap ketemu semua. Tanpa jendela, satu-satunya
+    # pilihan adalah mengunci sepanjang acara atau tidak sama sekali.
+    partner_from_round: int | None = None
+    partner_until_round: int | None = None
+
+    def __post_init__(self) -> None:
+        for nama in ("from_round", "until_round",
+                     "partner_from_round", "partner_until_round"):
+            nilai = getattr(self, nama)
+            if nilai in (None, "", 0):
+                setattr(self, nama, None)
+                continue
+            nilai = int(nilai)
+            if nilai < 1:
+                raise ValueError(
+                    f"{self.name}: nomor ronde pada '{nama}' minimal 1.")
+            setattr(self, nama, nilai)
+        # "Mulai ronde 1" sama artinya dengan tanpa batas, dan dinormalkan ke
+        # None supaya sisa kode cuma perlu memeriksa satu hal.
+        if self.from_round == 1:
+            self.from_round = None
+        if self.partner_from_round == 1:
+            self.partner_from_round = None
+        if (self.from_round is not None and self.until_round is not None
+                and self.until_round < self.from_round):
+            raise ValueError(
+                f"{self.name}: ronde terakhir hadir ({self.until_round}) lebih "
+                f"awal daripada ronde pertamanya ({self.from_round}).")
+        if (self.partner_from_round is not None
+                and self.partner_until_round is not None
+                and self.partner_until_round < self.partner_from_round):
+            raise ValueError(
+                f"{self.name}: ronde terakhir partner tetap "
+                f"({self.partner_until_round}) lebih awal daripada ronde "
+                f"pertamanya ({self.partner_from_round}).")
+
+    def hadir_di(self, ronde: int) -> bool:
+        """Apakah peserta ini ikut di ronde ke-`ronde` (1-based)?"""
+        if self.from_round is not None and ronde < self.from_round:
+            return False
+        if self.until_round is not None and ronde > self.until_round:
+            return False
+        return True
+
+    def kehadiran_penuh(self) -> bool:
+        return self.from_round is None and self.until_round is None
+
+    def kehadiran_label(self, total_rounds: int | None = None) -> str:
+        """Rentang kehadiran untuk dibaca host.
+
+        Kosong kalau ia ikut sepanjang acara; kalau tidak, salah satu dari
+        "mulai R5", "sampai R8", atau "R3-R9". `total_rounds` membuat
+        "sampai ronde terakhir" terbaca sebagai tanpa batas - host yang
+        memperpendek durasinya tidak perlu ikut merapikan angka ini.
+        """
+        if self.kehadiran_penuh():
+            return ""
+        akhir = self.until_round
+        if akhir is not None and total_rounds is not None and akhir >= total_rounds:
+            akhir = None
+        if self.from_round is None:
+            return f"sampai R{akhir}" if akhir else ""
+        if akhir is None:
+            return f"mulai R{self.from_round}"
+        return f"R{self.from_round}-R{akhir}"
 
 
 # Nilai yang sah untuk Player.court_preference.
@@ -292,11 +372,17 @@ class Config:
     # Kalau True, durasi per ronde dihitung otomatis dari total ronde segmen
     # agar pas dengan jam sewa.
     fit_rounds_to_duration: bool = True
-    # Court yang dilepas di tengah acara, untuk sewa yang tidak sama panjang:
-    # court kedua cuma dibayar dua jam sementara acaranya tiga jam.
-    #   courts_after      -> berapa court yang tersisa setelah dilepas
+    # Jumlah court BERUBAH di tengah acara, untuk sewa yang tidak sama panjang.
+    #   courts_after      -> berapa court yang dipakai setelah berubah
     #   courts_from_round -> ronde pertama (1-based) yang sudah memakai jumlah itu
     # Kosong dua-duanya = jumlah court sama sepanjang acara (perilaku bawaan).
+    #
+    # Dua arah, dan dua-duanya nyata di lapangan:
+    #   berkurang -> court kedua cuma dibayar dua jam sementara acaranya tiga jam;
+    #   bertambah -> court sebelah baru kosong jam berikutnya, jadi disewa
+    #                menyusul untuk sisa acara.
+    # Yang membedakan cuma tanda selisihnya, jadi keduanya memakai dua field yang
+    # sama - bukan sepasang field lagi yang harus dijaga tetap konsisten.
     #
     # Disimpan sebagai ATURAN, bukan daftar court per ronde, karena jumlah ronde
     # dihitung dari durasi dan menit-per-ronde: daftar sepanjang 15 angka jadi
@@ -324,24 +410,20 @@ class Config:
     def __post_init__(self) -> None:
         if self.courts < 1:
             raise ValueError("Jumlah court minimal 1.")
-        # Court berkurang: dua field yang cuma berarti berpasangan. Yang setengah
+        # Court berubah: dua field yang cuma berarti berpasangan. Yang setengah
         # terisi ditolak, bukan ditebak - menebaknya berarti host mengira court
-        # sudah dikurangi padahal jadwalnya memakai jumlah penuh.
+        # sudah berubah padahal jadwalnya memakai jumlah awal sepanjang acara.
         if (self.courts_after is None) != (self.courts_from_round is None):
             raise ValueError(
-                "Court berkurang butuh dua angka: jadi berapa court, dan mulai "
+                "Court berubah butuh dua angka: jadi berapa court, dan mulai "
                 "ronde berapa. Salah satunya masih kosong.")
         if self.courts_after is not None:
             if self.courts_after < 1:
-                raise ValueError("Setelah dikurangi, court minimal 1.")
-            if self.courts_after > self.courts:
-                raise ValueError(
-                    f"Court setelah dikurangi ({self.courts_after}) tidak boleh "
-                    f"lebih banyak daripada court awal ({self.courts}).")
+                raise ValueError("Setelah berubah, court minimal 1.")
             if self.courts_from_round < 2:
                 raise ValueError(
-                    "Court berkurang paling cepat mulai ronde 2; kalau memang "
-                    "sejak ronde 1, kurangi saja jumlah court-nya.")
+                    "Court berubah paling cepat mulai ronde 2; kalau memang "
+                    "sejak ronde 1, ubah saja jumlah court awalnya.")
             # Tidak berkurang sama sekali - dinormalkan supaya seluruh sisa kode
             # cuma perlu memeriksa satu hal: apakah plan-nya seragam.
             if self.courts_after == self.courts:
@@ -374,6 +456,17 @@ class Config:
             for n in (self.court_names or [])
         ]
 
+    @property
+    def peak_courts(self) -> int:
+        """Court terbanyak yang pernah dipakai sepanjang acara.
+
+        Sejak jumlah court boleh BERTAMBAH di tengah acara, `courts` tidak lagi
+        berarti "court terbanyak" - ia cuma jumlah court di awal. Yang butuh
+        atap (penomoran court, nama court, lebar kartu ronde, analisa kapasitas)
+        harus memakai angka ini.
+        """
+        return max(self.courts, self.courts_after or 0)
+
     def court_label(self, court: int) -> str:
         """Nama yang ditampilkan untuk satu court: pilihan host atau "C{n}"."""
         nama = (self.court_names[court - 1]
@@ -401,8 +494,10 @@ class Config:
 
         Bukan court x durasi. Kalau court kedua dilepas di tengah acara, yang
         dibayar cuma sampai saat itu - dan itu justru alasan host memakai fitur
-        ini. Batas waktunya dihitung dari ronde tempat court berkurang:
-        pemanasan + (ronde-1) x menit per ronde.
+        ini. Kalau court justru DITAMBAH di tengah acara, yang dibayar untuk
+        court baru cuma sisa waktunya, bukan sejam penuh dari awal. Rumusnya
+        satu dan sama untuk dua-duanya. Batas waktunya dihitung dari ronde
+        tempat court berubah: pemanasan + (ronde-1) x menit per ronde.
 
         Sisa waktu sewa di luar ronde (pemanasan, dan menit yang tidak cukup
         untuk satu ronde penuh) tetap dihitung: jam sewanya tetap dibayar

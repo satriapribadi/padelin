@@ -109,6 +109,21 @@ def _players_from(payload: dict) -> list[Player]:
         if pref not in COURT_PREFERENCES:
             pref = None
         partner = item.get("partner_id")
+
+        # Rentang ronde: kehadiran peserta, dan berapa lama kunci partnernya
+        # berlaku. Payload lama tidak punya field ini sama sekali, dan tidak
+        # adanya HARUS berarti "sepanjang acara" - jadwal yang sudah pernah
+        # dibuat host tetap keluar persis sama seperti sebelumnya.
+        def _ronde(nama: str) -> int | None:
+            nilai = item.get(nama)
+            if nilai in (None, "", 0):
+                return None
+            try:
+                angka = int(nilai)
+            except (TypeError, ValueError):
+                return None
+            return angka if angka >= 1 else None
+
         players.append(
             Player(
                 id=int(item.get("id", i)),
@@ -117,9 +132,54 @@ def _players_from(payload: dict) -> list[Player]:
                 gender=gender,
                 partner_id=int(partner) if partner not in (None, "", -1) else None,
                 court_preference=pref,
+                from_round=_ronde("from_round"),
+                until_round=_ronde("until_round"),
+                partner_from_round=_ronde("partner_from_round"),
+                partner_until_round=_ronde("partner_until_round"),
             )
         )
     return players
+
+
+def _ronde_acara(cfg: Config) -> int:
+    """Berapa ronde acara ini, dengan aturan yang sama seperti penjadwal."""
+    return (cfg.rounds_override or cfg.total_segment_rounds()
+            or rounds_from_duration(cfg.duration_minutes, cfg.round_minutes,
+                                    cfg.warmup_minutes))
+
+
+def _hadir_per_ronde(players: list[Player],
+                     total_rounds: int) -> list[int] | None:
+    """Berapa peserta yang hadir di tiap ronde, atau None kalau semuanya penuh."""
+    if total_rounds <= 0 or all(p.kehadiran_penuh() for p in players):
+        return None
+    return [sum(1 for p in players if p.hadir_di(r + 1))
+            for r in range(total_rounds)]
+
+
+def _match_per_ronde(cfg: Config, players: list[Player],
+                     total_rounds: int) -> list[int] | None:
+    """Match yang benar-benar berjalan tiap ronde, atau None kalau seragam.
+
+    Dua hal bisa membuatnya tidak seragam, dan keduanya harus ikut: jumlah court
+    yang berubah di tengah acara, dan peserta yang datang telat / pulang cepat.
+    Court yang disewa tidak menghasilkan match kalau orangnya belum sampai, dan
+    orang yang hadir tidak bisa main kalau court-nya sudah dilepas - jadi yang
+    menentukan adalah yang terkecil di antara keduanya.
+
+    None berarti "hitung saja seperti biasa": tanpa ini pemanggil harus tahu
+    fitur mana yang sedang dipakai host, dan tiap pemanggil yang lupa
+    menghasilkan panel yang menjanjikan ronde main yang tidak akan terjadi.
+    """
+    n = len(players)
+    if n < 4 or total_rounds <= 0:
+        return None
+    sebagian = [p for p in players if not p.kehadiran_penuh()]
+    if cfg.courts_after is None and not sebagian:
+        return None
+    plan = cfg.court_plan(total_rounds)
+    hadir = _hadir_per_ronde(players, total_rounds) or [n] * total_rounds
+    return [min(c, h // 4) for c, h in zip(plan, hadir)]
 
 
 def _config_from(payload: dict) -> Config:
@@ -232,16 +292,14 @@ def api_analyze(payload: dict) -> dict:
     seragam = all(s.rule == "open" for s in cfg.segments)
     lengkap = n > 0 and men + women == n and seragam
 
-    # Court yang berkurang mengubah jumlah match seluruh acara, dan dari situlah
-    # batas keunikan dihitung. Tanpa ini panel menjanjikan ronde main yang tidak
-    # akan terjadi - dan angkanya dipakai host untuk memutuskan setup.
+    # Court yang berubah - dan peserta yang tidak ikut sepanjang acara - mengubah
+    # jumlah match seluruh acara, dan dari situlah batas keunikan dihitung.
+    # Tanpa ini panel menjanjikan ronde main yang tidak akan terjadi, dan
+    # angkanya dipakai host untuk memutuskan setup.
     ronde_panel = rounds_override or rounds_from_duration(
         cfg.duration_minutes, round_minutes, cfg.warmup_minutes)
 
-    matches_per_round = None
-    if cfg.courts_after is not None and n >= 4:
-        matches_per_round = [min(c, n // 4)
-                             for c in cfg.court_plan(ronde_panel)]
+    matches_per_round = _match_per_ronde(cfg, players, ronde_panel)
 
     # Court yang disewa TIDAK sama di semua ronde, dan babak juga tidak menempati
     # ronde yang sama. Keduanya harus dipasangkan per ronde, kalau tidak panel
@@ -261,7 +319,9 @@ def api_analyze(payload: dict) -> dict:
 
     rep = analyze(
         n_players=n,
-        courts=cfg.courts,
+        # Court terbanyak sepanjang acara, bukan court di ronde pertama: sejak
+        # jumlahnya boleh bertambah di tengah acara, cfg.courts cuma angka awal.
+        courts=cfg.peak_courts,
         duration_minutes=cfg.duration_minutes,
         round_minutes=round_minutes,
         warmup_minutes=cfg.warmup_minutes,
@@ -278,6 +338,7 @@ def api_analyze(payload: dict) -> dict:
         roster_men=men,
         roster_women=women,
         matches_per_round=matches_per_round,
+        players_per_round=_hadir_per_ronde(players, ronde_panel),
         rules_per_round=rules_per_round,
         court_plan=court_plan,
         interleave_segments=cfg.interleave_segments,
@@ -307,7 +368,7 @@ def api_economics(payload: dict) -> dict:
     # court "ideal". Host sering sengaja menyewa court lebih sedikit demi
     # margin; kalau court itu tidak masuk daftar, skenarionya sendiri hilang
     # dari perbandingan dan grafik kehilangan titik acuannya.
-    courts = cfg.courts
+    courts = cfg.peak_courts
     court_options = sorted({
         c for c in range(max(1, courts - 2), courts + 3) if c >= 1
     } | {courts})
@@ -319,22 +380,27 @@ def api_economics(payload: dict) -> dict:
     men_e = sum(1 for p in pemain if p.gender == "M")
     women_e = sum(1 for p in pemain if p.gender == "F")
 
-    # Court yang dilepas di tengah acara: ongkos DAN waktu main dua-duanya turun,
-    # jadi dua-duanya dikoreksi. Skenario pembanding "tambah 1 court" memakai pola
-    # sewa yang sama plus satu court sepanjang acara - court tambahan yang ikut
-    # dilepas di tengah bukan sesuatu yang bisa ditebak dari sini.
-    ch = chp = mpr = mpr_plus = None
-    if cfg.courts_after is not None and n >= 4:
-        ronde_e = cfg.rounds_override or cfg.total_segment_rounds() \
-            or rounds_from_duration(cfg.duration_minutes, cfg.round_minutes,
-                                    cfg.warmup_minutes)
-        plan_e = cfg.court_plan(ronde_e)
+    # Court yang berubah di tengah acara: ongkos DAN waktu main dua-duanya ikut,
+    # jadi dua-duanya dikoreksi. Peserta yang datang telat atau pulang cepat
+    # hanya menyentuh waktu main - fee-nya tetap penuh, jadi ongkosnya tidak
+    # berubah, dan itu sebabnya `ch` hanya diisi kalau court-nya yang berubah.
+    # Skenario pembanding "tambah 1 court" memakai pola sewa yang sama plus satu
+    # court sepanjang acara - court tambahan yang ikut dilepas di tengah bukan
+    # sesuatu yang bisa ditebak dari sini.
+    ch = chp = mpr_plus = None
+    ronde_e = _ronde_acara(cfg)
+    mpr = _match_per_ronde(cfg, pemain, ronde_e)
+    if mpr is not None:
+        # Court tambahan pun dibatasi orang yang hadir di ronde itu: court
+        # kelima tidak menghasilkan match kalau yang sudah datang baru 12 orang.
+        hadir_e = _hadir_per_ronde(pemain, ronde_e) or [n] * ronde_e
+        mpr_plus = [min(c + 1, h // 4)
+                    for c, h in zip(cfg.court_plan(ronde_e), hadir_e)]
+    if cfg.courts_after is not None:
         ch = cfg.court_hours()
         chp = ch + hours
-        mpr = [min(c, n // 4) for c in plan_e]
-        mpr_plus = [min(c + 1, n // 4) for c in plan_e]
 
-    up = upgrade_analysis(n, cfg.courts, hours, econ,
+    up = upgrade_analysis(n, courts, hours, econ,
                           cfg.round_minutes, cfg.warmup_minutes,
                           seg_ekonomi, men_e, women_e,
                           court_hours=ch, matches_per_round=mpr,
@@ -406,7 +472,7 @@ def api_economics(payload: dict) -> dict:
         # sebelahnya. None kalau tidak ada courts_after, dan fungsinya jatuh ke
         # court x durasi seperti sebelumnya.
         "fee_suggestions": {
-            str(int(m)): fee_for_target_margin(n, cfg.courts, hours, econ, m,
+            str(int(m)): fee_for_target_margin(n, courts, hours, econ, m,
                                                court_hours=ch)
             for m in (20, 30, 40, 50)
         },

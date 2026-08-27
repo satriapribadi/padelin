@@ -66,8 +66,11 @@ def make_players(n, genders=None, ratings=None):
 
 
 def assert_structurally_valid(tc, schedule):
-    ids = {p.id for p in schedule.players}
     for rnd in schedule.rounds:
+        # Yang harus tercakup adalah peserta yang HADIR di ronde itu, bukan
+        # seluruh roster: yang belum datang atau sudah pulang tidak main dan
+        # juga tidak istirahat.
+        ids = {p.id for p in schedule.players if p.hadir_di(rnd.index)}
         seen = []
         for m in rnd.matches:
             quad = m.players()
@@ -81,6 +84,11 @@ def assert_structurally_valid(tc, schedule):
         tc.assertEqual(
             set(seen) | set(rnd.byes), ids,
             f"ronde {rnd.index}: ada pemain yang hilang dari jadwal",
+        )
+        tc.assertFalse(
+            {p.id for p in schedule.players if not p.hadir_di(rnd.index)}
+            & (set(seen) | set(rnd.byes)),
+            f"ronde {rnd.index}: ada peserta yang belum hadir tapi terjadwal",
         )
         tc.assertFalse(
             set(seen) & set(rnd.byes),
@@ -2666,11 +2674,30 @@ class TestCourtBerkurang(unittest.TestCase):
     def test_config_menolak_pasangan_yang_tak_masuk_akal(self):
         for kw in ({"courts_after": 1},                       # tanpa ronde
                    {"courts_from_round": 5},                  # tanpa jumlah
-                   {"courts_after": 3, "courts_from_round": 5},   # naik
                    {"courts_after": 0, "courts_from_round": 5},   # nol court
                    {"courts_after": 1, "courts_from_round": 1}):  # ronde 1
             with self.assertRaises(ValueError, msg=f"diterima: {kw}"):
                 Config(courts=2, duration_minutes=180, **kw)
+
+    def test_court_boleh_bertambah_di_tengah_acara(self):
+        """Arah yang lain, dan sama nyatanya: court sebelah baru kosong jam
+        berikutnya, jadi disewa menyusul. Dulu ditolak Config mentah-mentah.
+        """
+        cfg = Config(courts=1, duration_minutes=180, round_minutes=12,
+                     warmup_minutes=0, courts_after=3, courts_from_round=5,
+                     mode="americano", seed=42, effort=8000, attempts=1)
+        self.assertEqual(cfg.court_plan(15), [1] * 4 + [3] * 11)
+        # courts berhenti berarti "court terbanyak" begitu ia bertambah.
+        self.assertEqual(cfg.peak_courts, 3)
+        # 1 court x 48 menit + 3 court x 132 menit = 7,4 court-jam.
+        self.assertAlmostEqual(cfg.court_hours(), (48 + 3 * 132) / 60.0)
+
+        sch = build_schedule(make_players(16), cfg)
+        assert_structurally_valid(self, sch)
+        self.assertEqual([len(r.matches) for r in sch.rounds],
+                         [1] * 4 + [3] * 11)
+        gabung = " ".join(sch.notes).lower()
+        self.assertIn("court tidak sama", gabung)
 
     def test_sama_dengan_court_awal_dianggap_tidak_ada(self):
         cfg = Config(courts=2, duration_minutes=180, courts_after=2,
@@ -2701,6 +2728,199 @@ class TestCourtBerkurang(unittest.TestCase):
             [[m.players() for m in r.matches] for r in a.rounds],
             [[m.players() for m in r.matches] for r in b.rounds])
         self.assertEqual(a.stats.quality_score, b.stats.quality_score)
+
+
+class TestKehadiranSebagian(unittest.TestCase):
+    """Peserta yang datang telat atau pulang duluan.
+
+    Yang diuji bukan cuma "apakah dia tidak dijadwalkan di ronde itu", tapi
+    tiga hal yang paling mudah diam-diam salah dan langsung terbaca host:
+    ia tidak boleh disebut "istirahat", ia tidak boleh dapat tugas
+    wasit/ballboy, dan meet tanpa fitur ini harus keluar persis sama.
+    """
+
+    def _cfg(self, **kw):
+        dasar = dict(courts=2, duration_minutes=120, round_minutes=12,
+                     warmup_minutes=0, mode="americano", seed=42, effort=6000,
+                     attempts=1)
+        dasar.update(kw)
+        return Config(**dasar)
+
+    def _roster(self):
+        ps = make_players(12)
+        ps[10].from_round = 5      # P11 baru ikut ronde 5
+        ps[11].until_round = 6     # P12 berhenti setelah ronde 6
+        return ps
+
+    def test_tidak_dijadwalkan_di_luar_rentangnya(self):
+        sch = build_schedule(self._roster(), self._cfg())
+        assert_structurally_valid(self, sch)
+        for rnd in sch.rounds:
+            turun = {p for m in rnd.matches for p in m.players()}
+            if rnd.index < 5:
+                self.assertNotIn(10, turun, f"P11 main di ronde {rnd.index}")
+            if rnd.index > 6:
+                self.assertNotIn(11, turun, f"P12 main di ronde {rnd.index}")
+
+    def test_yang_belum_datang_bukan_istirahat(self):
+        """Daftar istirahat adalah kolam wasit & ballboy, yang didenda
+        duduk-beruntun, dan yang tercetak di kartu ronde. Menyebut orang yang
+        belum sampai venue sebagai "istirahat" salah di ketiganya sekaligus.
+        """
+        sch = build_schedule(self._roster(),
+                             self._cfg(referees_per_court=1,
+                                       ballboys_per_court=1))
+        for rnd in sch.rounds:
+            if rnd.index < 5:
+                self.assertNotIn(10, rnd.byes)
+                self.assertNotIn(10, [r.player_id for r in rnd.roles])
+            if rnd.index > 6:
+                self.assertNotIn(11, rnd.byes)
+                self.assertNotIn(11, [r.player_id for r in rnd.roles])
+
+    def test_rekap_tetap_bisa_dijumlah(self):
+        """main + tugas + istirahat = ronde yang ia HADIRI, bukan ronde acara."""
+        sch = build_schedule(self._roster(),
+                             self._cfg(referees_per_court=1))
+        st = sch.stats
+        total = len(sch.rounds)
+        for p in sch.players:
+            hadir = sum(1 for r in sch.rounds if p.hadir_di(r.index))
+            self.assertEqual(
+                st.plays_per_player[p.id] + st.byes_per_player[p.id], hadir,
+                f"{p.name}: main + istirahat != ronde yang ia hadiri")
+            self.assertLessEqual(hadir, total)
+
+    def test_catatan_menyebut_siapa_dan_kapan(self):
+        sch = build_schedule(self._roster(), self._cfg())
+        gabung = " ".join(sch.notes)
+        self.assertIn("tidak ikut sepanjang acara", gabung)
+        self.assertIn("P11 dari ronde 5", gabung)
+        self.assertIn("P12 sampai ronde 6", gabung)
+
+    def test_ronde_tanpa_cukup_peserta_ditolak_dengan_jelas(self):
+        ps = make_players(8)
+        for p in ps[:6]:
+            p.from_round = 4
+        with self.assertRaises(ScheduleError) as cm:
+            build_schedule(ps, self._cfg())
+        pesan = str(cm.exception)
+        self.assertIn("kurang dari 4 peserta yang hadir", pesan)
+        self.assertIn("Ronde 1", pesan)
+
+    def test_rotasi_disambung_bukan_dibuang(self):
+        """Baris pasangan calon dibentuk dari SELURUH peserta segmen. Kalau
+        pasangan yang salah satu anggotanya belum datang cuma dibuang, anggota
+        yang HADIR ikut terbuang - dan court yang disewa berdiri kosong.
+        """
+        ps = make_players(12)
+        for p in ps[8:]:           # 4 dari 12 baru ikut di ronde 6
+            p.from_round = 6
+        sch = build_schedule(ps, self._cfg())
+        # 8 orang hadir di ronde 1-5, jadi kedua court harus tetap terisi.
+        for rnd in sch.rounds[:5]:
+            self.assertEqual(len(rnd.matches), 2,
+                             f"ronde {rnd.index} cuma {len(rnd.matches)} match "
+                             f"padahal 8 orang hadir")
+
+    def test_tanpa_rentang_hasilnya_tidak_berubah(self):
+        """Jalur lama harus identik - fitur ini tidak boleh menggeser apa pun."""
+        a = build_schedule(make_players(12), self._cfg())
+        ps = make_players(12)
+        for p in ps:
+            p.from_round = None
+            p.until_round = None
+        b = build_schedule(ps, self._cfg())
+        self.assertEqual(
+            [[m.players() for m in r.matches] for r in a.rounds],
+            [[m.players() for m in r.matches] for r in b.rounds])
+        self.assertEqual(a.stats.quality_score, b.stats.quality_score)
+
+
+class TestPartnerBerjendela(unittest.TestCase):
+    """Partner tetap yang cuma berlaku sebagian ronde."""
+
+    def _cfg(self, **kw):
+        dasar = dict(courts=2, duration_minutes=120, round_minutes=12,
+                     warmup_minutes=0, mode="americano", seed=42, effort=8000,
+                     attempts=1)
+        dasar.update(kw)
+        return Config(**dasar)
+
+    def _roster(self, sampai=4):
+        ps = make_players(12)
+        ps[0].partner_id, ps[1].partner_id = 1, 0
+        ps[0].partner_until_round = sampai
+        ps[1].partner_until_round = sampai
+        return ps
+
+    def _partner_di(self, rnd, pid):
+        for m in rnd.matches:
+            for tim in (m.team_a, m.team_b):
+                if pid in tim:
+                    return next(x for x in tim if x != pid)
+        return None
+
+    def test_wajib_di_dalam_jendela(self):
+        sch = build_schedule(self._roster(), self._cfg())
+        assert_structurally_valid(self, sch)
+        for rnd in sch.rounds:
+            mate = self._partner_di(rnd, 0)
+            if rnd.index <= 4:
+                self.assertIn(mate, (None, 1),
+                              f"ronde {rnd.index}: kunci partner dilanggar")
+
+    def test_dilepas_di_luar_jendela(self):
+        """Di luar rentangnya kuncinya tidak ditegakkan. Denda partner berulang
+        yang memisahkan mereka, jadi yang diuji: mereka MEMANG dapat partner
+        lain, bukan menempel sepanjang acara seperti kunci penuh.
+        """
+        sch = build_schedule(self._roster(), self._cfg())
+        lain = [rnd.index for rnd in sch.rounds if rnd.index > 4
+                and self._partner_di(rnd, 0) not in (None, 1)]
+        self.assertTrue(lain, "pasangan tidak pernah dilepas di luar jendelanya")
+
+    def test_catatan_menyebut_rentangnya(self):
+        sch = build_schedule(self._roster(), self._cfg())
+        gabung = " ".join(sch.notes)
+        self.assertIn("dikunci hanya di sebagian ronde", gabung)
+        self.assertIn("ronde 1-4", gabung)
+
+    def test_pengulangan_yang_diminta_tidak_didenda(self):
+        """Pasangan yang wajib bersama 4 ronde menyumbang 3 pengulangan yang
+        disengaja. Menghitungnya sebagai rotasi yang meleset berarti menghukum
+        jadwal karena menuruti setup.
+        """
+        sch = build_schedule(self._roster(), self._cfg())
+        bersama = sum(
+            1 for rnd in sch.rounds if self._partner_di(rnd, 0) == 1)
+        if bersama <= 4:
+            pasang = [(m.team_a, m.team_b) for rnd in sch.rounds
+                      for m in rnd.matches]
+            self.assertEqual(
+                sum(1 for a, b in pasang
+                    if set(a) == {0, 1} or set(b) == {0, 1}), bersama,
+                f"hitungan pasangan tidak konsisten: {pasang}")
+            # Tidak boleh muncul sebagai "partner berulang" selama masih di
+            # dalam jatah wajibnya.
+            self.assertLessEqual(sch.stats.partner_repeat_pairs, 1)
+
+    def test_rentang_terbalik_ditolak(self):
+        with self.assertRaises(ValueError):
+            Player(id=0, name="A", partner_from_round=5, partner_until_round=2)
+        with self.assertRaises(ValueError):
+            Player(id=0, name="A", from_round=7, until_round=3)
+
+    def test_kunci_penuh_tetap_seperti_sebelumnya(self):
+        """Tanpa jendela, perilakunya tidak boleh bergeser sedikit pun."""
+        ps = make_players(12)
+        ps[0].partner_id, ps[1].partner_id = 1, 0
+        sch = build_schedule(ps, self._cfg())
+        for rnd in sch.rounds:
+            mate = self._partner_di(rnd, 0)
+            self.assertIn(mate, (None, 1),
+                          f"ronde {rnd.index}: kunci penuh dilanggar")
+        self.assertNotIn("dikunci hanya di sebagian ronde", " ".join(sch.notes))
 
 
 @unittest.skipUnless(cpsat.tersedia(), "OR-Tools tidak terpasang")

@@ -544,6 +544,119 @@ def main() -> int:
             return "15 ronde -> 5 court-jam, biaya Rp 1.000.000, terkirim"
         check("Court berkurang di tengah acara", court_drop)
 
+        # --- 2b. court BERTAMBAH di tengah acara --------------------------
+        # Arah yang lain dari fitur yang sama, dan yang paling mudah rusak:
+        # kotak "jadi berapa court" dulu dijepit ke jumlah court awal, jadi
+        # mengetik 3 pada setup 1 court diam-diam terkirim sebagai 1 - host
+        # menekan Generate lalu tidak terjadi apa-apa.
+        def court_naik():
+            semula = b.js(
+                "JSON.stringify(['courts','duration','round_min','warmup',"
+                "'court_price'].map(i => document.getElementById(i).value))")
+            b.js("""(() => {
+              const set = (id, v) => { const e = document.getElementById(id);
+                e.value = v; e.dispatchEvent(new Event('input', {bubbles:true})); };
+              set('courts', 1); set('duration', 180); set('warmup', 0);
+              set('round_min', 12); set('court_price', 200000);
+              const c = document.getElementById('courts_drop');
+              c.checked = true;
+              c.dispatchEvent(new Event('input', {bubbles:true}));
+              set('courts_after', 3); set('courts_from_round', 5);
+              return true; })()""")
+            b.wait_for("document.getElementById('courts-drop-hint')"
+                       ".textContent.includes('court-jam')",
+                       timeout=5, label="kalimat court bertambah")
+            hint = b.js("document.getElementById('courts-drop-hint').textContent")
+            # 180 menit / 12 = 15 ronde; naik di ronde 5 berarti 11 ronde
+            # terakhir 3 court, dan sewanya 1x48m + 3x132m = 7,4 court-jam.
+            for perlu in ("Ronde 1-4 pakai 1 court",
+                          "ronde 5-15 pakai 3 court", "11 ronde", "7.4 court-jam"):
+                assert perlu in hint, f"kalimat tanpa '{perlu}': {hint!r}"
+
+            b.wait_for("document.getElementById('setup-econ')"
+                       ".textContent.includes('court bertambah')",
+                       timeout=8, label="kartu biaya court bertambah")
+
+            b.js("document.getElementById('copy-debug').click(); true")
+            b.wait_for("document.getElementById('debug-out').value.length > 50",
+                       timeout=5, label="teks debug")
+            dbg = b.js("document.getElementById('debug-out').value")
+            assert "(jadi 3 dari ronde 5)" in dbg, \
+                f"kotak 'jadi berapa court' masih dijepit ke court awal: {dbg[:160]!r}"
+
+            b.js("""(() => {
+              const c = document.getElementById('courts_drop');
+              c.checked = false;
+              c.dispatchEvent(new Event('input', {bubbles:true}));
+              document.getElementById('debug-out').style.display = 'none';
+              return true; })()""")
+            b.js("(() => { const v = " + semula + ";"
+                 "['courts','duration','round_min','warmup','court_price']"
+                 ".forEach((id, i) => { const e = document.getElementById(id);"
+                 " e.value = v[i];"
+                 " e.dispatchEvent(new Event('input', {bubbles:true})); });"
+                 "return true; })()")
+            return "15 ronde -> 7,4 court-jam, terkirim sebagai 3 dari ronde 5"
+        check("Court bertambah di tengah acara", court_naik)
+
+        # --- 2c. rentang ronde per peserta --------------------------------
+        # Kolomnya disembunyikan sampai diminta, jadi yang diuji dua hal: ia
+        # MUNCUL saat dicentang, dan angkanya benar-benar sampai ke payload.
+        # Rentang yang tersimpan tapi tidak terkirim adalah kegagalan yang
+        # tidak kelihatan di mana pun sampai jadwalnya salah.
+        def rentang_ronde():
+            kolom = ("document.querySelectorAll("
+                     "'#ptable input.rw').length")
+            assert b.js(kolom) == 0, "kolom rentang ronde tampil tanpa dicentang"
+            b.js("""(() => {
+              const c = document.getElementById('round_windows');
+              c.checked = true;
+              c.dispatchEvent(new Event('change', {bubbles:true}));
+              return true; })()""")
+            b.wait_for(kolom + " > 0", timeout=5, label="kolom rentang ronde")
+
+            # Baris pertama: ikut mulai ronde 3. Baris kedua: sampai ronde 5.
+            b.js("""(() => {
+              const isi = (i, f, v) => {
+                const e = document.querySelector(
+                  `#ptable input.rw[data-i="${i}"][data-f="${f}"]`);
+                e.value = v; e.dispatchEvent(new Event('input', {bubbles:true}));
+              };
+              isi(0, 'from_round', 3);
+              isi(1, 'until_round', 5);
+              return true; })()""")
+            b.wait_for("document.getElementById('counts')"
+                       ".textContent.includes('Ikut sebagian')",
+                       timeout=5, label="hitungan ikut sebagian")
+
+            b.js("document.getElementById('copy-debug').click(); true")
+            b.wait_for("document.getElementById('debug-out').value.length > 50",
+                       timeout=5, label="teks debug")
+            dbg = b.js("document.getElementById('debug-out').value")
+            for perlu in ("ikut=3-akhir", "ikut=1-5"):
+                assert perlu in dbg, \
+                    f"info debug tanpa '{perlu}': {dbg[:400]!r}"
+
+            # Dimatikan lagi: angkanya harus IKUT terhapus, bukan cuma
+            # tersembunyi - rentang yang tidak terlihat tapi tetap dikirim
+            # adalah cara tercepat membuat host mengira penjadwalnya rusak.
+            b.js("""(() => {
+              const c = document.getElementById('round_windows');
+              c.checked = false;
+              c.dispatchEvent(new Event('change', {bubbles:true}));
+              document.getElementById('debug-out').style.display = 'none';
+              return true; })()""")
+            assert b.js(kolom) == 0, "kolom rentang ronde tertinggal"
+            b.js("document.getElementById('copy-debug').click(); true")
+            time.sleep(0.4)
+            dbg2 = b.js("document.getElementById('debug-out').value")
+            assert "ikut=" not in dbg2, \
+                f"rentang masih terkirim setelah dimatikan: {dbg2[:400]!r}"
+            b.js("document.getElementById('debug-out').style.display = 'none';"
+                 " true")
+            return "kolom muncul, 2 rentang terkirim, dibersihkan saat dimatikan"
+        check("Rentang ronde per peserta", rentang_ronde)
+
         # --- 3. generate jadwal -------------------------------------------
         def generate():
             b.js("document.getElementById('referees').value='1';"

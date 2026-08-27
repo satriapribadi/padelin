@@ -159,9 +159,29 @@ class Rules:
     round_rule: list[str] = field(default_factory=list)
     # Siapa yang boleh turun di ronde tertentu.
     round_eligible: list[set[int]] = field(default_factory=list)
+    # Siapa yang HADIR di ronde tertentu - murni soal datang & pulang, tanpa
+    # aturan babak. Kosong = semua orang hadir di semua ronde, dan itu keadaan
+    # biasa.
+    #
+    # Dipisah dari round_eligible karena keduanya menjawab pertanyaan yang
+    # berbeda, dan yang membaca perbedaannya adalah daftar istirahat: peserta
+    # putri di babak putra memang "istirahat" - ia ada di venue, cuma tidak
+    # kebagian babak itu - sedangkan peserta yang belum datang tidak sedang
+    # istirahat sama sekali. Menyamakan keduanya membuat namanya tercetak di
+    # kartu ronde dan ikut dijatah tugas wasit.
+    round_present: list[set[int]] = field(default_factory=list)
     # Pemain -> id rekan tetapnya. Boleh sebagian saja: peserta yang minta
     # partner tetap dikunci, sisanya tetap rotasi bebas.
     locked_partner: dict[int, int] = field(default_factory=dict)
+    # Pemain -> rentang ronde (0-based, inklusif) tempat kuncinya berlaku.
+    # Tidak terdaftar = berlaku sepanjang acara, seperti sebelumnya.
+    #
+    # Di luar rentangnya kuncinya TIDAK ditegakkan - bukan dilarang. Pasangan
+    # itu boleh saja bertemu lagi kalau rotasinya memang mengarah ke sana;
+    # yang hilang cuma kewajibannya. Melarangnya berarti menambah aturan yang
+    # tidak diminta host, dan denda partner berulang sudah cukup untuk
+    # memisahkan mereka di ronde-ronde sisanya.
+    locked_window: dict[int, tuple[int, int]] = field(default_factory=dict)
     # Mode tiered: pemain -> nomor pool. Satu court wajib satu pool.
     tier_of: dict[int, int] = field(default_factory=dict)
     # Preferensi lunak per peserta:
@@ -184,6 +204,12 @@ class Rules:
         if r >= len(self.round_eligible):
             return True
         return p in self.round_eligible[r]
+
+    def hadir_at(self, r: int, n: int) -> set[int]:
+        """Peserta yang hadir di ronde r. Tanpa fitur ini, semuanya."""
+        if r >= len(self.round_present):
+            return set(range(n))
+        return self.round_present[r]
 
     def pref_violations(self, quad: list[int]) -> list[tuple[int, str]]:
         """Preferensi mana saja yang dilanggar susunan court ini."""
@@ -219,8 +245,9 @@ class Rules:
 
         Kunci partner berlaku lintas babak, tapi tidak setiap babak sanggup
         menampungnya: pasangan putra-putri mustahil di babak "sesama gender",
-        pasangan sesama gender mustahil di babak "mixed", dan rekan yang tidak
-        turun di babak itu jelas tidak bisa dipasangkan.
+        pasangan sesama gender mustahil di babak "mixed", rekan yang tidak turun
+        di babak itu jelas tidak bisa dipasangkan, dan host boleh membatasi
+        kuncinya ke sebagian ronde saja lewat locked_window.
 
         Kalau kunci ditegakkan buta di babak seperti itu, TIDAK ADA susunan yang
         lolos - orangnya bukan cuma kehilangan partner tetapnya, tapi hilang
@@ -229,6 +256,9 @@ class Rules:
         """
         mate = self.locked_partner.get(p)
         if mate is None:
+            return None
+        jendela = self.locked_window.get(p)
+        if jendela is not None and not (jendela[0] <= r <= jendela[1]):
             return None
         eligible = self.round_eligible[r] if r < len(self.round_eligible) else None
         if eligible is not None and mate not in eligible:

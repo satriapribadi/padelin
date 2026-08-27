@@ -792,7 +792,10 @@ def optimize(st, courts_r: list[int], *,
     st.restore(([[] for _ in range(R)], [set() for _ in range(R)]))
     for r in range(R):
         turun = {p for q in baru[r] for p in q}
-        st.place_round(r, baru[r], sorted(set(range(n)) - turun))
+        # Yang belum datang / sudah pulang bukan "istirahat" - lihat
+        # Rules.round_present. Tanpa fitur kehadiran sebagian, hadir_at()
+        # mengembalikan seluruh peserta dan baris ini persis seperti sebelumnya.
+        st.place_round(r, baru[r], sorted(st.rules.hadir_at(r, n) - turun))
 
     # CP-SAT meminimalkan MODELNYA, dan model itu tidak memuat semua yang dinilai
     # host (repeat_gap dan giliran di luar jangkauannya). Jadi hasilnya wajib

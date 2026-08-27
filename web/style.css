@@ -138,6 +138,20 @@ input[type=date],input[type=time]{color-scheme:dark}
 .ptable td{padding:3px 4px;border-bottom:1px solid #1e2732}
 .ptable input,.ptable select{padding:5px 7px;font-size:12.5px;border-radius:5px}
 .ptable .nm{min-width:100px}
+/* Rentang ronde per peserta: dua kotak angka sempit dengan tanda pisah di
+   tengah. Sengaja sekecil ini - kolomnya duduk di tabel yang sudah punya enam
+   kolom lain, dan kotak selebar isian rating akan memaksa tabel menggulir ke
+   samping di layar 13 inci. Panah spinner dimatikan karena tidak muat. */
+.ptable input.rw{
+  width:40px;padding:5px 4px;text-align:center;
+  font-variant-numeric:tabular-nums;
+}
+.ptable input.rw::-webkit-outer-spin-button,
+.ptable input.rw::-webkit-inner-spin-button{-webkit-appearance:none;margin:0}
+.ptable input.rw[type=number]{-moz-appearance:textfield;appearance:textfield}
+.rw-pair{display:inline-flex;align-items:center;gap:2px}
+.rw-pair i{color:var(--dim);font-style:normal;font-size:11px}
+.rw-off{color:var(--dim)}
 .ptable .x{
   background:transparent;border:0;color:var(--dim);cursor:pointer;
   font-size:16px;padding:0 5px;line-height:1;
@@ -353,6 +367,11 @@ table.data input.rt-edit:focus{border-color:var(--accent);background:var(--bg)}
    duduk di kolom kiri yang lebarnya dibatasi 420px, sementara isinya bisa
    sampai tujuh kolom saat wasit & ballboy menyala. */
 .rk-wrap{overflow-x:auto;margin:0 -2px;padding:0 2px}
+/* Rentang ronde di kolom "Hadir": angkanya yang dibaca, rentangnya keterangan.
+   Ditulis di baris kedua karena kolom rekap sempit - "9" dan "mulai R5"
+   berdampingan memaksa kolom nama menyusut. */
+.rk-wrap .rk-sub{display:block;font-size:9.5px;color:var(--dim);
+  font-variant-numeric:normal;line-height:1.2}
 
 /* Tawaran menyimpan peserta ke master pemain. Tepinya PUTUS-PUTUS karena ia
    satu-satunya kendali di panel ini yang menulis ke master - mengganti nama,
@@ -447,6 +466,9 @@ table.data.tl td.tl-none{color:var(--dim)}
 .tl-c.w{background:var(--warn-dim)}
 .tl-c.b{background:var(--good-dim)}
 .tl-c.r{color:var(--muted);background:var(--panel-2);box-shadow:inset 0 0 0 1px var(--line)}
+/* Sel kosong = peserta belum datang / sudah pulang. Warnanya disamakan dengan
+   table.data.tl td.tl-none supaya legenda dan selnya benar-benar terlihat sama. */
+.tl-c.none{color:var(--dim);background:transparent}
 
 /* Batas matematis pertemuan. Diredupkan seperti .hint - ini konteks yang
    menjawab "kenapa banyak 0", bukan peringatan yang harus dikejar. */
@@ -551,6 +573,10 @@ table.data .pick-col input{cursor:pointer;accent-color:var(--accent)}
 .viz-legend-item{display:inline-flex;align-items:center;gap:6px}
 .viz-swatch{width:11px;height:11px;border-radius:3px;display:inline-block;flex:none}
 .viz-swatch.line{height:2px;width:16px;border-radius:2px}
+/* Ruang kosong di batang (mis. ronde yang peserta tidak hadiri): garis
+   tepi saja. Kotak berwarna surface tidak terlihat di atas panel yang
+   warnanya persis sama. */
+.viz-swatch.empty{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}
 
 .viz-table{max-height:420px;overflow-y:auto}
 

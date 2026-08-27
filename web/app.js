@@ -121,15 +121,44 @@ document.querySelectorAll('.tabs button').forEach((b) => {
 // ---------------------------------------------------------------------------
 // Peserta
 // ---------------------------------------------------------------------------
+/** Apakah ada peserta yang memakai rentang ronde? Dipakai untuk menyalakan
+ *  sakelarnya sendiri saat jadwal lama dibuka dari riwayat - host tidak perlu
+ *  menebak kenapa angka yang tersimpan tidak kelihatan di mana pun. */
+function adaRentangRonde() {
+  return players.some((p) => p.from_round || p.until_round
+    || p.partner_from_round || p.partner_until_round);
+}
+
+/** Dua kotak angka "dari - sampai" untuk satu rentang ronde.
+ *
+ * Kosong berarti tidak dibatasi, dan itulah sebabnya keduanya TIDAK diberi nilai
+ * bawaan: mengisi "1" dan "9" otomatis akan membuat angka itu ikut tersimpan,
+ * lalu berubah arti diam-diam begitu host memperpanjang durasinya.
+ */
+function rentangInput(p, i, awal, akhir, maks) {
+  const kotak = (f, ph) => `<input type="number" class="rw" min="1" max="${maks}" `
+    + `data-f="${f}" data-i="${i}" placeholder="${ph}" `
+    + `value="${p[f] || ''}">`;
+  return `<span class="rw-pair">${kotak(awal, '1')}<i>&ndash;</i>`
+    + `${kotak(akhir, maks || 'akhir')}</span>`;
+}
+
 function renderPlayers() {
   const t = $('ptable');
+  const rw = $('round_windows').checked;
+  const maks = Math.max(1, rondeAcara());
   t.innerHTML = '';
   if (!players.length) {
     t.innerHTML = '<tr><td class="empty">Belum ada peserta.</td></tr>';
   } else {
     const head = el('tr', null,
       '<th>Nama</th><th style="width:64px">Rating</th><th style="width:56px">L/P</th>' +
-      '<th style="width:120px">Partner tetap</th><th style="width:130px">Permintaan</th><th style="width:26px"></th>');
+      (rw ? '<th style="width:104px" title="Ronde pertama sampai ronde terakhir'
+            + ' peserta ini ikut">Ikut ronde</th>' : '') +
+      '<th style="width:120px">Partner tetap</th>' +
+      (rw ? '<th style="width:104px" title="Rentang ronde tempat partner tetap'
+            + ' itu diberlakukan">Partner ronde</th>' : '') +
+      '<th style="width:130px">Permintaan</th><th style="width:26px"></th>');
     t.appendChild(el('thead')).appendChild(head);
     const body = el('tbody');
 
@@ -146,7 +175,13 @@ function renderPlayers() {
             <option value="M" ${p.gender === 'M' ? 'selected' : ''}>L</option>
             <option value="F" ${p.gender === 'F' ? 'selected' : ''}>P</option>
           </select></td>` +
+        (rw ? `<td>${rentangInput(p, i, 'from_round', 'until_round', maks)}</td>` : '') +
         `<td><select data-f="partner_id" data-i="${i}"><option value="">bebas</option>${opts}</select></td>` +
+        // Rentang partner cuma berarti kalau partnernya memang dipilih; baris
+        // tanpa partner diberi garis, bukan kotak kosong yang mengundang diisi.
+        (rw ? `<td>${p.partner_id === null || p.partner_id === undefined
+          ? '<span class="rw-off">&ndash;</span>'
+          : rentangInput(p, i, 'partner_from_round', 'partner_until_round', maks)}</td>` : '') +
         `<td><select data-f="court_preference" data-i="${i}">
             <option value="" ${!p.court_preference ? 'selected' : ''}>bebas</option>
             <option value="women_only" ${p.court_preference === 'women_only' ? 'selected' : ''}>4 perempuan</option>
@@ -160,18 +195,35 @@ function renderPlayers() {
     t.appendChild(body);
   }
 
-  const men = players.filter((p) => p.gender === 'M').length;
-  const women = players.filter((p) => p.gender === 'F').length;
-  const locked = players.filter((p) => p.partner_id !== null).length;
-  $('counts').innerHTML =
-    `<span>Total <b>${players.length}</b></span><span>Putra <b>${men}</b></span>` +
-    `<span>Putri <b>${women}</b></span><span>Partner tetap <b>${locked}</b></span>`;
-
+  renderCounts();
   scheduleAnalyze();
   // Biaya dibagi jumlah peserta, jadi menambah atau menghapus satu orang
   // mengubah seluruh panel biaya - termasuk saran fee per margin.
   scheduleEconomics();
 }
+
+/** Baris hitungan di bawah tabel peserta.
+ *
+ * Dipisah dari renderPlayers() karena isinya ikut berubah saat host MENGETIK di
+ * dalam tabel, dan menggambar ulang seluruh tabel di tiap ketikan akan
+ * merenggut fokus dari kotak yang sedang diisi.
+ */
+function renderCounts() {
+  const men = players.filter((p) => p.gender === 'M').length;
+  const women = players.filter((p) => p.gender === 'F').length;
+  const locked = players.filter((p) => p.partner_id !== null).length;
+  const sebagian = players.filter((p) => p.from_round || p.until_round).length;
+  $('counts').innerHTML =
+    `<span>Total <b>${players.length}</b></span><span>Putra <b>${men}</b></span>` +
+    `<span>Putri <b>${women}</b></span><span>Partner tetap <b>${locked}</b></span>` +
+    (sebagian ? `<span>Ikut sebagian <b>${sebagian}</b></span>` : '');
+}
+
+// Rentang ronde: nomor ronde 1-based, kosong = tidak dibatasi. Disimpan null
+// (bukan 0 atau string kosong) supaya payload yang dikirim ke server punya satu
+// bentuk saja untuk "tidak dibatasi".
+const RENTANG_FIELDS = ['from_round', 'until_round',
+                        'partner_from_round', 'partner_until_round'];
 
 $('ptable').addEventListener('input', (e) => {
   const f = e.target.dataset.f, i = +e.target.dataset.i;
@@ -179,6 +231,26 @@ $('ptable').addEventListener('input', (e) => {
   const p = players[i];
   if (f === 'rating') p.rating = parseFloat(e.target.value) || 0;
   else if (f === 'name') p.name = e.target.value;
+  else if (RENTANG_FIELDS.includes(f)) {
+    const v = parseInt(e.target.value, 10);
+    p[f] = Number.isFinite(v) && v >= 1 ? v : null;
+    // Partner tetap berlaku dua arah, jadi rentangnya juga. Kalau cuma satu
+    // sisi yang diisi, server memakai irisannya - dan host melihat rentang yang
+    // bukan yang ia ketik. Disamakan di sini, di tempat ia mengetiknya.
+    if (f.startsWith('partner_') && p.partner_id !== null
+        && p.partner_id !== undefined) {
+      const mate = players.find((x) => x.id === p.partner_id);
+      if (mate) {
+        mate[f] = p[f];
+        const kotak = document.querySelector(
+          `#ptable input[data-f="${f}"][data-i="${players.indexOf(mate)}"]`);
+        if (kotak) kotak.value = p[f] || '';
+      }
+    }
+    renderCounts();
+    scheduleAnalyze();
+    return;
+  }
   scheduleAnalyze();
 });
 
@@ -204,10 +276,37 @@ $('ptable').addEventListener('change', (e) => {
       }
     }
     p.partner_id = v;
+    if (v === null) {
+      // Rentang partner tanpa partner cuma angka yatim yang ikut tersimpan lalu
+      // hidup lagi saat host memilih orang lain.
+      p.partner_from_round = null;
+      p.partner_until_round = null;
+    } else {
+      const mate = players.find((x) => x.id === v);
+      if (mate) {
+        mate.partner_from_round = p.partner_from_round || null;
+        mate.partner_until_round = p.partner_until_round || null;
+      }
+    }
     renderPlayers();
     return;
   }
   scheduleAnalyze();
+});
+
+/** Nyalakan / matikan kolom rentang ronde. Dimatikan = angkanya dibuang, bukan
+ *  disembunyikan: rentang yang tidak terlihat tapi tetap dikirim ke server
+ *  adalah cara tercepat membuat host mengira penjadwalnya rusak. */
+function setRentangRonde(on, hapus) {
+  $('round_windows').checked = on;
+  if (!on && hapus) {
+    players.forEach((p) => RENTANG_FIELDS.forEach((f) => { p[f] = null; }));
+  }
+  renderPlayers();
+}
+
+$('round_windows').addEventListener('change', (e) => {
+  setRentangRonde(e.target.checked, true);
 });
 
 $('ptable').addEventListener('click', (e) => {
@@ -467,6 +566,21 @@ function rondeMuat() {
 }
 
 /**
+ * Berapa ronde acara ini sebenarnya.
+ *
+ * Babak yang diisi host MENGGANTI hitungan durasi - itu aturan yang sama yang
+ * dipakai penjadwal (_resolve_segments). Tiap nomor ronde yang diketik host
+ * (court berubah mulai ronde berapa, peserta ikut dari ronde berapa) harus
+ * diukur terhadap angka ini, bukan terhadap hitungan durasi yang sudah tidak
+ * berlaku - kalau tidak, host mengetik "ronde 11" pada acara yang cuma 8 ronde
+ * dan yang ia lihat adalah setup yang seolah tidak berpengaruh apa-apa.
+ */
+function rondeAcara() {
+  const seg = getSegments().reduce((t, s) => t + s.rounds, 0);
+  return seg > 0 ? seg : rondeMuat();
+}
+
+/**
  * Court yang dilepas di tengah acara, dalam bentuk yang dikirim ke server.
  *
  * Dikirim null-null kalau tidak dipakai, BUKAN dihilangkan dari payload: acara
@@ -481,14 +595,24 @@ function courtDropPayload() {
   if (!$('courts_drop').checked) {
     return { courts_after: null, courts_from_round: null };
   }
-  const ronde = rondeMuat();
+  const ronde = rondeAcara();
   const mulai = Math.min(Math.max(2, +$('courts_from_round').value || 2),
                          Math.max(2, ronde));
   return {
-    courts_after: Math.min(Math.max(1, +$('courts_after').value || 1),
-                           +$('courts').value || 1),
+    // TIDAK dijepit ke jumlah court awal: sejak jumlah court boleh BERTAMBAH di
+    // tengah acara, "jadi 3 court" pada setup yang mulai dengan 1 court adalah
+    // masukan yang sah - dan menjepitnya diam-diam ke 1 berarti host menekan
+    // Generate lalu tidak terjadi apa-apa.
+    courts_after: Math.min(Math.max(1, +$('courts_after').value || 1), 12),
     courts_from_round: mulai,
   };
+}
+
+/** Nomor ronde yang dikirim ke server: 1..jumlah ronde, atau null. */
+function jepitRonde(v) {
+  const n = parseInt(v, 10);
+  if (!Number.isFinite(n) || n < 1) return null;
+  return Math.min(n, Math.max(1, rondeAcara()));
 }
 
 function buildPayload(tambahan) {
@@ -529,6 +653,17 @@ function _buildPayload() {
     players: players.map((p) => ({
       id: p.id, name: p.name, rating: p.rating, gender: p.gender,
       partner_id: p.partner_id, court_preference: p.court_preference,
+      // Selalu dikirim, termasuk saat null: acara tersimpan yang dulu punya
+      // rentang lalu dikosongkan host harus ikut terhapus saat disimpan ulang,
+      // dan field yang hilang tidak menghapus apa pun. Dijepit ke jumlah ronde
+      // yang benar-benar ada, alasannya sama seperti di courtDropPayload: host
+      // yang memperpendek durasi setelah mengetik "ikut dari ronde 11" akan
+      // mengirim peserta yang tidak pernah hadir, dan jadwalnya ditolak dengan
+      // pesan yang menuduh jumlah peserta.
+      from_round: jepitRonde(p.from_round),
+      until_round: jepitRonde(p.until_round),
+      partner_from_round: jepitRonde(p.partner_from_round),
+      partner_until_round: jepitRonde(p.partner_until_round),
     })),
     economics: {
       court_price_per_hour: +$('court_price').value,
@@ -576,7 +711,9 @@ function renderSetupEconomics(report) {
     const menit = +$('duration').value || 0;
     const awal = Math.min(menit, menitAwal);
     courtHours = (courts * awal + drop.courts_after * (menit - awal)) / 60;
-    hoursLabel = `${(+courtHours.toFixed(2))} court-jam, court berkurang`;
+    hoursLabel = `${(+courtHours.toFixed(2))} court-jam, court `
+      + (drop.courts_after > courts ? 'bertambah' : 'berkurang')
+      + ` di ronde ${drop.courts_from_round}`;
   }
   const cost = courtHours * price + other;
   const revenue = n * fee;
@@ -683,7 +820,7 @@ async function runAnalyze() {
 
 ['courts', 'duration', 'round_min', 'warmup', 'mode', 'tier_count', 'referees',
  'ballboys', 'court_price', 'fee', 'other_costs',
- 'courts_after', 'courts_from_round']
+ 'courts_after', 'courts_from_round', 'courts_drop']
   .forEach((id) => $(id).addEventListener('input', scheduleAnalyze));
 
 // Jumlah ronde berubah begitu durasi atau menit per ronde diubah, dan bersama
@@ -813,37 +950,51 @@ function renderCourtDrop() {
   const box = $('courts-drop-hint');
   if (!on) { box.textContent = ''; return; }
 
-  const ronde = rondeMuat();
+  const ronde = rondeAcara();
   const p = courtDropPayload();
   const courts = +$('courts').value || 1;
   const per = +$('round_min').value || 0;
   const n = players.length;
 
   if (ronde < 2) {
-    box.textContent = 'Jam sewa ini cuma memuat ' + ronde
-      + ' ronde - belum ada ronde kedua untuk mengurangi court.';
+    box.textContent = 'Acara ini cuma memuat ' + ronde
+      + ' ronde - belum ada ronde kedua untuk mengubah jumlah court.';
     return;
   }
+  if (p.courts_after === courts) {
+    box.textContent = `Jumlahnya sama dengan court awal (${courts}), jadi tidak `
+      + 'ada yang berubah. Isi angka yang berbeda, atau matikan centangnya.';
+    return;
+  }
+  const naik = p.courts_after > courts;
   const sisaRonde = ronde - p.courts_from_round + 1;
   const menitAwal = (+$('warmup').value || 0) + (p.courts_from_round - 1) * per;
+  const menit = +$('duration').value || 0;
   const jam = (courts * menitAwal
-    + p.courts_after * Math.max(0, (+$('duration').value || 0) - menitAwal)) / 60;
-  const hemat = (courts * ((+$('duration').value || 0) / 60) - jam)
-    * (+$('court_price').value || 0);
+    + p.courts_after * Math.max(0, menit - menitAwal)) / 60;
+  // Selisih terhadap menyewa court terbanyak sepanjang acara. Untuk court yang
+  // berkurang itu penghematan; untuk court yang bertambah itu tetap
+  // penghematan - dibanding menyewa court kedua sejak ronde pertama.
+  const puncak = Math.max(courts, p.courts_after);
+  const hemat = (puncak * (menit / 60) - jam) * (+$('court_price').value || 0);
 
   const bit = [
     `Ronde 1-${p.courts_from_round - 1} pakai ${courts} court, `
       + `ronde ${p.courts_from_round}-${ronde} pakai ${p.courts_after} court `
       + `(${sisaRonde} ronde).`,
     `Sewa jadi ${(+jam.toFixed(2))} court-jam`
-      + (hemat > 0 ? `, hemat ${rp(hemat)}.` : '.'),
+      + (hemat > 0
+        ? `, hemat ${rp(hemat)} dibanding ${puncak} court sepanjang acara.`
+        : '.'),
   ];
   if (n >= 4) {
     const slot = 4 * (Math.min(courts, Math.floor(n / 4))
       * (p.courts_from_round - 1)
       + Math.min(p.courts_after, Math.floor(n / 4)) * sisaRonde);
     bit.push(`Slot main ${slot} untuk ${n} peserta `
-      + `= rata-rata ${(slot / n).toFixed(1)} ronde main per orang.`);
+      + `= rata-rata ${(slot / n).toFixed(1)} ronde main per orang`
+      + (naik ? ' - court tambahan menaikkannya, tapi hanya untuk ronde sisanya.'
+              : '.'));
   }
   box.textContent = bit.join('\n');
 }
@@ -1073,6 +1224,11 @@ function renderSchedule() {
   const st = schedule.stats;
   const plays = Object.values(st.plays_per_player);
   const showGender = schedule.players.some((p) => p.gender);
+  // Peserta yang tidak ikut sepanjang acara. Kolom "Hadir" di rekap hanya
+  // muncul kalau memang ada - kolom yang isinya sama untuk semua orang cuma
+  // memakan lebar panel tanpa menjawab apa pun.
+  const totalRonde = schedule.rounds.length;
+  const adaSebagian = schedule.players.some((p) => kehadiranLabel(p, totalRonde));
 
   const grid = el('div', 'stat-grid');
   const tile = statTile;
@@ -1133,6 +1289,8 @@ function renderSchedule() {
     + '<div class="rk-wrap"><table class="data"><thead><tr><th>Nama</th>'
     + (showGender ? '<th class="num">L/P</th>' : '')
     + '<th class="num">Rating</th>'
+    + (adaSebagian ? '<th class="num" title="Berapa ronde peserta ini ikut">'
+                     + 'Hadir</th>' : '')
     + '<th class="num">Main</th>'
     // W dan B, bukan "Wasit" dan "Ballboy": kartu rekap duduk di kolom selebar
     // 420px, dan dua kata itu sendiri memakan 118px - cukup untuk memaksa
@@ -1145,9 +1303,19 @@ function renderSchedule() {
   schedule.players.slice().sort((a, b) => a.name.localeCompare(b.name)).forEach((p) => {
     const roles = st.roles_per_player[p.id] || {};
     const idle = (st.byes_per_player[p.id] || 0) - (roles.total || 0);
+    const rentang = kehadiranLabel(p, totalRonde);
     html += `<tr><td>${namaEditor(p)}</td>`
       + (showGender ? `<td class="num">${genderEditor(p)}</td>` : '')
       + `<td class="num">${ratingEditor(p)}</td>`
+      // Berapa ronde ia ikut, bukan cuma rentangnya: kolom inilah yang membuat
+      // baris tetap bisa dijumlah - main + tugas + istirahat = hadir, bukan
+      // = jumlah ronde acara.
+      + (adaSebagian
+        ? `<td class="num" title="${esc(rentang || 'ikut sepanjang acara')}">`
+          + `${rondeIkut(p, totalRonde)}`
+          + (rentang ? `<span class="rk-sub">${esc(rentang)}</span>` : '')
+          + '</td>'
+        : '')
       + `<td class="num">${st.plays_per_player[p.id] || 0}</td>`
       + (showRoles ? `<td class="num">${roles.wasit || 0}</td>`
                      + `<td class="num">${roles.ballboy || 0}</td>` : '')
@@ -2274,6 +2442,25 @@ function gname(id) {
  * Hurufnya selalu tercetak di dalam sel. Warna cuma mempercepat pemindaian;
  * baris tetap terbaca penuh tanpanya.
  */
+/** Rentang kehadiran satu peserta, dalam kata yang sama dengan laporan cetak.
+ *  Kosong berarti ia ikut sepanjang acara. */
+function kehadiranLabel(p, totalRonde) {
+  const dari = p.from_round && p.from_round > 1 ? p.from_round : null;
+  let sampai = p.until_round || null;
+  if (sampai && totalRonde && sampai >= totalRonde) sampai = null;
+  if (!dari && !sampai) return '';
+  if (!dari) return `sampai R${sampai}`;
+  if (!sampai) return `mulai R${dari}`;
+  return `R${dari}-R${sampai}`;
+}
+
+/** Berapa ronde peserta ini benar-benar ikut. */
+function rondeIkut(p, totalRonde) {
+  const dari = Math.max(1, p.from_round || 1);
+  const sampai = Math.min(totalRonde, p.until_round || totalRonde);
+  return Math.max(0, sampai - dari + 1);
+}
+
 function roleTimeline(schedule, showRoles) {
   const rounds = schedule.rounds || [];
   if (!rounds.length) return '';
@@ -2298,12 +2485,17 @@ function roleTimeline(schedule, showRoles) {
 
   const kunci = [['m', 'Main'], ['r', 'Istirahat']];
   if (showRoles) kunci.splice(1, 0, ['w', 'Wasit'], ['b', 'Ballboy']);
+  // Sel titik selalu ada, tapi artinya baru perlu dijelaskan begitu ada peserta
+  // yang tidak ikut sepanjang acara - sebelum itu ia memang tidak pernah muncul.
+  const adaSebagian = (schedule.players || []).some(
+    (p) => kehadiranLabel(p, rounds.length));
+  if (adaSebagian) kunci.push(['none', 'Belum / tidak hadir']);
   let out = `<h3 class="tl-h">Susunan per ronde `
     + `<span class="hint">ronde 1 &rarr; ${rounds.length}, kiri ke kanan</span></h3>`
     + '<div class="mx-legend">'
     + kunci.map(([k, t]) =>
-      `<span class="mx-legend-item"><span class="tl-c ${k}">${LABEL[k]}</span>`
-      + `${t}</span>`).join('')
+      `<span class="mx-legend-item"><span class="tl-c ${k}">`
+      + `${LABEL[k] || '&middot;'}</span>${t}</span>`).join('')
     + '</div><div class="mx-wrap"><table class="data mx tl"><thead><tr>'
     + '<th class="mx-corner mx-row">Nama</th>'
     + rounds.map((r) => `<th class="num">${r.index}</th>`).join('')
@@ -2516,7 +2708,18 @@ function debugSnapshot() {
   ];
   players.forEach((p) => {
     const bits = [alias.get(p.id), `rating=${p.rating}`, `g=${p.gender || '-'}`];
-    if (p.partner_id !== null) bits.push(`partner=${alias.get(p.partner_id)}`);
+    if (p.partner_id !== null) {
+      bits.push(`partner=${alias.get(p.partner_id)}`
+        + (p.partner_from_round || p.partner_until_round
+          ? `[${p.partner_from_round || 1}-${p.partner_until_round || 'akhir'}]`
+          : ''));
+    }
+    // Rentang kehadiran mengubah seluruh bentuk jadwal, jadi ia wajib ada di
+    // info debug - tanpanya laporan "kenapa si A cuma main 3 ronde" tidak bisa
+    // dijawab tanpa menebak.
+    if (p.from_round || p.until_round) {
+      bits.push(`ikut=${p.from_round || 1}-${p.until_round || 'akhir'}`);
+    }
     if (p.court_preference) bits.push(`minta=${p.court_preference}`);
     lines.push('  ' + bits.join(' '));
   });
@@ -2692,6 +2895,11 @@ function schedulingStamp() {
     pakaiSolver(p.mode) ? p.cpsat_seconds : null,
     pakaiSolver(p.mode) ? p.cpsat_deterministic : null,
     p.segments, p.interleave_segments, p.players, p.allowed_matchups,
+    // Jumlah court yang berubah di tengah acara ikut: ia mengubah berapa match
+    // yang berjalan di tiap ronde, jadi jadwal yang di layar benar-benar basi
+    // begitu angkanya diganti. Rentang ronde per peserta tidak perlu disebut
+    // sendiri - ia ikut di dalam p.players.
+    p.courts_after, p.courts_from_round,
   ]);
 }
 
@@ -2886,6 +3094,10 @@ function applyRequest(req) {
   courtNames = (req.court_names || []).slice();
   players = (req.players || []).map((p) => ({ ...p }));
   nextId = players.reduce((m, p) => Math.max(m, p.id + 1), 0);
+  // Kolomnya dinyalakan sendiri kalau acara ini memang memakainya - angka yang
+  // tersimpan tapi tidak terlihat di mana pun adalah cara tercepat membuat host
+  // mengira jadwalnya disusun dari setup yang lain.
+  $('round_windows').checked = adaRentangRonde();
   if (req.economics) {
     $('court_price').value = req.economics.court_price_per_hour || 0;
     $('fee').value = req.economics.fee_per_player || 0;

@@ -837,6 +837,9 @@ def analyze(
     roster_men: int | None = None,
     roster_women: int | None = None,
     matches_per_round: list[int] | None = None,
+    # Berapa peserta yang HADIR di tiap ronde. Hanya berarti kalau ada yang
+    # datang telat / pulang cepat; None = semuanya hadir sepanjang acara.
+    players_per_round: list[int] | None = None,
     # Aturan babak yang berjalan di tiap ronde, dan court yang disewa di tiap
     # ronde. Keduanya opsional dan hanya berarti berpasangan: tanpa ini,
     # perbandingan court jatuh ke tingkat babak, yang benar selama jumlah
@@ -962,7 +965,16 @@ def analyze(
     # tersedia. Dua-duanya berujung di angka yang sama, jadi yang dipakai yang
     # terbesar - host memutuskan sewa court dari ujung yang paling ramai.
     if matches_per_round:
-        duduk_plan = [max(0, n_players - 4 * m) for m in matches_per_round]
+        # Yang duduk = yang HADIR dikurangi yang turun. Memakai seluruh roster
+        # di sini akan menghitung peserta yang belum datang sebagai orang yang
+        # sedang duduk - dan angka itulah yang dipakai host untuk memutuskan
+        # apakah court-nya perlu ditambah.
+        hadir_r = (players_per_round
+                   if players_per_round
+                   and len(players_per_round) == len(matches_per_round)
+                   else [n_players] * len(matches_per_round))
+        duduk_plan = [max(0, h - 4 * m)
+                      for h, m in zip(hadir_r, matches_per_round)]
         if max(duduk_plan) > min(duduk_plan):
             byes_per_round = min(duduk_plan)
             rest_ratio = (byes_per_round / n_players) if n_players else 0.0

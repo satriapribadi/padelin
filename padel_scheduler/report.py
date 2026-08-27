@@ -217,16 +217,28 @@ def to_text(schedule: Schedule, start_clock: str | None = None,
     # Court yang benar-benar dipakai tiap ronde. Teks ini yang ditempel ke grup
     # peserta, jadi "2 court" untuk acara yang ronde belakangnya cuma satu court
     # akan langsung dibantah oleh daftar ronde di bawahnya.
+    # Berlaku dua arah: court boleh berkurang di tengah acara (sewa yang tidak
+    # sama panjang) maupun bertambah (court sebelah baru kosong jam berikutnya).
+    #
+    # Titik pergantiannya dibaca dari SETUP, bukan ditebak dari jumlah match per
+    # ronde. Sejak peserta boleh datang telat, jumlah match bisa berubah tanpa
+    # court-nya berubah sama sekali - dan kalimat "jadi 1 court dari ronde 5"
+    # untuk acara yang court-nya tidak pernah dikurangi adalah kesalahan yang
+    # dibantah langsung oleh tagihan venue. Angkanya tetap dari match yang
+    # BENAR-BENAR berjalan: 10 peserta di 4 court cuma mengisi 2.
     court_ronde = [len(r.matches) for r in schedule.rounds]
     court_txt = f"{cfg.courts} court"
-    if court_ronde and len(set(court_ronde)) > 1:
-        turun = next((i for i in range(1, len(court_ronde))
-                      if court_ronde[i] < court_ronde[i - 1]), None)
-        court_txt = (
-            f"{max(court_ronde)} court (jadi {min(court_ronde)} dari ronde "
-            f"{turun + 1})" if turun is not None
-            and all(b <= a for a, b in zip(court_ronde, court_ronde[1:]))
-            else f"{min(court_ronde)}-{max(court_ronde)} court")
+    if court_ronde:
+        ubah = cfg.courts_from_round if cfg.courts_after is not None else None
+        if ubah is not None and 1 < ubah <= len(court_ronde):
+            sebelum = max(court_ronde[:ubah - 1])
+            sesudah = max(court_ronde[ubah - 1:])
+            court_txt = (f"{sebelum} court (jadi {sesudah} dari ronde {ubah})"
+                         if sebelum != sesudah else f"{sebelum} court")
+        elif len(set(court_ronde)) > 1:
+            court_txt = f"{min(court_ronde)}-{max(court_ronde)} court"
+        else:
+            court_txt = f"{court_ronde[0]} court"
     out.append(
         f"{len(schedule.players)} pemain | {court_txt} | "
         f"{cfg.duration_minutes} menit | {len(schedule.rounds)} ronde "
@@ -235,6 +247,15 @@ def to_text(schedule: Schedule, start_clock: str | None = None,
     if cfg.segments and any(s.label for s in cfg.segments):
         fmt = " + ".join(f"{s.label} {s.rounds}" for s in cfg.segments if s.rounds)
         out.append(f"Format: {fmt}")
+    # Peserta yang tidak ikut sepanjang acara. Teks inilah yang ditempel ke grup,
+    # jadi di sinilah yang bersangkutan mengecek jam datangnya sendiri - dan di
+    # sini pula peserta lain melihat kenapa ada nama yang hilang di ronde awal.
+    total_ronde = len(schedule.rounds)
+    sebagian = [p for p in sorted(schedule.players, key=lambda x: x.name.lower())
+                if p.kehadiran_label(total_ronde)]
+    if sebagian:
+        out.append("Ikut sebagian: " + ", ".join(
+            f"{p.name} ({p.kehadiran_label(total_ronde)})" for p in sebagian))
     out.append("")
 
     current_segment = None
@@ -314,8 +335,15 @@ def to_personal_text(schedule: Schedule, start_clock: str | None = None) -> str:
     cfg = schedule.config
     lines: list[str] = ["*JADWAL PER PEMAIN*", ""]
 
+    total_ronde = len(schedule.rounds)
     for p in sorted(schedule.players, key=lambda x: x.name.lower()):
         lines.append(f"*{p.name}*")
+        # Rentang kehadirannya disebut lebih dulu. Tanpa itu daftar di bawahnya
+        # cuma "hilang" di ronde-ronde awal, dan yang membacanya tidak bisa
+        # membedakan "belum datang" dari "tidak kebagian main".
+        rentang = p.kehadiran_label(total_ronde)
+        if rentang:
+            lines.append(f"  (ikut {rentang} dari {total_ronde} ronde)")
         for rnd in schedule.rounds:
             when = _clock(rnd.start_min, start_clock)
             found = False

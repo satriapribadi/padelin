@@ -159,8 +159,12 @@ function legend(entries, shape = 'rect') {
     const item = document.createElement('span');
     item.className = 'viz-legend-item';
     const sw = document.createElement('span');
-    sw.className = 'viz-swatch ' + (shape === 'line' ? 'line' : '');
-    sw.style.background = e.color;
+    // `empty` = bukan segmen berwarna melainkan ruang kosong di batang. Kotaknya
+    // digambar sebagai garis tepi saja; kotak berwarna surface tidak terlihat
+    // sama sekali di atas panel yang warnanya persis sama.
+    sw.className = 'viz-swatch ' + (shape === 'line' ? 'line ' : '')
+      + (e.empty ? 'empty' : '');
+    if (!e.empty) sw.style.background = e.color;
     const lab = document.createElement('span');
     lab.textContent = e.label;
     item.append(sw, lab);
@@ -393,7 +397,17 @@ export function engagementChart(players, stats, totalRounds, width = 640) {
     const roles = stats.roles_per_player[p.id] || {};
     const play = stats.plays_per_player[p.id] || 0;
     const duty = roles.total || 0;
-    return { name: p.name, play, duty, idle: Math.max(0, totalRounds - play - duty) };
+    // Istirahat dihitung dari daftar bye, bukan dari (totalRonde - main - tugas).
+    // Peserta yang datang telat atau pulang duluan tidak sedang istirahat di
+    // ronde yang belum ia ikuti, dan rumus lama menghitungnya begitu - batangnya
+    // lalu penuh sampai ujung untuk orang yang belum sampai venue.
+    const idle = Math.max(0, (stats.byes_per_player
+      ? (stats.byes_per_player[p.id] || 0) : (totalRounds - play)) - duty);
+    // Sisanya = ronde yang ia tidak hadiri. Sengaja tidak diberi warna seri
+    // sendiri: batangnya berakhir lebih awal, dan ruang kosong sampai ujung
+    // itulah yang membedakannya dari "istirahat".
+    const absent = Math.max(0, totalRounds - play - duty - idle);
+    return { name: p.name, play, duty, idle, absent };
   }).sort((a, b) => b.play - a.play || a.name.localeCompare(b.name));
 
   const barH = Math.min(BAR_MAX, Math.max(9, Math.floor(300 / rows.length)));
@@ -444,6 +458,8 @@ export function engagementChart(players, stats, totalRounds, width = 640) {
         { key: VIZ.s1, value: String(r.play), label: 'ronde main' },
         ...(showDuty ? [{ key: VIZ.s2, value: String(r.duty), label: 'ronde bertugas' }] : []),
         { key: VIZ.neutral, value: String(r.idle), label: 'ronde istirahat' },
+        ...(r.absent ? [{ key: VIZ.dim, value: String(r.absent),
+                          label: 'ronde tidak hadir' }] : []),
       ]);
       svg.appendChild(hit);
       x += raw;
@@ -464,13 +480,20 @@ export function engagementChart(players, stats, totalRounds, width = 640) {
   plot.className = 'viz-plot scroll';
   plot.appendChild(svg);
 
+  const showAbsent = rows.some((r) => r.absent > 0);
   const entries = [{ color: VIZ.s1, label: 'Main' }];
   if (showDuty) entries.push({ color: VIZ.s2, label: 'Bertugas' });
   entries.push({ color: VIZ.neutral, label: 'Istirahat' });
+  // Ruang kosong sampai ujung batang. Warnanya surface, jadi kotak legendanya
+  // memang terlihat kosong - dan itu persis yang harus dikenali mata.
+  if (showAbsent) entries.push({ color: VIZ.surface, label: 'Tidak hadir',
+                                empty: true });
 
   const table = dataTable(
-    ['Nama', 'Main', 'Bertugas', 'Istirahat'],
-    rows.map((r) => [r.name, r.play, r.duty, r.idle])
+    ['Nama', 'Main', 'Bertugas', 'Istirahat'].concat(
+      showAbsent ? ['Tidak hadir'] : []),
+    rows.map((r) => [r.name, r.play, r.duty, r.idle].concat(
+      showAbsent ? [r.absent] : []))
   );
 
   return figure(`Komposisi ${totalRounds} ronde per peserta`, plot,

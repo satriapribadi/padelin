@@ -346,10 +346,15 @@ mengulang masalah yang mau diperbaiki. Sarannya diam sendiri kalau setupnya
 sudah rata, kalau tidak ada yang duduk, atau kalau acaranya bersegmen (kolam
 pesertanya pecah, jadi rumus di atas tidak berlaku).
 
-**Court berkurang di tengah acara**
-Untuk sewa yang tidak sama panjang: 2 court dua jam, lalu 1 court sejam lagi.
-Centang di *Setup lapangan*, isi sisa court dan mulai ronde berapa — dan yang
-ikut menyesuaikan bukan cuma jadwalnya:
+**Jumlah court berubah di tengah acara**
+Untuk sewa yang tidak sama panjang, dan berlaku dua arah:
+
+- **berkurang** — 2 court dua jam, lalu 1 court sejam lagi;
+- **bertambah** — mulai dengan 1 court, court sebelah baru kosong jam
+  berikutnya, jadi disewa menyusul untuk sisa acara.
+
+Centang di *Setup lapangan*, isi jadi berapa court dan mulai ronde berapa — dan
+yang ikut menyesuaikan bukan cuma jadwalnya:
 
 - **jatah main tetap rata.** Ronde 1 court hanya butuh separuh pasangan, jadi
   rencana slot gender ikut dihitung ulang. Ini bukan detail: dengan format match
@@ -368,8 +373,67 @@ ikut menyesuaikan bukan cuma jadwalnya:
   menghitungnya, sehingga skor kualitas tidak menghukum jadwal untuk sesuatu
   yang tidak bisa ia perbaiki
 
-Pola yang lebih rumit daripada satu kali pengurangan (mis. `2x8, 1x4, 2x3`)
+Angka yang disimpan sama untuk dua-duanya (`courts_after` +
+`courts_from_round`); yang membedakan cuma tanda selisihnya. Untuk court yang
+BERTAMBAH, `Config.courts` berhenti berarti "court terbanyak" — yang butuh atap
+(penomoran court, analisa kapasitas, ladder biaya) memakai `Config.peak_courts`.
+
+Pola yang lebih rumit daripada satu kali pergantian (mis. `2x8, 1x4, 2x3`)
 belum ada di UI; pakai `tools/laporan_court_turun.py`.
+
+**Peserta yang tidak ikut sepanjang acara**
+Datang telat atau pulang duluan. Centang *Atur rentang ronde per peserta* di
+kartu Peserta, lalu isi kolom **Ikut ronde** (dari–sampai) di baris orangnya.
+Kosong = ikut sepanjang acara, dan itu tetap bawaannya.
+
+Disimpan per PESERTA, bukan sebagai aturan seperti court yang berubah, karena
+yang berubah bukan sekadar jumlahnya: penjadwal harus tahu SIAPA yang belum
+datang. "Ronde 5 diisi 12 orang" tidak bisa dijadwalkan; "Rina baru ikut dari
+ronde 5" bisa. Yang ikut menyesuaikan:
+
+- **kelayakan per ronde.** Rentang kehadiran dipotongkan ke `round_eligible`
+  yang sudah dipakai aturan babak, jadi seluruh mesin yang menghormati babak —
+  annealing, solver eksak, perataan giliran, denda duduk-beruntun — ikut
+  menghormatinya tanpa jalur kedua
+- **yang belum datang bukan "istirahat".** Ia tidak masuk daftar bye, jadi tidak
+  jadi kolam wasit/ballboy, tidak kena denda duduk-beruntun, dan tidak tercetak
+  di kartu ronde sebagai orang yang sedang duduk
+- **rekapnya tetap bisa dijumlah.** Kolom **Hadir** muncul di rekap pemain dan
+  laporan cetak begitu ada yang ikut sebagian: main + wasit + ballboy +
+  istirahat = *hadir*, bukan = jumlah ronde acara
+- **baris rotasi disambung ulang, bukan dibuang.** Pasangan calon dibentuk
+  sekali per segmen dari seluruh peserta segmen itu; begitu satu anggotanya
+  belum datang, membuang pasangannya berarti membuang anggota yang HADIR juga.
+  Yang ditinggalkan dipasangkan ulang per ronde, tetap menghormati aturan babak
+  dan pool rating (`_pasangkan_sisa`)
+- **analisa & biaya ikut.** `matches_per_round` dihitung dari yang terkecil
+  antara court yang disewa dan orang yang hadir, jadi panel tidak menjanjikan
+  ronde main yang tidak akan terjadi. Fee TIDAK diprorata — yang ikut sebagian
+  tetap membayar penuh, dan itu keputusan host, bukan aplikasi
+- **ronde yang kurang dari 4 orang ditolak di depan**, dengan menyebut ronde
+  mana — bukan meledak di tengah konstruksi dengan pesan yang menuduh pool
+  rating
+
+**Partner tetap untuk sebagian ronde saja**
+Kunci partner dulu berlaku sepanjang acara atau tidak sama sekali. Sekarang
+rentangnya bisa dibatasi: kolom **Partner ronde** di baris yang sama. Berguna
+untuk babak mixed di awal acara ("pasangan turnamen") yang setelah itu ingin
+dirotasi bebas supaya semua orang tetap ketemu semua.
+
+Di luar rentangnya kuncinya TIDAK ditegakkan — bukan dilarang. Pasangan itu
+boleh bertemu lagi kalau rotasinya memang mengarah ke sana; yang hilang cuma
+kewajibannya, dan denda partner berulang sudah cukup untuk memisahkan mereka.
+
+Dua hal yang diurus supaya angkanya tetap jujur:
+
+- pengulangan yang **diperintahkan** host (ronde di dalam jendela) masuk ke
+  batas bawah teoretis, bukan ke denda — jadwal tidak punya cara menghindarinya;
+- pengulangan **di luar** jendela tetap dihitung sebagai rotasi yang meleset.
+  Pasangan terkunci penuh tetap dikeluarkan seluruhnya seperti sebelumnya.
+
+Rentangnya otomatis disamakan untuk kedua orang saat diketik; kalau payload dari
+skrip mengirimnya berbeda, yang dipakai irisannya — ronde yang cuma diminta
+sebelah pihak bukan kesepakatan.
 
 **Wasit & ballboy**
 Diambil dari yang sedang istirahat dan dirotasi adil - rata per peran, bukan
