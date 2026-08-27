@@ -138,14 +138,24 @@ h2{font-size:10px; text-transform:uppercase; letter-spacing:.09em;
    (1fr) melar sampai kedua nama terlempar ke tepi kiri dan kanan dengan "vs"
    terdampar di tengah, dan pembacanya harus menyeberangi ruang kosong untuk
    satu pertandingan. */
-.rounds{display:grid; gap:7px; align-items:start}
+/* align-items:stretch (bukan start): dua card yang bersebelahan dipaksa
+   setinggi yang tertinggi, jadi garis bawahnya sejajar walau isinya berbeda -
+   satu nama yang membungkus dua baris, atau daftar istirahat yang lebih
+   panjang, dulu membuat card kiri berhenti belasan piksel lebih tinggi dari
+   card kanan dan seluruh grid terlihat miring. */
+.rounds{display:grid; gap:7px; align-items:stretch}
 .rounds.cols-1{grid-template-columns:1fr}
 .rounds.cols-2{grid-template-columns:repeat(2,1fr)}
 .rounds.cols-3{grid-template-columns:repeat(3,1fr)}
 .rounds .segbar{grid-column:1 / -1; margin:10px 0 3px}
 
+/* Flex kolom supaya ruang sisa dari peregangan di atas punya tempat yang
+   ditentukan: baris match tetap rapat di atas, dan bar istirahat turun ke
+   dasar card (margin-top:auto di .resting) - bukan menggantung di tengah
+   dengan celah kosong di bawahnya. */
 .round{border:1px solid var(--line); border-radius:7px;
-  overflow:hidden; break-inside:avoid; page-break-inside:avoid}
+  overflow:hidden; break-inside:avoid; page-break-inside:avoid;
+  display:flex; flex-direction:column}
 .round-head{background:var(--band); padding:3px 9px; display:flex;
   justify-content:space-between; align-items:baseline; gap:8px;
   border-bottom:1px solid var(--line)}
@@ -189,8 +199,8 @@ table{width:100%; border-collapse:collapse}
 .pool{display:inline-block; background:var(--accent-soft); color:var(--accent);
   border-radius:4px; padding:0 5px; font-size:9px; font-weight:600;
   margin-left:5px}
-.resting{padding:3px 9px; background:#fafbfc; color:var(--muted);
-  font-size:9.5px; border-top:1px solid #f0f2f5}
+.resting{margin-top:auto; padding:3px 9px; background:#fafbfc;
+  color:var(--muted); font-size:9.5px; border-top:1px solid #f0f2f5}
 
 /* Nama diwarnai per gender supaya komposisi tiap court kebaca sekali lihat -
    court isi 4 perempuan, tim campur, dan seterusnya - tanpa harus mencocokkan
@@ -325,7 +335,12 @@ table{width:100%; border-collapse:collapse}
 .toolbar button:hover{opacity:.9}
 
 @media print{
-  body{padding:0; font-size:10px}
+  /* 2px kiri-kanan, bukan 0: dengan padding 0 tepi kanan kolom kedua jatuh
+     PERSIS di batas kotak halaman (186mm = 702,99px, dibulatkan ke bawah jadi
+     702), dan Chromium memangkas garis 1px terakhir - card kanan tercetak tanpa
+     border kanan sementara card kiri utuh. 2px ~ 0,5mm, tidak menggeser apa pun
+     yang terlihat, tapi menaruh garisnya di dalam kotak. */
+  body{padding:0 2px; font-size:10px}
   .toolbar{display:none !important}
   .sheet{max-width:none}
   h2{margin-top:11px}
