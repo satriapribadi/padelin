@@ -201,6 +201,12 @@ input[type=date],input[type=time]{color-scheme:dark}
 #save-msg:not(:empty){margin-top:12px}
 #save-msg .msg:last-child{margin-bottom:0}
 
+/* Pesan hasil generate, persoalan yang sama: #gen-msg duduk tepat di bawah
+   .btn-row "Salin info debug" yang tidak punya margin bawah, jadi kotak error
+   menempel 0px di tombol. Margin bawah .msg dibiarkan - itu yang memberi jarak
+   ke panel progres di bawahnya. */
+#gen-msg:not(:empty){margin-top:12px}
+
 /* Catatan kecil di bawah tombol saran. .hint di app ini selalu ber-scope
    ke induknya (h2, label, .tl-h, .seg-toggle); tanpa aturan ini ia
    mewarisi .issue .f dan terbaca sama nyaring dengan teks utama. */
