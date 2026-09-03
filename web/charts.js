@@ -161,9 +161,11 @@ function legend(entries, shape = 'rect') {
     const sw = document.createElement('span');
     // `empty` = bukan segmen berwarna melainkan ruang kosong di batang. Kotaknya
     // digambar sebagai garis tepi saja; kotak berwarna surface tidak terlihat
-    // sama sekali di atas panel yang warnanya persis sama.
+    // sama sekali di atas panel yang warnanya persis sama. Kelasnya `hollow`,
+    // bukan `empty`: `.empty` sudah dipakai sebagai utilitas keadaan kosong
+    // (padding 40px) dan paddingnya menggelembungkan swatch jadi 40x80px.
     sw.className = 'viz-swatch ' + (shape === 'line' ? 'line ' : '')
-      + (e.empty ? 'empty' : '');
+      + (e.empty ? 'hollow' : '');
     if (!e.empty) sw.style.background = e.color;
     const lab = document.createElement('span');
     lab.textContent = e.label;

@@ -581,8 +581,10 @@ table.data .pick-col input{cursor:pointer;accent-color:var(--accent)}
 .viz-swatch.line{height:2px;width:16px;border-radius:2px}
 /* Ruang kosong di batang (mis. ronde yang peserta tidak hadiri): garis
    tepi saja. Kotak berwarna surface tidak terlihat di atas panel yang
-   warnanya persis sama. */
-.viz-swatch.empty{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}
+   warnanya persis sama. Namanya `hollow`, bukan `empty` - `.empty` di atas
+   adalah utilitas keadaan kosong dan padding 40px-nya membuat swatch
+   membengkak jadi 40x80px. */
+.viz-swatch.hollow{background:transparent;box-shadow:inset 0 0 0 1px var(--line)}
 
 .viz-table{max-height:420px;overflow-y:auto}
 
