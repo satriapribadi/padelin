@@ -52,7 +52,12 @@ jobs:
   # jadi tidak ada jeda untuk menariknya kembali.
   tes:
     runs-on: windows-latest
-    timeout-minutes: 30
+    # 45, bukan 30: suite penjadwalan sendiri memakan 22-28 menit di runner
+    # windows-latest (22,1 -> 23,0 -> 27,1 pada tiga rilis terakhir, lalu 28,7
+    # dan kena batas pada v1.5.1). Batas 30 sudah tidak menyisakan ruang, dan
+    # yang dibunuhnya bukan tes merah melainkan tes yang belum selesai - itu
+    # membatalkan rilis tanpa memberi satu pun informasi.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v7
 
