@@ -178,11 +178,17 @@ table{width:100%; border-collapse:collapse}
 
    Tugas ditaruh di kolom kanan sendiri - bukan di tengah - supaya blok
    "A & B vs C & D" tetap sejajar di semua baris dan mata bisa menyusuri satu
-   kolom saja saat mencari lawan. */
-.m{display:grid; grid-template-columns:var(--courtw,24px) 1fr 16px 1fr 104px;
+   kolom saja saat mencari lawan.
+
+   Selectornya dipersempit ke `.round` dengan sengaja: huruf `m` juga dipakai
+   sebagai modifier di `.gp.m` (pil L) dan `.tl b.m` (sel timeline), dan
+   `.m` bare sebelumnya ikut menyuntik font-size/padding baris match ke
+   keduanya - sel "M" di timeline jadi 11px sementara W/B/R 9px, dan pil L
+   membengkak jadi 2px 7px saat dicetak. */
+.round .m{display:grid; grid-template-columns:var(--courtw,24px) 1fr 16px 1fr 104px;
   align-items:baseline; gap:0 6px;
   padding:4px 9px; border-bottom:1px solid #f0f2f5; font-size:11px}
-.m:last-of-type{border-bottom:none}
+.round .m:last-of-type{border-bottom:none}
 .court{font-weight:700; color:var(--accent); font-size:10px}
 .team{min-width:0}
 .team.b{text-align:right}
@@ -372,7 +378,7 @@ table{width:100%; border-collapse:collapse}
   .tiles{margin-bottom:10px; gap:5px;
     grid-template-columns:repeat(var(--n,7),minmax(0,1fr))}
   .rounds{gap:5px}
-  .m{padding:2px 7px; font-size:9.5px; line-height:1.35}
+  .round .m{padding:2px 7px; font-size:9.5px; line-height:1.35}
   .resting{padding:1px 7px; font-size:8.5px; line-height:1.35}
   .round-head{padding:1px 7px}
   .recap td{padding:1.5px 8px; font-size:9.5px; line-height:1.35}
